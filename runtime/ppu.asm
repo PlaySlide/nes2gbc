@@ -17,49 +17,20 @@ nes_ppu_cpu_read:
     ret
 
 .status:
-    ; Approximate NES PPUSTATUS from the live GBC scanline.
-    ; Bit 7 (vblank) follows host VBlank. Bit 6 (sprite-0 hit) is synthesized
-    ; once the host scanline reaches virtual NES sprite 0's Y coordinate while
-    ; both BG and sprite rendering are enabled. We do not yet test pixel overlap,
-    ; but this preserves the clear-then-hit timing behavior used by raster waits.
+    ; Approximate NES vblank from the live GBC scanline.
     ldh a, [rLY]
-    ld b, a
-
-    ld a, [nes_ppu_status]
-    and $3F
-    ld e, a
-
-    ld a, b
     cp 144
-    jr c, .visible
-    ld a, e
-    or $80
-    ld e, a
-    jr .status_ready
-
-.visible:
-    ld a, [nes_ppumask]
-    and $18
-    cp $18
-    jr nz, .status_ready
-
-    ; NES OAM stores sprite Y as top-1. Large Y values are hidden/offscreen.
-    ld a, [nes_oam_ram]
-    cp $EF
-    jr nc, .status_ready
-    inc a
-    ld c, a
-
-    ld a, b
-    cp c
-    jr c, .status_ready
-    ld a, e
-    or $40
-    ld e, a
-
-.status_ready:
-    ; Reading PPUSTATUS clears vblank and the $2005/$2006 write toggle.
+    jr c, .not_vblank
     ld a, [nes_ppu_status]
+    or $80
+    jr .status_ready
+.not_vblank:
+    ld a, [nes_ppu_status]
+    and $7F
+.status_ready:
+    ld e, a
+
+    ; PPUSTATUS read clears vblank and the $2005/$2006 write toggle.
     and $7F
     ld [nes_ppu_status], a
     xor a
