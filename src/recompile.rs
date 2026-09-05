@@ -203,6 +203,10 @@ fn emit_known_target(
     banks: &BTreeMap<u16, u16>,
 ) {
     if !emit_static_target(out, target, current_bank, banks) {
+        writeln!(out, "    ld a, b").unwrap();
+        writeln!(out, "    ld [nes_x], a").unwrap();
+        writeln!(out, "    ld a, c").unwrap();
+        writeln!(out, "    ld [nes_y], a").unwrap();
         emit_pc_dispatch(out, target);
     }
 }
