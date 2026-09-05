@@ -23,6 +23,7 @@ nes_dac:              ds 1
 nes_saved_lcdc:       ds 1
 nes_palette_sync_color: ds 1
 nes_sprite_attr_tmp:  ds 1
+nes_sprite_bank_tmp:  ds 1
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
