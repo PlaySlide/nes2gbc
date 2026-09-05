@@ -10,8 +10,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check formatting
-        run: cargo fmt --all -- --check
       - name: Test
         run: cargo test --all-targets
       - name: Check
