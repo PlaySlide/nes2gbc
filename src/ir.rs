@@ -25,6 +25,9 @@ pub enum Operand {
 pub enum LogicOp { And, Ora, Eor }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithmeticOp { Adc, Sbc }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackValue { A, Status }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +39,7 @@ pub enum IrOp {
     Inc(Register),
     Dec(Register),
     Logic { op: LogicOp, rhs: Operand },
+    Arithmetic { op: ArithmeticOp, rhs: Operand },
     Compare { reg: Register, rhs: Operand },
     StackPush(StackValue),
     StackPop(StackValue),
@@ -132,6 +136,8 @@ pub fn lower_instruction(i: DecodedInstruction) -> Result<Vec<IrOp>, LowerError>
         (And, _) => vec![Logic { op: LogicOp::And, rhs: op()? }],
         (Ora, _) => vec![Logic { op: LogicOp::Ora, rhs: op()? }],
         (Eor, _) => vec![Logic { op: LogicOp::Eor, rhs: op()? }],
+        (Adc, _) => vec![Arithmetic { op: ArithmeticOp::Adc, rhs: op()? }],
+        (Sbc, _) => vec![Arithmetic { op: ArithmeticOp::Sbc, rhs: op()? }],
 
         (Cmp, _) => vec![Compare { reg: A, rhs: op()? }],
         (Cpx, _) => vec![Compare { reg: X, rhs: op()? }],
