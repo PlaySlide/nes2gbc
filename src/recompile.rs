@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn nmi_poll_points_include_backward_loop_targets() {
         let mut prg = vec![0xEA; 0x8000];
-        prg[0..5].copy_from_slice(&[0xA2, 0x03, 0xCA, 0xD0, 0xFD]);
+        prg[0..6].copy_from_slice(&[0xA2, 0x03, 0xCA, 0xD0, 0xFD, 0x60]);
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let selected: BTreeSet<u16> = graph.blocks.keys().copied().collect();
         let points = nmi_poll_points(&graph, &selected);
