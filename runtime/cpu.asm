@@ -93,7 +93,8 @@ nes_compare_a_e:
     ret
 
 ; Virtual 6502 stack lives in mirrored RAM page $0100 at $C100.
-; Push stores then decrements SP.
+; Push stores then decrements SP. Keep the decremented SP in L so we do not
+; reread nes_sp just to subtract one.
 nes_stack_push_a:
     ld e, a
     ld a, [nes_sp]
@@ -101,8 +102,8 @@ nes_stack_push_a:
     ld h, $C1
     ld a, e
     ld [hl], a
-    ld a, [nes_sp]
-    dec a
+    dec l
+    ld a, l
     ld [nes_sp], a
     ret
 
@@ -118,20 +119,38 @@ nes_stack_pop_a:
 
 ; 6502 JSR pushes high byte then low byte of PC-1/return address.
 ; Input: HL = 6502 return address (address of last JSR operand byte).
+; Push both bytes in one pass instead of nesting through nes_stack_push_a twice.
 nes_stack_push_return_hl:
     ld b, h
     ld c, l
+    ld a, [nes_sp]
+    ld l, a
+    ld h, $C1
+
     ld a, b
-    call nes_stack_push_a
+    ld [hl], a
+    dec l
     ld a, c
-    call nes_stack_push_a
+    ld [hl], a
+    dec l
+
+    ld a, l
+    ld [nes_sp], a
     ret
 
 ; Output: HL = stacked 6502 return address. RTS increments it before dispatch.
+; Pull both bytes with one SP load/store rather than nesting through pop twice.
 nes_stack_pop_return_hl:
-    call nes_stack_pop_a
-    ld c, a
-    call nes_stack_pop_a
+    ld a, [nes_sp]
+    inc a
+    ld l, a
+    ld h, $C1
+    ld c, [hl]
+
+    inc l
+    ld a, l
+    ld [nes_sp], a
+    ld a, [hl]
     ld h, a
     ld l, c
     ret
