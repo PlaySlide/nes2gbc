@@ -299,7 +299,7 @@ nes_video_sync_palette_write:
     sub $30
     and $1F
     cp $10
-    ret nc
+    jr nc, .sprite_palette
 
     and a
     jr nz, .non_universal
@@ -333,6 +333,19 @@ nes_video_sync_palette_write:
     ld b, a
     ld a, [nes_palette_sync_color]
     jp nes_video_set_bg_color
+
+.sprite_palette:
+    sub $10
+    ld e, a
+    and $03
+    ret z
+    ld c, a
+    ld a, e
+    srl a
+    srl a
+    ld b, a
+    ld a, [nes_palette_sync_color]
+    jp nes_video_set_obj_color
 
 ; Input: A = NES color index, B = GBC palette 0-3, C = color 0-3.
 nes_video_set_bg_color:
@@ -368,6 +381,39 @@ nes_video_set_bg_color:
     ldh [rBGPD & $FF], a
     ret
 
+nes_video_set_obj_color:
+    ld d, a
+
+    ld a, b
+    add a
+    add a
+    add a
+    ld b, a
+    ld a, c
+    add a
+    add b
+    or $80
+    ld c, a
+
+    ld a, d
+    and $3F
+    add a
+    ld e, a
+    ld d, $00
+    ld hl, nes_rgb555_table
+    add hl, de
+    ld e, [hl]
+    inc hl
+    ld d, [hl]
+
+    ld a, c
+    ldh [rOBPI & $FF], a
+    ld a, e
+    ldh [rOBPD & $FF], a
+    ld a, d
+    ldh [rOBPD & $FF], a
+    ret
+
 nes_rgb555_table:
     dw $3DEF, $7C00, $5C00, $5CA8, $4012, $1014, $0054, $0051
     dw $00CA, $01E0, $01A0, $0160, $2D00, $0000, $0000, $0000
@@ -378,11 +424,132 @@ nes_rgb555_table:
     dw $7FFF, $7F94, $7AD6, $7ADA, $7ADE, $5E9E, $573D, $537F
     dw $3F5E, $3FDA, $5BD6, $6BD6, $7FE0, $7B5E, $0000, $0000
 
-; Reflect NES base-nametable selection into GBC BG map selection.
+; Project virtual NES OAM into the first 40 CGB sprites.
+nes_video_sync_oam:
+    call nes_video_wait_vram
+    ld hl, nes_oam_ram
+    ld de, $FE00
+    ld b, 40
+
+.loop:
+    ; NES Y is top minus one; GBC OAM Y is screen Y plus 16.
+    ld a, [hli]
+    inc a
+    add $10
+    ld [de], a
+    inc de
+
+    ld a, [hli]
+    ld c, a
+    ld a, [hli]
+    ld [nes_sprite_attr_tmp], a
+
+    ; X coordinate.
+    ld a, [hli]
+    add $08
+    ld [de], a
+    inc de
+
+    ; Tile number and pattern-table bank.
+    ld a, [nes_ppuctrl]
+    bit 5, a
+    jr z, .sprite_8x8
+
+    ld a, c
+    and $FE
+    ld [de], a
+    inc de
+
+    bit 0, c
+    ld a, $00
+    jr z, .bank_ready
+    ld a, $08
+    jr .bank_ready
+
+.sprite_8x8:
+    ld a, c
+    ld [de], a
+    inc de
+    ld a, [nes_ppuctrl]
+    and $08
+
+.bank_ready:
+    ld [nes_sprite_bank_tmp], a
+
+    ; Palette, CGB VRAM bank, priority, H flip, V flip.
+    ld a, [nes_sprite_attr_tmp]
+    and $03
+    ld c, a
+    ld a, [nes_sprite_bank_tmp]
+    or c
+    ld c, a
+
+    ld a, [nes_sprite_attr_tmp]
+    bit 5, a
+    jr z, .no_priority
+    ld a, c
+    or $80
+    ld c, a
+.no_priority:
+    ld a, [nes_sprite_attr_tmp]
+    bit 6, a
+    jr z, .no_hflip
+    ld a, c
+    or $20
+    ld c, a
+.no_hflip:
+    ld a, [nes_sprite_attr_tmp]
+    bit 7, a
+    jr z, .no_vflip
+    ld a, c
+    or $40
+    ld c, a
+.no_vflip:
+    ld a, c
+    ld [de], a
+    inc de
+
+    dec b
+    jr nz, .loop
+    ret
+
+; Reflect PPUMASK BG/sprite visibility into LCDC bits 0/1.
+nes_video_update_mask:
+    ldh a, [rLCDC & $FF]
+    and $FC
+    ld b, a
+
+    ld a, [nes_ppumask]
+    bit 3, a
+    jr z, .no_bg
+    ld a, b
+    or $01
+    ld b, a
+.no_bg:
+    ld a, [nes_ppumask]
+    bit 4, a
+    jr z, .mask_store
+    ld a, b
+    or $02
+    ld b, a
+.mask_store:
+    ld a, b
+    ldh [rLCDC & $FF], a
+    ret
+
+; Reflect NES base-nametable selection and sprite size into GBC LCDC.
 nes_video_update_ctrl:
     ldh a, [rLCDC & $FF]
-    and $F7
+    and $F3
     ld b, a
+
+    ld a, [nes_ppuctrl]
+    bit 5, a
+    jr z, .size_done
+    ld a, b
+    or $04
+    ld b, a
+.size_done:
 
     ld a, [nes_mirroring]
     cp $01
