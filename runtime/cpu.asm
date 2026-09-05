@@ -68,6 +68,7 @@ nes_set_p_from_a:
 ; Compare canonical accumulator-like value in A against E.
 ; Updates C in nes_p and lazy Z/N from the subtraction result.
 nes_compare_a_e:
+    PROFILE_INC nes_profile_compare
     ld d, a
     sub e
     ld c, a
@@ -119,6 +120,7 @@ nes_stack_pop_a:
 ; 6502 JSR pushes high byte then low byte of PC-1/return address.
 ; Input: HL = 6502 return address (address of last JSR operand byte).
 nes_stack_push_return_hl:
+    PROFILE_INC nes_profile_jsr_push
     ld b, h
     ld c, l
     ld a, b
@@ -129,6 +131,7 @@ nes_stack_push_return_hl:
 
 ; Output: HL = stacked 6502 return address. RTS increments it before dispatch.
 nes_stack_pop_return_hl:
+    PROFILE_INC nes_profile_rts_pop
     call nes_stack_pop_a
     ld c, a
     call nes_stack_pop_a
@@ -157,6 +160,7 @@ nes_map_cpu_addr_hl:
 ; Dispatch tables occupy ROM banks 32-39. Each table bank covers $1000 NES addresses.
 ; Input HL = NES PC.
 nes_dispatch_hl:
+    PROFILE_INC nes_profile_dispatch
 IF DEF(NES2GBC_DEBUG_TRACE)
     ; Record every requested NES PC before this routine repurposes HL for the
     ; dispatch-table lookup. If we hang, mGBA can show the exact missing target.
@@ -316,6 +320,7 @@ nes_cache_prg16_to_wram:
 
 ; Generic CPU read. Input HL = NES CPU address, output A = value.
 nes_cpu_read:
+    PROFILE_INC nes_profile_cpu_read
 IF DEF(NES2GBC_DEBUG_TRACE)
     ld a, h
     ld [nes_debug_bus_hi], a
@@ -418,6 +423,7 @@ ENDC
 
 ; Generic CPU write. Input HL = NES CPU address, A = value.
 nes_cpu_write:
+    PROFILE_INC nes_profile_cpu_write
     ld e, a
     ld a, h
     cp $20
@@ -486,6 +492,8 @@ nes_cpu_write:
 ; Input: A = lhs, E = rhs. Uses 6502 carry-in from nes_p.
 ; Output: A = result, updates C/V in nes_p and lazy Z/N shadows.
 nes_adc_a_e:
+    PROFILE_INC nes_profile_adc
+nes_adc_core:
     ld d, a
     ld a, [nes_p]
     and $01
@@ -541,15 +549,17 @@ nes_adc_a_e:
 ; Preserve the lhs accumulator while complementing E; the old implementation
 ; clobbered A with ~rhs before nes_adc_a_e captured its left-hand operand.
 nes_sbc_a_e:
+    PROFILE_INC nes_profile_sbc
     ld d, a
     ld a, e
     cpl
     ld e, a
     ld a, d
-    jp nes_adc_a_e
+    jp nes_adc_core
 
 ; BIT: Z comes from A&E, N from operand bit7, V from operand bit6.
 nes_bit_a_e:
+    PROFILE_INC nes_profile_bit
     ld d, a
 
     ld a, d
@@ -716,6 +726,7 @@ nes_poll_nmi_hl:
 
     ld a, $01
     ld [nes_nmi_active], a
+    PROFILE_INC nes_profile_nmi
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
     ld b, h
