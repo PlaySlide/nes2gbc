@@ -2,6 +2,7 @@
 ; Correctness-first implementation. Later passes may cache A/X/Y/P in host registers.
 
 DEF NES_RAM_BASE EQU $C000
+DEF rLY EQU $FF44
 
 SECTION "NES CPU state", WRAM0[$C800]
 nes_a:  ds 1
@@ -162,9 +163,20 @@ nes_cpu_read:
     ret
 
 .read_2002:
+    ; Approximate NES PPU vblank directly from the GBC scanline counter.
+    ; This is enough for conventional reset-time BIT/BPL polling loops.
+    ldh a, [rLY & $FF]
+    cp 144
+    jr c, .not_vblank
     ld a, [nes_ppu_status]
-    ; Reading PPUSTATUS clears vblank and resets the address latch later.
+    or $80
+    jr .status_ready
+.not_vblank:
+    ld a, [nes_ppu_status]
+    and $7F
+.status_ready:
     ld e, a
+    ; NES PPUSTATUS read clears vblank.
     and $7F
     ld [nes_ppu_status], a
     ld a, e
