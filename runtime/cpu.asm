@@ -333,10 +333,7 @@ ENDC
     ld a, l
     and $07
     ld l, a
-    push bc
-    call nes_ppu_cpu_read
-    pop bc
-    ret
+    jp nes_ppu_cpu_read
 
 .prg:
     ; Mirrored 16 KiB PRG is cached in WRAMX banks 2-5 at startup.
@@ -390,10 +387,7 @@ ENDC
     ret
 
 .read_4016:
-    push bc
-    call nes_controller_read
-    pop bc
-    ret
+    jp nes_controller_read
 
 .read_4017:
     ; No second controller yet.
@@ -436,29 +430,22 @@ nes_cpu_write:
     ld a, l
     and $07
     ld l, a
-    push bc
-    call nes_ppu_cpu_write
-    pop bc
-    ret
+    jp nes_ppu_cpu_write
 
 .mapper:
     ; CNROM writes anywhere in $8000-$FFFF select the 8 KiB CHR bank.
-    ; Preserve cached NES X/Y in BC across mapper/video helper work.
-    push bc
     ld a, [nes_mapper]
     cp $03
-    jr nz, .mapper_done
+    ret nz
     ld a, [nes_chr_bank_mask]
     and e
     ld b, a
     ld a, [nes_chr_bank]
     cp b
-    jr z, .mapper_done
+    ret z
     ld a, b
     ld [nes_chr_bank], a
     call nes_upload_chr_bank
-.mapper_done:
-    pop bc
     ret
 
 .write_4011:
@@ -468,17 +455,11 @@ nes_cpu_write:
 
 .write_4014:
     ld a, e
-    push bc
-    call nes_oam_dma
-    pop bc
-    ret
+    jp nes_oam_dma
 
 .write_4016:
     ld a, e
-    push bc
-    call nes_controller_write
-    pop bc
-    ret
+    jp nes_controller_write
 
 .unsupported:
     ret
