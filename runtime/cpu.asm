@@ -217,6 +217,8 @@ nes_cpu_write:
     ld a, l
     cp $11
     jr z, .write_4011
+    cp $14
+    jr z, .write_4014
     jr .unsupported
 
 .ram:
@@ -251,6 +253,10 @@ nes_cpu_write:
     ld a, e
     ld [nes_dac], a
     ret
+
+.write_4014:
+    ld a, e
+    jp nes_oam_dma
 
 .unsupported:
     ret
