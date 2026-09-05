@@ -4,8 +4,6 @@ use crate::ir::{ArithmeticOp, Flag, IrOp, LogicOp, ModifyOp, ModifyTarget, Opera
 
 pub const NES_RAM_BASE: u16 = 0xC000;
 
-fn label(addr: u16) -> String { format!("nes_{addr:04X}") }
-
 fn state_label(reg: Register) -> &'static str {
     match reg {
         Register::A => "nes_a",
@@ -333,10 +331,16 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Branch { flag, when, target } => {
                 writeln!(out, "    ld a, [nes_p]").unwrap();
                 writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
-                writeln!(out, "    jp {}, {}", if when { "nz" } else { "z" }, label(target)).unwrap();
+                writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                writeln!(out, "    ld hl, ${target:04X}").unwrap();
+                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+                writeln!(out, ":").unwrap();
             }
 
-            IrOp::Jump(target) => { writeln!(out, "    jp {}", label(target)).unwrap(); }
+            IrOp::Jump(target) => {
+                writeln!(out, "    ld hl, ${target:04X}").unwrap();
+                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+            }
 
             IrOp::JumpIndirect { pointer } => {
                 writeln!(out, "    ld hl, ${pointer:04X}").unwrap();
@@ -347,7 +351,8 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Call { target, return_addr } => {
                 writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
                 writeln!(out, "    call nes_stack_push_return_hl").unwrap();
-                writeln!(out, "    jp {}", label(target)).unwrap();
+                writeln!(out, "    ld hl, ${target:04X}").unwrap();
+                writeln!(out, "    jp nes_dispatch_hl").unwrap();
             }
 
             IrOp::Return => {
@@ -407,6 +412,8 @@ mod tests {
         let asm = emit_ops(&[IrOp::Branch { flag: Flag::Negative, when: false, target: 0x9000 }]);
         assert!(asm.contains("ld a, [nes_p]"));
         assert!(asm.contains("and $80"));
-        assert!(asm.contains("jp z, nes_9000"));
+        assert!(asm.contains("jr nz, :+"));
+        assert!(asm.contains("ld hl, $9000"));
+        assert!(asm.contains("jp nes_dispatch_hl"));
     }
 }
