@@ -33,6 +33,9 @@ Start:
     ld [nes_ppu_latch], a
     ld [nes_ppu_read_buffer], a
     ld [nes_dac], a
+    ld [nes_controller_strobe], a
+    ld [nes_controller_shift], a
+    ld [nes_nmi_vblank_seen], a
 
     ld a, $FD
     ld [nes_sp], a
@@ -47,4 +50,5 @@ INCLUDE "io.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
 INCLUDE "video.asm"
+INCLUDE "input.asm"
 INCLUDE "generated.asm"
