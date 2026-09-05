@@ -152,6 +152,7 @@ nes_ppu_write_data:
     ld a, e
     and $3F
     ld [hl], a
+    call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
 
 nes_ppu_get_addr_hl:
