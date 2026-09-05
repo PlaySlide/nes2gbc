@@ -14,3 +14,17 @@ jobs:
         run: cargo test --all-targets
       - name: Check
         run: cargo check --all-targets
+
+  end-to-end:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate synthetic NES ROM
+        run: python3 tools/make_smoke_rom.py /tmp/nes2gbc-smoke.nes
+      - name: Recompile to RGBDS source
+        run: cargo run -- /tmp/nes2gbc-smoke.nes --emit-asm runtime/generated.asm --max-blocks 16
+      - name: Assemble generated GBC ROM with RGBDS
+        run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make
+      - name: Verify ROM exists
+        run: test -s runtime/build/runtime.gbc
