@@ -150,7 +150,7 @@ nes_video_sync_nametable_write:
     jr c, .tile
     ld a, l
     cp $C0
-    ret nc
+    jr nc, .attribute
 
 .tile:
     call nes_video_wait_vram
@@ -179,6 +179,201 @@ nes_video_sync_nametable_write:
     xor a
     ldh [rVBK & $FF], a
     ret
+
+.attribute:
+    ld a, c
+    jp nes_video_sync_attribute_write
+
+; Expand one NES attribute byte into sixteen CGB tile attributes.
+; Input: HL = physical attribute address ($D3C0-$D3FF or $D7C0-$D7FF), A = attribute byte.
+nes_video_sync_attribute_write:
+    ld b, a
+    ld a, l
+    sub $C0
+    ld l, a
+
+    ; Attribute row (0-7).
+    srl a
+    srl a
+    srl a
+    ld c, a
+
+    ; Destination high = map base ($98/$9C) + row/2.
+    ld a, h
+    and $04
+    add $98
+    ld d, a
+    ld a, c
+    srl a
+    add d
+    ld d, a
+
+    ; Destination low = (row&1)*$80 + column*4.
+    ld a, l
+    and $07
+    add a
+    add a
+    ld e, a
+    ld a, c
+    and $01
+    jr z, .dest_ready
+    ld a, e
+    or $80
+    ld e, a
+.dest_ready:
+
+    ; Attribute bit 3 selects converted NES pattern table 1 in CGB VRAM bank 1.
+    ld a, [nes_ppuctrl]
+    and $10
+    srl a
+    ld c, a
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK & $FF], a
+
+    call nes_video_attr_top_row
+    call nes_video_attr_top_row
+    call nes_video_attr_bottom_row
+    call nes_video_attr_bottom_row
+
+    xor a
+    ldh [rVBK & $FF], a
+    ret
+
+nes_video_attr_top_row:
+    ld a, b
+    and $03
+    or c
+    ld [de], a
+    inc de
+    ld [de], a
+    inc de
+
+    ld a, b
+    srl a
+    srl a
+    and $03
+    or c
+    ld [de], a
+    inc de
+    ld [de], a
+    inc de
+    jp nes_video_attr_next_row
+
+nes_video_attr_bottom_row:
+    ld a, b
+    swap a
+    and $03
+    or c
+    ld [de], a
+    inc de
+    ld [de], a
+    inc de
+
+    ld a, b
+    swap a
+    srl a
+    srl a
+    and $03
+    or c
+    ld [de], a
+    inc de
+    ld [de], a
+    inc de
+    jp nes_video_attr_next_row
+
+nes_video_attr_next_row:
+    ld a, e
+    add $1C
+    ld e, a
+    ret nc
+    inc d
+    ret
+
+; Synchronize NES background palette RAM into CGB palettes 0-3.
+; Input: HL = mapped palette address ($C830-$C84F), A = NES color index.
+nes_video_sync_palette_write:
+    ld [nes_palette_sync_color], a
+    ld a, l
+    sub $30
+    and $1F
+    cp $10
+    ret nc
+
+    and a
+    jr nz, .non_universal
+
+    ; Universal background color occupies color 0 in all four BG palettes.
+    ld c, $00
+    ld b, $00
+    ld a, [nes_palette_sync_color]
+    call nes_video_set_bg_color
+    ld b, $01
+    ld a, [nes_palette_sync_color]
+    call nes_video_set_bg_color
+    ld b, $02
+    ld a, [nes_palette_sync_color]
+    call nes_video_set_bg_color
+    ld b, $03
+    ld a, [nes_palette_sync_color]
+    jp nes_video_set_bg_color
+
+.non_universal:
+    ld e, a
+    and $03
+    ret z
+    ld c, a
+    ld a, e
+    srl a
+    srl a
+    ld b, a
+    ld a, [nes_palette_sync_color]
+    jp nes_video_set_bg_color
+
+; Input: A = NES color index, B = GBC palette 0-3, C = color 0-3.
+nes_video_set_bg_color:
+    ld d, a
+
+    ld a, b
+    add a
+    add a
+    add a
+    ld b, a
+    ld a, c
+    add a
+    add b
+    or $80
+    ld c, a
+
+    ld a, d
+    and $3F
+    add a
+    ld e, a
+    ld d, $00
+    ld hl, nes_rgb555_table
+    add hl, de
+    ld e, [hl]
+    inc hl
+    ld d, [hl]
+
+    ld a, c
+    ldh [rBGPI & $FF], a
+    ld a, e
+    ldh [rBGPD & $FF], a
+    ld a, d
+    ldh [rBGPD & $FF], a
+    ret
+
+nes_rgb555_table:
+    dw $3DEF, $7C00, $5C00, $5CA8, $4012, $1014, $0054, $0051
+    dw $00CA, $01E0, $01A0, $0160, $2D00, $0000, $0000, $0000
+    dw $5EF7, $79E0, $7960, $7D0D, $641A, $2C1C, $00FE, $097C
+    dw $01F5, $02C0, $0280, $2280, $4620, $0000, $0000, $0000
+    dw $7BDE, $7EE7, $7E2D, $79F2, $79FE, $497E, $2DFE, $227F
+    dw $02DE, $0FD6, $2B4B, $4BCB, $6B80, $3DEF, $0000, $0000
+    dw $7FFF, $7F94, $7AD6, $7ADA, $7ADE, $5E9E, $573D, $537F
+    dw $3F5E, $3FDA, $5BD6, $6BD6, $7FE0, $7B5E, $0000, $0000
 
 ; Reflect NES base-nametable selection into GBC BG map selection.
 nes_video_update_ctrl:
