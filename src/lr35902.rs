@@ -13,39 +13,6 @@ fn state_label(reg: Register) -> &'static str {
     }
 }
 
-fn emit_reg_to_a(out: &mut String, reg: Register) {
-    match reg {
-        Register::X => writeln!(out, "    ld a, b").unwrap(),
-        Register::Y => writeln!(out, "    ld a, c").unwrap(),
-        Register::A | Register::Sp => {
-            writeln!(out, "    ld a, [{}]", state_label(reg)).unwrap();
-        }
-    }
-}
-
-fn emit_a_to_reg(out: &mut String, reg: Register) {
-    match reg {
-        Register::X => writeln!(out, "    ld b, a").unwrap(),
-        Register::Y => writeln!(out, "    ld c, a").unwrap(),
-        Register::A | Register::Sp => {
-            writeln!(out, "    ld [{}], a", state_label(reg)).unwrap();
-        }
-    }
-}
-
-fn emit_spill_xy(out: &mut String) {
-    writeln!(out, "    ld a, b").unwrap();
-    writeln!(out, "    ld [nes_x], a").unwrap();
-    writeln!(out, "    ld a, c").unwrap();
-    writeln!(out, "    ld [nes_y], a").unwrap();
-}
-
-fn emit_preserved_bc_call(out: &mut String, target: &str) {
-    writeln!(out, "    push bc").unwrap();
-    writeln!(out, "    call {target}").unwrap();
-    writeln!(out, "    pop bc").unwrap();
-}
-
 fn flag_mask(flag: Flag) -> u8 {
     match flag {
         Flag::Carry => 0x01,
@@ -73,14 +40,14 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             true
         }
         Operand::ZeroPageX(zp) => {
-            writeln!(out, "    ld a, b").unwrap();
+            writeln!(out, "    ld a, [nes_x]").unwrap();
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
             true
         }
         Operand::ZeroPageY(zp) => {
-            writeln!(out, "    ld a, c").unwrap();
+            writeln!(out, "    ld a, [nes_y]").unwrap();
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
@@ -98,7 +65,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
-                writeln!(out, "    ld a, b").unwrap();
+                writeln!(out, "    ld a, [nes_x]").unwrap();
                 writeln!(out, "    call nes_add_a_to_hl").unwrap();
                 true
             } else {
@@ -109,7 +76,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
-                writeln!(out, "    ld a, c").unwrap();
+                writeln!(out, "    ld a, [nes_y]").unwrap();
                 writeln!(out, "    call nes_add_a_to_hl").unwrap();
                 true
             } else {
@@ -124,7 +91,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
 fn emit_indirect_addr(out: &mut String, src: Operand) {
     match src {
         Operand::IndexedIndirect(zp) => {
-            writeln!(out, "    ld a, b").unwrap();
+            writeln!(out, "    ld a, [nes_x]").unwrap();
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld e, a").unwrap();
             writeln!(out, "    ld d, $C0").unwrap();
@@ -142,7 +109,7 @@ fn emit_indirect_addr(out: &mut String, src: Operand) {
             writeln!(out, "    inc e").unwrap();
             writeln!(out, "    ld a, [de]").unwrap();
             writeln!(out, "    ld h, a").unwrap();
-            writeln!(out, "    ld a, c").unwrap();
+            writeln!(out, "    ld a, [nes_y]").unwrap();
             writeln!(out, "    call nes_add_a_to_hl").unwrap();
         }
         _ => unreachable!(),
@@ -162,13 +129,13 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                     }
                     Operand::AbsoluteX(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ld a, b").unwrap();
+                        writeln!(out, "    ld a, [nes_x]").unwrap();
                         writeln!(out, "    call nes_add_a_to_hl").unwrap();
                         writeln!(out, "    call nes_cpu_read").unwrap();
                     }
                     Operand::AbsoluteY(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ld a, c").unwrap();
+                        writeln!(out, "    ld a, [nes_y]").unwrap();
                         writeln!(out, "    call nes_add_a_to_hl").unwrap();
                         writeln!(out, "    call nes_cpu_read").unwrap();
                     }
@@ -198,12 +165,12 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
         }
         Operand::AbsoluteX(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-            writeln!(out, "    ld a, b").unwrap();
+            writeln!(out, "    ld a, [nes_x]").unwrap();
             writeln!(out, "    call nes_add_a_to_hl").unwrap();
         }
         Operand::AbsoluteY(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-            writeln!(out, "    ld a, c").unwrap();
+            writeln!(out, "    ld a, [nes_y]").unwrap();
             writeln!(out, "    call nes_add_a_to_hl").unwrap();
         }
         Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
@@ -240,56 +207,32 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
 
             IrOp::Load { dst, src } => {
                 emit_load_operand_to_a(&mut out, src);
-                emit_a_to_reg(&mut out, dst);
+                writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::Store { src, dst } => {
-                emit_reg_to_a(&mut out, src);
+                writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                 emit_store_a_to_operand(&mut out, dst);
             }
 
             IrOp::Transfer { src, dst, update_nz } => {
-                emit_reg_to_a(&mut out, src);
-                emit_a_to_reg(&mut out, dst);
+                writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
+                writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
                 if update_nz { emit_update_nz(&mut out); }
             }
 
             IrOp::Inc(reg) => {
-                match reg {
-                    Register::X => {
-                        writeln!(out, "    inc b").unwrap();
-                        writeln!(out, "    ld a, b").unwrap();
-                    }
-                    Register::Y => {
-                        writeln!(out, "    inc c").unwrap();
-                        writeln!(out, "    ld a, c").unwrap();
-                    }
-                    Register::A | Register::Sp => {
-                        emit_reg_to_a(&mut out, reg);
-                        writeln!(out, "    inc a").unwrap();
-                        emit_a_to_reg(&mut out, reg);
-                    }
-                }
+                writeln!(out, "    ld a, [{}]", state_label(reg)).unwrap();
+                writeln!(out, "    inc a").unwrap();
+                writeln!(out, "    ld [{}], a", state_label(reg)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::Dec(reg) => {
-                match reg {
-                    Register::X => {
-                        writeln!(out, "    dec b").unwrap();
-                        writeln!(out, "    ld a, b").unwrap();
-                    }
-                    Register::Y => {
-                        writeln!(out, "    dec c").unwrap();
-                        writeln!(out, "    ld a, c").unwrap();
-                    }
-                    Register::A | Register::Sp => {
-                        emit_reg_to_a(&mut out, reg);
-                        writeln!(out, "    dec a").unwrap();
-                        emit_a_to_reg(&mut out, reg);
-                    }
-                }
+                writeln!(out, "    ld a, [{}]", state_label(reg)).unwrap();
+                writeln!(out, "    dec a").unwrap();
+                writeln!(out, "    ld [{}], a", state_label(reg)).unwrap();
                 emit_update_nz(&mut out);
             }
 
@@ -311,8 +254,8 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 writeln!(out, "    ld e, a").unwrap();
                 writeln!(out, "    ld a, [nes_a]").unwrap();
                 match op {
-                    ArithmeticOp::Adc => emit_preserved_bc_call(&mut out, "nes_adc_a_e"),
-                    ArithmeticOp::Sbc => emit_preserved_bc_call(&mut out, "nes_sbc_a_e"),
+                    ArithmeticOp::Adc => writeln!(out, "    call nes_adc_a_e").unwrap(),
+                    ArithmeticOp::Sbc => writeln!(out, "    call nes_sbc_a_e").unwrap(),
                 }
                 writeln!(out, "    ld [nes_a], a").unwrap();
             }
@@ -340,8 +283,8 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     }
                     ModifyOp::Asl => { writeln!(out, "    call nes_asl_a").unwrap(); }
                     ModifyOp::Lsr => { writeln!(out, "    call nes_lsr_a").unwrap(); }
-                    ModifyOp::Rol => { emit_preserved_bc_call(&mut out, "nes_rol_a"); }
-                    ModifyOp::Ror => { emit_preserved_bc_call(&mut out, "nes_ror_a"); }
+                    ModifyOp::Rol => { writeln!(out, "    call nes_rol_a").unwrap(); }
+                    ModifyOp::Ror => { writeln!(out, "    call nes_ror_a").unwrap(); }
                 }
 
                 if let Some(mem) = memory_target {
@@ -355,13 +298,13 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 emit_load_operand_to_a(&mut out, rhs);
                 writeln!(out, "    ld e, a").unwrap();
                 writeln!(out, "    ld a, [nes_a]").unwrap();
-                emit_preserved_bc_call(&mut out, "nes_bit_a_e");
+                writeln!(out, "    call nes_bit_a_e").unwrap();
             }
             IrOp::Compare { reg, rhs } => {
                 emit_load_operand_to_a(&mut out, rhs);
                 writeln!(out, "    ld e, a").unwrap();
-                emit_reg_to_a(&mut out, reg);
-                emit_preserved_bc_call(&mut out, "nes_compare_a_e");
+                writeln!(out, "    ld a, [{}]", state_label(reg)).unwrap();
+                writeln!(out, "    call nes_compare_a_e").unwrap();
             }
 
             IrOp::StackPush(StackValue::A) => {
@@ -389,20 +332,17 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 writeln!(out, "    ld a, [nes_p]").unwrap();
                 writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
                 writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
-                emit_spill_xy(&mut out);
                 writeln!(out, "    ld hl, ${target:04X}").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
                 writeln!(out, ":").unwrap();
             }
 
             IrOp::Jump(target) => {
-                emit_spill_xy(&mut out);
                 writeln!(out, "    ld hl, ${target:04X}").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
             }
 
             IrOp::JumpIndirect { pointer } => {
-                emit_spill_xy(&mut out);
                 writeln!(out, "    ld hl, ${pointer:04X}").unwrap();
                 writeln!(out, "    call nes_jmp_indirect_hl").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
@@ -410,27 +350,23 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
 
             IrOp::Call { target, return_addr } => {
                 writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
-                emit_preserved_bc_call(&mut out, "nes_stack_push_return_hl");
-                emit_spill_xy(&mut out);
+                writeln!(out, "    call nes_stack_push_return_hl").unwrap();
                 writeln!(out, "    ld hl, ${target:04X}").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
             }
 
             IrOp::Return => {
-                emit_spill_xy(&mut out);
                 writeln!(out, "    call nes_stack_pop_return_hl").unwrap();
                 writeln!(out, "    inc hl").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
             }
 
             IrOp::ReturnInterrupt => {
-                emit_spill_xy(&mut out);
                 writeln!(out, "    call nes_rti_pop_hl").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
             }
 
             IrOp::Break { return_pc } => {
-                emit_spill_xy(&mut out);
                 writeln!(out, "    ld hl, ${return_pc:04X}").unwrap();
                 writeln!(out, "    call nes_brk_hl").unwrap();
                 writeln!(out, "    jp nes_irq_entry").unwrap();
@@ -439,13 +375,13 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::ReadIo { addr, dst } => {
                 writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                 writeln!(out, "    call nes_cpu_read").unwrap();
-                emit_a_to_reg(&mut out, dst);
+                writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::WriteIo { addr, src } => {
                 writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                emit_reg_to_a(&mut out, src);
+                writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                 writeln!(out, "    call nes_cpu_write").unwrap();
             }
 
@@ -469,20 +405,6 @@ mod tests {
         assert!(asm.contains("ld h, $C0"));
         assert!(asm.contains("ld l, $10"));
         assert!(asm.contains("ld [hl], a"));
-    }
-
-    #[test]
-    fn xy_registers_stay_in_bc_for_simple_ops() {
-        let asm = emit_ops(&[
-            IrOp::Inc(Register::X),
-            IrOp::Dec(Register::Y),
-            IrOp::Store { src: Register::X, dst: Operand::ZeroPage(0x10) },
-        ]);
-        assert!(asm.contains("inc b"));
-        assert!(asm.contains("dec c"));
-        assert!(asm.contains("ld a, b"));
-        assert!(!asm.contains("ld a, [nes_x]"));
-        assert!(!asm.contains("ld a, [nes_y]"));
     }
 
     #[test]
