@@ -140,9 +140,12 @@ nes_cpu_read:
     jr c, .ram
     cp $40
     jr c, .ppu
+    cp $80
+    jr nc, .prg
+
+    ; Minimal APU / controller register reads for now.
     cp $41
     jr nz, .unsupported
-
     ld a, l
     cp $11
     jr z, .read_4011
@@ -154,32 +157,38 @@ nes_cpu_read:
     ret
 
 .ppu:
-    ; $2000-$3FFF mirrors every eight bytes.
     ld a, l
     and $07
-    cp $02
-    jr z, .read_2002
-    xor a
-    ret
+    ld l, a
+    jp nes_ppu_cpu_read
 
-.read_2002:
-    ; Approximate NES PPU vblank directly from the GBC scanline counter.
-    ; This is enough for conventional reset-time BIT/BPL polling loops.
-    ldh a, [rLY & $FF]
-    cp 144
-    jr c, .not_vblank
-    ld a, [nes_ppu_status]
-    or $80
-    jr .status_ready
-.not_vblank:
-    ld a, [nes_ppu_status]
-    and $7F
-.status_ready:
-    ld e, a
-    ; NES PPUSTATUS read clears vblank.
-    and $7F
-    ld [nes_ppu_status], a
-    ld a, e
+.prg:
+    ; Preserve NES address, select the ROMX bank, then map offset to $4000-$7FFF.
+    ld d, h
+    ld e, l
+
+    ld a, [nes_prg_16k_mirror]
+    and a
+    jr nz, .prg_bank_1
+
+    ld a, d
+    cp $C0
+    ld a, $01
+    jr c, .prg_select
+    ld a, $02
+    jr .prg_select
+
+.prg_bank_1:
+    ld a, $01
+
+.prg_select:
+    ld [$2000], a
+    ld a, d
+    and $3F
+    or $40
+    ld h, a
+    ld l, e
+    ld a, [hl]
     ret
 
 .read_4011:
@@ -198,9 +207,11 @@ nes_cpu_write:
     jr c, .ram
     cp $40
     jr c, .ppu
+    cp $80
+    jr nc, .mapper
+
     cp $41
     jr nz, .unsupported
-
     ld a, l
     cp $11
     jr z, .write_4011
@@ -215,20 +226,17 @@ nes_cpu_write:
 .ppu:
     ld a, l
     and $07
-    cp $00
-    jr z, .write_2000
-    cp $01
-    jr z, .write_2001
-    ret
+    ld l, a
+    jp nes_ppu_cpu_write
 
-.write_2000:
-    ld a, e
-    ld [nes_ppuctrl], a
-    ret
-
-.write_2001:
-    ld a, e
-    ld [nes_ppumask], a
+.mapper:
+    ; CNROM writes anywhere in $8000-$FFFF select the 8 KiB CHR bank.
+    ld a, [nes_mapper]
+    cp $03
+    ret nz
+    ld a, [nes_chr_bank_mask]
+    and e
+    ld [nes_chr_bank], a
     ret
 
 .write_4011:
