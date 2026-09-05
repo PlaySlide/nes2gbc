@@ -43,6 +43,8 @@ nes_dispatch_cache_pc_lo:   ds 1
 nes_dispatch_cache_bank:    ds 1
 nes_dispatch_cache_addr_hi: ds 1
 nes_dispatch_cache_addr_lo: ds 1
+nes_nmi_cycles_lo:          ds 1 ; virtual 6502 cycles until next NES frame NMI
+nes_nmi_cycles_hi:          ds 1
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
