@@ -7,8 +7,8 @@ all: $(ROM)
 build:
 	mkdir -p build
 
-$(OBJ): main.asm | build
-	rgbasm -o $@ $<
+$(OBJ): main.asm io.asm generated.asm | build
+	rgbasm -o $@ main.asm
 
 $(ROM): $(OBJ)
 	rgblink -o $@ -n build/runtime.sym -m build/runtime.map $<
