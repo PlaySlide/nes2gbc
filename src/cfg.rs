@@ -83,6 +83,58 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
  }
  let mut ep=entries.to_vec();ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
 }
-#[cfg(test)]mod tests{use super::*;fn put(p:&mut[u8],a:u16,b:&[u8]){let o=(a-0x8000)as usize;p[o..o+b.len()].copy_from_slice(b)}#[test]fn branch_cfg(){let mut p=vec![0xea;0x8000];put(&mut p,0x8000,&[0xa9,0,0xf0,2,0x60,0xea,0x60]);let g=discover(0,&p,&[0x8000]).unwrap();assert!(g.blocks.contains_key(&0x8004));assert!(g.blocks.contains_key(&0x8006))}
-#[test]fn discovers_indexed_indirect_jump_table_targets(){let mut p=vec![0xea;0x8000];put(&mut p,0x9000,&[0xB9,0x00,0xA0,0x85,0x02,0xC8,0xB9,0x00,0xA0,0x85,0x03,0x6C,0x02,0x00]);put(&mut p,0xA000,&[0x00,0x91,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);put(&mut p,0x9100,&[0x60]);let g=discover(0,&p,&[0x9000]).unwrap();assert!(g.blocks.contains_key(&0x9100));let b=g.blocks.get(&0x9000).unwrap();assert!(b.edges.iter().any(|e|matches!(e.kind,EdgeKind::IndirectJump{pointer:0x0002})&&e.target==Some(0x9100)));}}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn put(prg: &mut [u8], addr: u16, bytes: &[u8]) {
+        let offset = (addr - 0x8000) as usize;
+        prg[offset..offset + bytes.len()].copy_from_slice(bytes);
+    }
+
+    #[test]
+    fn branch_cfg() {
+        let mut prg = vec![0xEA; 0x8000];
+        put(&mut prg, 0x8000, &[0xA9, 0x00, 0xF0, 0x02, 0x60, 0xEA, 0x60]);
+
+        let graph = discover(0, &prg, &[0x8000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x8004));
+        assert!(graph.blocks.contains_key(&0x8006));
+    }
+
+    #[test]
+    fn discovers_indexed_indirect_jump_table_targets() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xB9, 0x00, 0xA0, // LDA $A000,Y
+                0x85, 0x02,       // STA $02
+                0xC8,             // INY
+                0xB9, 0x00, 0xA0, // LDA $A000,Y
+                0x85, 0x03,       // STA $03
+                0x6C, 0x02, 0x00, // JMP ($0002)
+            ],
+        );
+
+        let mut table = [0u8; 32];
+        table[0] = 0x00;
+        table[1] = 0x91;
+        put(&mut prg, 0xA000, &table);
+        put(&mut prg, 0x9100, &[0x60]); // RTS
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9100));
+        let block = graph.blocks.get(&0x9000).unwrap();
+        assert!(block.edges.iter().any(|edge| {
+            matches!(
+                edge.kind,
+                EdgeKind::IndirectJump { pointer: 0x0002 }
+            ) && edge.target == Some(0x9100)
+        }));
+    }
 }
