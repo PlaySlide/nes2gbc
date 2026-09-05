@@ -507,6 +507,54 @@ nes_rti_pop_hl:
     ld l, c
     ret
 
+; Poll VBlank/NMI at translated basic-block boundaries.
+; Input HL = NES PC to resume if interrupted. Output A = 1 when caller should jump to NMI.
+nes_poll_nmi_hl:
+    ; Leaving VBlank arms the next NMI.
+    ldh a, [rLY & $FF]
+    cp 144
+    jr nc, .in_vblank
+    xor a
+    ld [nes_nmi_vblank_seen], a
+    ret
+
+.in_vblank:
+    ld a, [nes_ppuctrl]
+    bit 7, a
+    jr z, .no_nmi
+
+    ld a, [nes_nmi_vblank_seen]
+    and a
+    jr nz, .no_nmi
+
+    ld a, $01
+    ld [nes_nmi_vblank_seen], a
+
+    ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
+    ld b, h
+    ld c, l
+    ld a, b
+    call nes_stack_push_a
+    ld a, c
+    call nes_stack_push_a
+
+    ld a, [nes_p]
+    and $EF
+    or $20
+    call nes_stack_push_a
+
+    ld a, [nes_p]
+    or $04
+    and $EF
+    or $20
+    ld [nes_p], a
+
+    ld a, $01
+    ret
+
+.no_nmi:
+    xor a
+    ret
 nes_unimplemented_operand_read:
     xor a
     ret
