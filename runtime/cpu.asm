@@ -481,11 +481,15 @@ nes_adc_a_e:
     ld a, c
     ret
 
-; SBC on the 6502 is A + (~rhs) + C.
+; SBC on the 6502 is lhs + (~rhs) + C.
+; Preserve the lhs accumulator while complementing E; the old implementation
+; clobbered A with ~rhs before nes_adc_a_e captured its left-hand operand.
 nes_sbc_a_e:
+    ld d, a
     ld a, e
     cpl
     ld e, a
+    ld a, d
     jp nes_adc_a_e
 
 ; BIT: A = accumulator, E = memory operand. Updates Z from A&E and N/V from operand.
