@@ -85,6 +85,13 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
                 false
             }
         }
+        Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => false,
+        Operand::Immediate(_) => false,
+    }
+}
+
+fn emit_indirect_addr(out: &mut String, src: Operand) {
+    match src {
         Operand::IndexedIndirect(zp) => {
             writeln!(out, "    ld a, [nes_x]").unwrap();
             writeln!(out, "    add ${zp:02X}").unwrap();
@@ -95,11 +102,10 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             writeln!(out, "    inc e").unwrap();
             writeln!(out, "    ld a, [de]").unwrap();
             writeln!(out, "    ld h, a").unwrap();
-            writeln!(out, "    call nes_map_cpu_addr_hl").unwrap();
-            true
         }
         Operand::IndirectIndexed(zp) => {
-            writeln!(out, "    ld de, $C0{zp:02X}").unwrap();
+            writeln!(out, "    ld e, ${zp:02X}").unwrap();
+            writeln!(out, "    ld d, $C0").unwrap();
             writeln!(out, "    ld a, [de]").unwrap();
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    inc e").unwrap();
@@ -107,13 +113,10 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             writeln!(out, "    ld h, a").unwrap();
             writeln!(out, "    ld a, [nes_y]").unwrap();
             writeln!(out, "    call nes_add_a_to_hl").unwrap();
-            writeln!(out, "    call nes_map_cpu_addr_hl").unwrap();
-            true
         }
-        Operand::Immediate(_) => false,
+        _ => unreachable!(),
     }
 }
-
 fn emit_load_operand_to_a(out: &mut String, src: Operand) {
     match src {
         Operand::Immediate(v) => { writeln!(out, "    ld a, ${v:02X}").unwrap(); }
@@ -138,6 +141,10 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                         writeln!(out, "    call nes_add_a_to_hl").unwrap();
                         writeln!(out, "    call nes_cpu_read").unwrap();
                     }
+                    Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
+                        emit_indirect_addr(out, src);
+                        writeln!(out, "    call nes_cpu_read").unwrap();
+                    }
                     _ => writeln!(out, "    call nes_unimplemented_operand_read").unwrap(),
                 }
             }
@@ -146,35 +153,41 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
 }
 
 fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
+    writeln!(out, "    push af").unwrap();
+
     if emit_effective_addr(out, dst) {
+        writeln!(out, "    pop af").unwrap();
         writeln!(out, "    ld [hl], a").unwrap();
-    } else {
-        match dst {
-            Operand::Absolute(addr) => {
-                writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                writeln!(out, "    call nes_cpu_write").unwrap();
-            }
-            Operand::AbsoluteX(addr) => {
-                writeln!(out, "    push af").unwrap();
-                writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                writeln!(out, "    ld a, [nes_x]").unwrap();
-                writeln!(out, "    call nes_add_a_to_hl").unwrap();
-                writeln!(out, "    pop af").unwrap();
-                writeln!(out, "    call nes_cpu_write").unwrap();
-            }
-            Operand::AbsoluteY(addr) => {
-                writeln!(out, "    push af").unwrap();
-                writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                writeln!(out, "    ld a, [nes_y]").unwrap();
-                writeln!(out, "    call nes_add_a_to_hl").unwrap();
-                writeln!(out, "    pop af").unwrap();
-                writeln!(out, "    call nes_cpu_write").unwrap();
-            }
-            _ => writeln!(out, "    call nes_unimplemented_operand_write").unwrap(),
+        return;
+    }
+
+    match dst {
+        Operand::Absolute(addr) => {
+            writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+        }
+        Operand::AbsoluteX(addr) => {
+            writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+            writeln!(out, "    ld a, [nes_x]").unwrap();
+            writeln!(out, "    call nes_add_a_to_hl").unwrap();
+        }
+        Operand::AbsoluteY(addr) => {
+            writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+            writeln!(out, "    ld a, [nes_y]").unwrap();
+            writeln!(out, "    call nes_add_a_to_hl").unwrap();
+        }
+        Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
+            emit_indirect_addr(out, dst);
+        }
+        _ => {
+            writeln!(out, "    pop af").unwrap();
+            writeln!(out, "    call nes_unimplemented_operand_write").unwrap();
+            return;
         }
     }
-}
 
+    writeln!(out, "    pop af").unwrap();
+    writeln!(out, "    call nes_cpu_write").unwrap();
+}
 fn emit_update_nz(out: &mut String) {
     writeln!(out, "    call nes_set_nz_from_a").unwrap();
 }
