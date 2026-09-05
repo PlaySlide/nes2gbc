@@ -1,5 +1,6 @@
 ; Shared Game Boy Color hardware register definitions.
 DEF rP1   EQU $FF00
+DEF rIF   EQU $FF0F
 DEF rLCDC EQU $FF40
 DEF rSCY  EQU $FF42
 DEF rSCX  EQU $FF43
@@ -11,3 +12,4 @@ DEF rBGPD EQU $FF69
 DEF rOBPI EQU $FF6A
 DEF rOBPD EQU $FF6B
 DEF rSVBK EQU $FF70
+DEF rIE   EQU $FFFF
