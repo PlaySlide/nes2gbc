@@ -84,6 +84,10 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     for addr in &selected {
         let Some(block) = graph.blocks.get(addr) else { continue };
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
+        writeln!(out, "    ld hl, \${:04X}", block.start).unwrap();
+        writeln!(out, "    call nes_poll_nmi_hl").unwrap();
+        writeln!(out, "    and a").unwrap();
+        writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
 
         for instruction in &block.instructions {
             writeln!(
