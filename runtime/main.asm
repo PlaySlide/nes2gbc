@@ -14,7 +14,7 @@ Start:
 
     ; Request CGB double-speed mode.
     ld a, $01
-    ldh [rKEY1 & $FF], a
+    ldh [rKEY1], a
     stop
 
     ; Canonical power-on state used by the recompiled 6502.
