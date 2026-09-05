@@ -107,15 +107,45 @@ fn main() -> ExitCode {
     }
 
     if let Some(out_path) = emit_asm {
-        let asm = recompile::emit_cfg(
+        let parent = out_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let stem = out_path.file_stem().and_then(|s| s.to_str()).unwrap_or("generated");
+        let prg_name = format!("{stem}.prg.bin");
+        let chr_name = format!("{stem}.chr.bin");
+        let prg_path = parent.join(&prg_name);
+        let chr_path = parent.join(&chr_name);
+
+        let mut asm = recompile::emit_cfg(
             &graph,
             recompile::EmitOptions { reset: vectors.reset, max_blocks },
         );
+        asm.push_str("\n");
+        asm.push_str(&recompile::emit_runtime_config(&recompile::RuntimeConfig {
+            mapper: cart.mapper,
+            mirroring: cart.mirroring,
+            prg_len: cart.prg_rom.len(),
+            chr_len: cart.chr_rom.len(),
+            nmi: vectors.nmi,
+            irq: vectors.irq_brk,
+            prg_file: &prg_name,
+            chr_file: &chr_name,
+        }));
+
         if let Err(err) = fs::write(&out_path, asm) {
             eprintln!("error writing {}: {err}", out_path.display());
             return ExitCode::FAILURE;
         }
+        if let Err(err) = fs::write(&prg_path, cart.prg_rom) {
+            eprintln!("error writing {}: {err}", prg_path.display());
+            return ExitCode::FAILURE;
+        }
+        if let Err(err) = fs::write(&chr_path, cart.chr_rom) {
+            eprintln!("error writing {}: {err}", chr_path.display());
+            return ExitCode::FAILURE;
+        }
+
         println!("Generated LR35902 assembly: {}", out_path.display());
+        println!("Embedded PRG data: {}", prg_path.display());
+        println!("Embedded CHR data: {}", chr_path.display());
     }
 
     ExitCode::SUCCESS
