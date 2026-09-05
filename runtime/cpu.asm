@@ -135,6 +135,65 @@ nes_map_cpu_addr_hl:
     ld h, a
     ret
 
+; Bank-safe translated-PC dispatcher.
+; Dispatch tables occupy ROM banks 32-39. Each table bank covers $1000 NES addresses.
+; Input HL = NES PC.
+nes_dispatch_hl:
+    ld a, h
+    cp $80
+    jp c, nes_unimplemented
+
+    ; Table bank = high nibble($8-$F) + $18 => banks $20-$27 (32-39).
+    swap a
+    and $0F
+    add $18
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+
+    ; Table offset = (PC & $0FFF) * 4, mapped into ROMX $4000-$7FFF.
+    ld a, h
+    and $0F
+    ld h, a
+    add hl, hl
+    add hl, hl
+    set 6, h
+
+    ld a, [hli]
+    and a
+    jp z, nes_unimplemented
+    ld b, a
+
+    ; Skip reserved high-bank byte.
+    inc hl
+    ld a, [hli]
+    ld e, a
+    ld a, [hl]
+    ld d, a
+
+    ld a, b
+    ld [nes_current_code_bank], a
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+
+    ld h, d
+    ld l, e
+    jp hl
+
+nes_restore_code_bank:
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    ret
+
+nes_unimplemented:
+    di
+.hang:
+    halt
+    jr .hang
+
 ; Generic CPU read. Input HL = NES CPU address, output A = value.
 nes_cpu_read:
     ld a, h
@@ -195,6 +254,9 @@ nes_cpu_read:
     ld h, a
     ld l, e
     ld a, [hl]
+    push af
+    call nes_restore_code_bank
+    pop af
     ret
 
 .read_4011:
