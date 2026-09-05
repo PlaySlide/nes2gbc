@@ -152,7 +152,43 @@ nes_dispatch_hl:
     cp $80
     jp c, nes_unimplemented
 
+    ; Tight NES loops repeatedly branch to the same translated PC. Avoid a full
+    ; dispatch-table bank switch/lookup when the requested PC matches the most
+    ; recently resolved target.
+    ld a, [nes_dispatch_cache_valid]
+    and a
+    jr z, .cache_miss
+    ld a, [nes_debug_pc_hi]
+    ld b, a
+    ld a, [nes_dispatch_cache_pc_hi]
+    cp b
+    jr nz, .cache_miss
+    ld a, [nes_debug_pc_lo]
+    ld b, a
+    ld a, [nes_dispatch_cache_pc_lo]
+    cp b
+    jr nz, .cache_miss
+
+    ld a, [nes_dispatch_cache_bank]
+    ld b, a
+    ld a, [nes_current_code_bank]
+    cp b
+    jr z, .cache_bank_ready
+    ld a, b
+    ld [nes_current_code_bank], a
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+.cache_bank_ready:
+    ld a, [nes_dispatch_cache_addr_hi]
+    ld h, a
+    ld a, [nes_dispatch_cache_addr_lo]
+    ld l, a
+    jp hl
+
+.cache_miss:
     ; Table bank = high nibble($8-$F) + $18 => banks $20-$27 (32-39).
+    ld a, h
     swap a
     and $0F
     add $18
@@ -179,6 +215,20 @@ nes_dispatch_hl:
     ld e, a
     ld a, [hl]
     ld d, a
+
+    ; Cache the resolved translation before switching back to its code bank.
+    ld a, $01
+    ld [nes_dispatch_cache_valid], a
+    ld a, [nes_debug_pc_hi]
+    ld [nes_dispatch_cache_pc_hi], a
+    ld a, [nes_debug_pc_lo]
+    ld [nes_dispatch_cache_pc_lo], a
+    ld a, b
+    ld [nes_dispatch_cache_bank], a
+    ld a, d
+    ld [nes_dispatch_cache_addr_hi], a
+    ld a, e
+    ld [nes_dispatch_cache_addr_lo], a
 
     ld a, b
     ld [nes_current_code_bank], a
@@ -585,6 +635,15 @@ nes_rti_pop_hl:
 ; Poll VBlank/NMI at translated basic-block boundaries.
 ; Input HL = NES PC to resume if interrupted. Output A = 1 when caller should jump to NMI.
 nes_poll_nmi_hl:
+    ; While already inside a translated NMI, every basic-block boundary used
+    ; to poll LY even though nesting is forbidden. Skip that host-I/O work on
+    ; hot loops and simply report "no new NMI".
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .poll_host_vblank
+    xor a
+    ret
+.poll_host_vblank:
     ; Leaving VBlank arms the next NMI.
     ldh a, [rLY]
     cp 144
