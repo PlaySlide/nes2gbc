@@ -143,6 +143,27 @@ fn same_code_bank(banks: &BTreeMap<u16, u16>, current_bank: u16, target: u16) ->
     banks.get(&target).copied() == Some(current_bank)
 }
 
+fn emit_static_target(
+    out: &mut String,
+    target: u16,
+    current_bank: u16,
+    banks: &BTreeMap<u16, u16>,
+) -> bool {
+    match banks.get(&target).copied() {
+        Some(bank) if bank == current_bank => {
+            writeln!(out, "    jp nes_{target:04X}").unwrap();
+            true
+        }
+        Some(bank) => {
+            writeln!(out, "    ld a, ${bank:02X}").unwrap();
+            writeln!(out, "    ld hl, nes_{target:04X}").unwrap();
+            writeln!(out, "    jp nes_jump_known_hl_a").unwrap();
+            true
+        }
+        None => false,
+    }
+}
+
 fn emit_static_control(
     out: &mut String,
     ops: &[IrOp],
@@ -154,22 +175,22 @@ fn emit_static_control(
     }
 
     match ops[0] {
-        IrOp::Branch { flag, when, target } if same_code_bank(banks, current_bank, target) => {
+        IrOp::Branch { flag, when, target } if banks.contains_key(&target) => {
             writeln!(out, "    ld a, [nes_p]").unwrap();
             writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
             writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
-            writeln!(out, "    jp nes_{target:04X}").unwrap();
+            emit_static_target(out, target, current_bank, banks);
             writeln!(out, ":").unwrap();
             true
         }
-        IrOp::Jump(target) if same_code_bank(banks, current_bank, target) => {
-            writeln!(out, "    jp nes_{target:04X}").unwrap();
+        IrOp::Jump(target) if banks.contains_key(&target) => {
+            emit_static_target(out, target, current_bank, banks);
             true
         }
-        IrOp::Call { target, return_addr } if same_code_bank(banks, current_bank, target) => {
+        IrOp::Call { target, return_addr } if banks.contains_key(&target) => {
             writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
             writeln!(out, "    call nes_stack_push_return_hl").unwrap();
-            writeln!(out, "    jp nes_{target:04X}").unwrap();
+            emit_static_target(out, target, current_bank, banks);
             true
         }
         _ => false,
@@ -182,9 +203,7 @@ fn emit_known_target(
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
 ) {
-    if same_code_bank(banks, current_bank, target) {
-        writeln!(out, "    jp nes_{target:04X}").unwrap();
-    } else {
+    if !emit_static_target(out, target, current_bank, banks) {
         emit_pc_dispatch(out, target);
     }
 }
