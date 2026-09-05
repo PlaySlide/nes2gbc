@@ -656,44 +656,28 @@ nes_rti_pop_hl:
     ld l, c
     ret
 
-; Poll VBlank/NMI at translated basic-block boundaries.
-; Input HL = NES PC to resume if interrupted. Output A = 1 when caller should jump to NMI.
+; Deliver a latched host VBlank as a translated NES NMI at compiler-selected
+; safe points. Input HL = NES PC to resume if interrupted.
+; Output A = 1 when caller should jump to the translated NMI handler.
 nes_poll_nmi_hl:
-    ; If PPUCTRL has NMI disabled, there is nothing to schedule.
-    ld a, [nes_ppuctrl]
-    bit 7, a
-    jr nz, .nmi_enabled
-    xor a
-    ret
-
-.nmi_enabled:
-    ; While already inside a translated NMI, nesting is forbidden.
-    ld a, [nes_nmi_active]
+    ld a, [nes_host_vblank_pending]
     and a
-    jr z, .poll_host_vblank
-    xor a
-    ret
+    ret z
 
-.poll_host_vblank:
-    ; Leaving host VBlank arms the next NES NMI.
-    ldh a, [rLY]
-    cp 144
-    jr nc, .in_vblank
+    ; Consume the host event. If NES NMI is disabled or already active, this
+    ; frame is intentionally dropped instead of creating back-to-back NMIs.
     xor a
-    ld [nes_nmi_vblank_seen], a
-    ret
+    ld [nes_host_vblank_pending], a
 
-.in_vblank:
     ld a, [nes_ppuctrl]
     bit 7, a
     jr z, .no_nmi
 
-    ld a, [nes_nmi_vblank_seen]
+    ld a, [nes_nmi_active]
     and a
     jr nz, .no_nmi
 
     ld a, $01
-    ld [nes_nmi_vblank_seen], a
     ld [nes_nmi_active], a
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
