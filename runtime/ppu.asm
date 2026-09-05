@@ -209,6 +209,9 @@ nes_ppu_read_raw:
     or $40
     ld h, a
     ld a, [hl]
+    push af
+    call nes_restore_code_bank
+    pop af
     ret
 
 .palette:
