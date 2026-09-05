@@ -17,6 +17,46 @@ fn dec(mapper:u16,prg:&[u8],pc:u16)->Result<DecodedInstruction,AnalysisError>{le
 fn branch(m:Mnemonic)->bool{matches!(m,Mnemonic::Bcc|Mnemonic::Bcs|Mnemonic::Beq|Mnemonic::Bmi|Mnemonic::Bne|Mnemonic::Bpl|Mnemonic::Bvc|Mnemonic::Bvs)}
 fn rel(i:DecodedInstruction)->u16{let n=i.pc.wrapping_add(i.def.len()as u16);n.wrapping_add((i.operand as u8 as i8)as i16 as u16)}
 fn q(q:&mut VecDeque<u16>,seen:&mut BTreeSet<u16>,t:u16){if t>=0x8000&&seen.insert(t){q.push_back(t)}}
+fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
+ let mut pc=start;let mut n=0usize;
+ while n<8{
+  let i=match dec(mapper,prg,pc){Ok(i)=>i,Err(_)=>return false};n+=1;
+  if branch(i.def.mnemonic)||matches!(i.def.mnemonic,Mnemonic::Jmp|Mnemonic::Jsr|Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){return true}
+  pc=pc.wrapping_add(i.def.len()as u16);
+ }
+ true
+}
+
+// Recognize the common 6502 jump-table idiom:
+//   LDA table,Y / STA ptr / INY / LDA table,Y / STA ptr+1 / ... / JMP (ptr)
+// The index is often derived from a small state nibble. Conservatively inspect the
+// first 16 little-endian table entries and keep only destinations that decode as code.
+fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>{
+ if pointer>0x00FE{return Vec::new()}
+ let start=jmp_pc.saturating_sub(64).max(0x8000);
+ let mut table=None;
+ let mut pc=start;
+ while pc.saturating_add(11)<=jmp_pc{
+  let o=match off(mapper,prg.len(),pc){Ok(o)=>o,Err(_)=>break};
+  if o+11<=prg.len()
+   &&prg[o]==0xB9&&prg[o+3]==0x85&&prg[o+4]==pointer as u8
+   &&prg[o+5]==0xC8&&prg[o+6]==0xB9
+   &&prg[o+9]==0x85&&prg[o+10]==pointer.wrapping_add(1)as u8
+   &&prg[o+1]==prg[o+7]&&prg[o+2]==prg[o+8]
+  {table=Some(u16::from_le_bytes([prg[o+1],prg[o+2]]));}
+  pc=pc.wrapping_add(1);
+ }
+ let Some(base)=table else{return Vec::new()};
+ let mut out=Vec::new();
+ for i in 0..16u16{
+  let a=base.wrapping_add(i*2);
+  let Ok(o)=off(mapper,prg.len(),a)else{continue};
+  if o+1>=prg.len(){continue}
+  let target=u16::from_le_bytes([prg[o],prg[o+1]]);
+  if target>=0x8000&&looks_like_code(mapper,prg,target)&&!out.contains(&target){out.push(target)}
+ }
+ out
+}
 pub fn discover_from_vectors(mapper:u16,prg:&[u8],v:Vectors)->Result<ControlFlowGraph,AnalysisError>{discover(mapper,prg,&[v.reset,v.nmi,v.irq_brk])}
 pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,AnalysisError>{
  if mapper!=0&&mapper!=3{return Err(AnalysisError::UnsupportedMapper(mapper))}if prg.len()!=0x4000&&prg.len()!=0x8000{return Err(AnalysisError::UnsupportedPrgSize(prg.len()))}
@@ -31,11 +71,18 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
    match i.def.mnemonic{
     Mnemonic::Jsr=>{let t=i.operand;edges.push(Edge{kind:EdgeKind::Call,target:Some(t)});edges.push(Edge{kind:EdgeKind::CallReturn,target:Some(next)});q(&mut work,&mut seen,t);q(&mut work,&mut seen,next);break}
     Mnemonic::Jmp if i.def.mode==AddressingMode::Absolute=>{let t=i.operand;edges.push(Edge{kind:EdgeKind::Jump,target:Some(t)});q(&mut work,&mut seen,t);break}
-    Mnemonic::Jmp if i.def.mode==AddressingMode::Indirect=>{edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:None});break}
+    Mnemonic::Jmp if i.def.mode==AddressingMode::Indirect=>{
+     let targets=indirect_table_targets(mapper,prg,i.pc,i.operand);
+     if targets.is_empty(){edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:None});}
+     else{for t in targets{edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:Some(t)});q(&mut work,&mut seen,t);}}
+     break
+    }
     Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk=>break,_=>pc=next
    }
   } blocks.insert(start,BasicBlock{start,instructions:ins,edges});
  }
  let mut ep=entries.to_vec();ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
 }
-#[cfg(test)]mod tests{use super::*;fn put(p:&mut[u8],a:u16,b:&[u8]){let o=(a-0x8000)as usize;p[o..o+b.len()].copy_from_slice(b)}#[test]fn branch_cfg(){let mut p=vec![0xea;0x8000];put(&mut p,0x8000,&[0xa9,0,0xf0,2,0x60,0xea,0x60]);let g=discover(0,&p,&[0x8000]).unwrap();assert!(g.blocks.contains_key(&0x8004));assert!(g.blocks.contains_key(&0x8006))}}
+#[cfg(test)]mod tests{use super::*;fn put(p:&mut[u8],a:u16,b:&[u8]){let o=(a-0x8000)as usize;p[o..o+b.len()].copy_from_slice(b)}#[test]fn branch_cfg(){let mut p=vec![0xea;0x8000];put(&mut p,0x8000,&[0xa9,0,0xf0,2,0x60,0xea,0x60]);let g=discover(0,&p,&[0x8000]).unwrap();assert!(g.blocks.contains_key(&0x8004));assert!(g.blocks.contains_key(&0x8006))}
+#[test]fn discovers_indexed_indirect_jump_table_targets(){let mut p=vec![0xea;0x8000];put(&mut p,0x9000,&[0xB9,0x00,0xA0,0x85,0x02,0xC8,0xB9,0x00,0xA0,0x85,0x03,0x6C,0x02,0x00]);put(&mut p,0xA000,&[0x00,0x91]);put(&mut p,0x9100,&[0x60]);let g=discover(0,&p,&[0x9000]).unwrap();assert!(g.blocks.contains_key(&0x9100));let b=g.blocks.get(&0x9000).unwrap();assert!(b.edges.iter().any(|e|matches!(e.kind,EdgeKind::IndirectJump{pointer:0x0002})&&e.target==Some(0x9100)));}}
+}
