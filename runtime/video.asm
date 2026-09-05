@@ -143,6 +143,17 @@ nes_video_wait_vram:
     jr z, .wait
     ret
 
+; OAM projection is a 160-byte burst, so keep it in the long VBlank window.
+nes_video_wait_oam:
+    ldh a, [rLCDC]
+    bit 7, a
+    ret z
+.wait:
+    ldh a, [rLY]
+    cp 144
+    jr c, .wait
+    ret
+
 ; Input: HL = physical virtual nametable address ($D000-$D7FF), A = written byte.
 nes_video_sync_nametable_write:
     ld c, a
@@ -435,7 +446,7 @@ nes_rgb555_table:
 
 ; Project virtual NES OAM into the first 40 CGB sprites.
 nes_video_sync_oam:
-    call nes_video_wait_vram
+    call nes_video_wait_oam
     ld hl, nes_oam_ram
     ld de, $FE00
     ld b, 40
