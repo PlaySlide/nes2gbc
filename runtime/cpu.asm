@@ -205,7 +205,7 @@ nes_cpu_read:
     jr nc, .prg
 
     ; Minimal APU / controller register reads for now.
-    cp $41
+    cp $40
     jr nz, .unsupported
     ld a, l
     cp $11
@@ -286,7 +286,7 @@ nes_cpu_write:
     cp $80
     jr nc, .mapper
 
-    cp $41
+    cp $40
     jr nz, .unsupported
     ld a, l
     cp $11
