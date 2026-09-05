@@ -91,7 +91,6 @@ fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
     for segment in 0u16..8 {
         let bank = DISPATCH_BANK_START + segment;
         let base = 0x8000u16 + segment * 0x1000;
-        let end = base + 0x1000;
 
         writeln!(
             out,
@@ -100,8 +99,14 @@ fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
         .unwrap();
 
         let mut cursor = 0usize;
-        for addr in selected.range(base..end) {
-            let offset = (*addr - base) as usize;
+        let addresses: Vec<u16> = if segment == 7 {
+            selected.range(base..=0xFFFF).copied().collect()
+        } else {
+            let end = base + 0x1000;
+            selected.range(base..end).copied().collect()
+        };
+        for addr in addresses {
+            let offset = (addr - base) as usize;
             if offset > cursor {
                 writeln!(out, "    ds {}, $00", (offset - cursor) * 4).unwrap();
             }
