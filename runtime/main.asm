@@ -32,8 +32,10 @@ Start:
     ld a, $24
     ld [nes_p], a
 
+    call nes_generated_init
     jp nes_reset
 
 INCLUDE "io.asm"
 INCLUDE "cpu.asm"
+INCLUDE "ppu.asm"
 INCLUDE "generated.asm"
