@@ -439,7 +439,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::ReadIo { addr, dst } => {
                 writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                 writeln!(out, "    call nes_cpu_read").unwrap();
-                writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
+                emit_a_to_reg(&mut out, dst);
                 emit_update_nz(&mut out);
             }
 
