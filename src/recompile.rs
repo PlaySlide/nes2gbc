@@ -500,7 +500,7 @@ mod tests {
         let graph = cfg::discover(0, &prg, &[0xFFFF]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0xFFFF, max_blocks: Some(1), debug_trace: false });
         assert!(asm.contains("nes_FFFF:"));
-        assert!(asm.contains("BANK(nes_FFFF)"));
+        assert!(asm.contains("BANK(nes_FFFF_entry)"));
     }
 
     #[test]
