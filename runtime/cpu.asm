@@ -641,52 +641,36 @@ nes_rti_pop_hl:
     ld l, c
     ret
 
-; Poll virtual NES frame timing at translated basic-block boundaries.
-; Input: HL = NES PC to resume if interrupted, BC = estimated original 6502
-; cycles executed by this block. Output A = 1 when caller should enter NMI.
-;
-; Crucially, this is based on *NES* CPU cycles rather than the host GBC LY
-; register. Generated code can be much more expensive than the original 6502,
-; so host-frame scheduling can otherwise interrupt half-prepared game state.
+; Poll VBlank/NMI at translated basic-block boundaries.
+; Input HL = NES PC to resume if interrupted. Output A = 1 when caller should jump to NMI.
 nes_poll_nmi_hl:
+    ; While already inside a translated NMI, nesting is forbidden.
     ld a, [nes_nmi_active]
     and a
-    jr z, .count_cycles
+    jr z, .poll_host_vblank
     xor a
     ret
 
-.count_cycles:
-    ld a, [nes_nmi_cycles_lo]
-    sub c
-    ld e, a
-    ld a, [nes_nmi_cycles_hi]
-    sbc b
-    jr c, .frame_elapsed
-
-    ; Treat an exact zero countdown as the frame boundary too.
-    ld d, a
-    or e
-    jr z, .frame_elapsed
-
-    ld a, d
-    ld [nes_nmi_cycles_hi], a
-    ld a, e
-    ld [nes_nmi_cycles_lo], a
+.poll_host_vblank:
+    ; Leaving host VBlank arms the next NES NMI.
+    ldh a, [rLY]
+    cp 144
+    jr nc, .in_vblank
     xor a
+    ld [nes_nmi_vblank_seen], a
     ret
 
-.frame_elapsed:
-    ; NTSC NES: approximately 29,780 CPU cycles per frame ($7454).
-    ld a, $54
-    ld [nes_nmi_cycles_lo], a
-    ld a, $74
-    ld [nes_nmi_cycles_hi], a
-
+.in_vblank:
     ld a, [nes_ppuctrl]
     bit 7, a
     jr z, .no_nmi
 
+    ld a, [nes_nmi_vblank_seen]
+    and a
+    jr nz, .no_nmi
+
     ld a, $01
+    ld [nes_nmi_vblank_seen], a
     ld [nes_nmi_active], a
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
