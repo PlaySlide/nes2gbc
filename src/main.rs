@@ -6,12 +6,13 @@ fn main() -> ExitCode {
     let mut args = env::args_os();
     let program = args.next().unwrap_or_default();
     let Some(path) = args.next() else {
-        eprintln!("usage: {} <rom.nes> [--emit-asm output.asm] [--max-blocks N]", PathBuf::from(program).display());
+        eprintln!("usage: {} <rom.nes> [--emit-asm output.asm] [--max-blocks N] [--debug-trace]", PathBuf::from(program).display());
         return ExitCode::from(2);
     };
 
     let mut emit_asm: Option<PathBuf> = None;
     let mut max_blocks: Option<usize> = None;
+    let mut debug_trace = false;
 
     let rest: Vec<_> = args.collect();
     let mut i = 0;
@@ -38,6 +39,9 @@ fn main() -> ExitCode {
                         return ExitCode::from(2);
                     }
                 }
+            }
+            "--debug-trace" => {
+                debug_trace = true;
             }
             other => {
                 eprintln!("error: unknown argument {other}");
@@ -121,7 +125,7 @@ fn main() -> ExitCode {
 
         let mut asm = recompile::emit_cfg(
             &graph,
-            recompile::EmitOptions { reset: vectors.reset, max_blocks },
+            recompile::EmitOptions { reset: vectors.reset, max_blocks, debug_trace },
         );
         asm.push_str("\n");
         asm.push_str(&recompile::emit_runtime_config(&recompile::RuntimeConfig {
