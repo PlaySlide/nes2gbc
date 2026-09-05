@@ -40,12 +40,6 @@ Start:
     ld [nes_current_code_bank], a
     ld [nes_dispatch_cache_valid], a
 
-    ; NTSC NES frame cadence: ~29,780 6502 CPU cycles per frame.
-    ld a, $54
-    ld [nes_nmi_cycles_lo], a
-    ld a, $74
-    ld [nes_nmi_cycles_hi], a
-
     ld a, $FD
     ld [nes_sp], a
     ld a, $24
