@@ -266,10 +266,16 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         }
 
         if poll_points.contains(&block.start) {
+            // Usually there is no pending frame, so loop safe-points pay only
+            // a WRAM byte test instead of a helper call and live LY polling.
+            writeln!(out, "    ld a, [nes_host_vblank_pending]").unwrap();
+            writeln!(out, "    and a").unwrap();
+            writeln!(out, "    jr z, :+").unwrap();
             writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
             writeln!(out, "    call nes_poll_nmi_hl").unwrap();
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
+            writeln!(out, ":").unwrap();
         }
 
         for instruction in &block.instructions {
