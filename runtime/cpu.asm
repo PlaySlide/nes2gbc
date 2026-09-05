@@ -239,6 +239,72 @@ nes_cpu_write:
 .unsupported:
     ret
 
+
+; Input: A = lhs, E = rhs. Uses 6502 carry-in from nes_p.
+; Output: A = result, updates C/V/N/Z in nes_p.
+nes_adc_a_e:
+    ld d, a
+    ld a, [nes_p]
+    and $01
+    jr z, .adc_clear_c
+    scf
+    jr .adc_go
+.adc_clear_c:
+    and a
+.adc_go:
+    ld a, d
+    adc e
+    ld c, a
+
+    ld a, [nes_p]
+    and $3C
+    ld b, a
+    jr nc, .adc_no_carry
+    ld a, b
+    or $01
+    ld b, a
+.adc_no_carry:
+
+    ld a, c
+    and a
+    jr nz, .adc_not_zero
+    ld a, b
+    or $02
+    ld b, a
+.adc_not_zero:
+    bit 7, c
+    jr z, .adc_not_negative
+    ld a, b
+    or $80
+    ld b, a
+.adc_not_negative:
+
+    ; overflow = ~(lhs ^ rhs) & (lhs ^ result) & $80
+    ld a, d
+    xor e
+    cpl
+    ld h, a
+    ld a, d
+    xor c
+    and h
+    and $80
+    jr z, .adc_no_overflow
+    ld a, b
+    or $40
+    ld b, a
+.adc_no_overflow:
+    ld a, b
+    ld [nes_p], a
+    ld a, c
+    ret
+
+; SBC on the 6502 is A + (~rhs) + C.
+nes_sbc_a_e:
+    ld a, e
+    cpl
+    ld e, a
+    jp nes_adc_a_e
+
 nes_unimplemented_operand_read:
     xor a
     ret
