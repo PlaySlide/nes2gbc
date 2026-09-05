@@ -267,6 +267,10 @@ nes_unimplemented:
 ; Generic CPU read. Input HL = NES CPU address, output A = value.
 nes_cpu_read:
     ld a, h
+    ld [nes_debug_bus_hi], a
+    ld a, l
+    ld [nes_debug_bus_lo], a
+    ld a, h
     cp $20
     jr c, .ram
     cp $40
@@ -324,6 +328,7 @@ nes_cpu_read:
     ld h, a
     ld l, e
     ld a, [hl]
+    ld [nes_debug_bus_value], a
     push af
     call nes_restore_code_bank
     pop af
