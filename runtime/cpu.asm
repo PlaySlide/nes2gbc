@@ -649,6 +649,14 @@ nes_rti_pop_hl:
 ; Poll VBlank/NMI at translated basic-block boundaries.
 ; Input HL = NES PC to resume if interrupted. Output A = 1 when caller should jump to NMI.
 nes_poll_nmi_hl:
+    ; If PPUCTRL has NMI disabled, there is nothing to schedule.
+    ld a, [nes_ppuctrl]
+    bit 7, a
+    jr nz, .nmi_enabled
+    xor a
+    ret
+
+.nmi_enabled:
     ; While already inside a translated NMI, nesting is forbidden.
     ld a, [nes_nmi_active]
     and a
