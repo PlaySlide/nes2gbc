@@ -1,7 +1,28 @@
-; NES PPU/APU virtual state.
+; NES mapper / PPU / APU virtual state.
 
-SECTION "NES virtual IO state", WRAM0[$C810]
-nes_ppu_status: ds 1
-nes_ppuctrl:    ds 1
-nes_ppumask:    ds 1
-nes_dac:        ds 1
+SECTION "NES cartridge state", WRAM0[$C810]
+nes_mapper:           ds 1
+nes_mirroring:        ds 1
+nes_prg_16k_mirror:   ds 1
+nes_chr_bank_mask:    ds 1
+nes_chr_bank:         ds 1
+
+SECTION "NES virtual IO state", WRAM0[$C818]
+nes_ppu_status:       ds 1
+nes_ppuctrl:          ds 1
+nes_ppumask:          ds 1
+nes_oamaddr:          ds 1
+nes_ppu_scroll_x:     ds 1
+nes_ppu_scroll_y:     ds 1
+nes_ppu_addr_hi:      ds 1
+nes_ppu_addr_lo:      ds 1
+nes_ppu_latch:        ds 1
+nes_ppu_read_buffer:  ds 1
+nes_dac:              ds 1
+
+SECTION "NES palette RAM", WRAM0[$C830]
+nes_palette_ram: ds 32
+
+; Two physical NES nametables. Mirroring maps the four logical tables here.
+SECTION "NES nametable RAM", WRAMX[$D000], BANK[1]
+nes_nametable_ram: ds $800
