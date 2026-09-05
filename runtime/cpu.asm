@@ -240,6 +240,15 @@ nes_dispatch_hl:
     ld l, e
     jp hl
 
+; Fast path for statically known cross-bank transfers.
+; Input: A = translated code bank, HL = linked ROMX target address.
+nes_jump_known_hl_a:
+    ld [nes_current_code_bank], a
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    jp hl
+
 nes_restore_code_bank:
     ld a, [nes_current_code_bank]
     ld [$2000], a
