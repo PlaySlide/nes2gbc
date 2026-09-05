@@ -75,6 +75,7 @@ nes_video_fill_zero:
 ; pattern table $0000 -> CGB VRAM bank 0 $8000
 ; pattern table $1000 -> CGB VRAM bank 1 $8000
 nes_upload_chr_bank:
+    PROFILE_INC nes_profile_chr_upload
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
     bit 7, a
@@ -156,6 +157,7 @@ nes_video_wait_oam:
 
 ; Input: HL = physical virtual nametable address ($D000-$D7FF), A = written byte.
 nes_video_sync_nametable_write:
+    PROFILE_INC nes_profile_nametable_sync
     ld c, a
 
     ; Attribute bytes start at offset $3C0 within each physical 1 KiB table.
@@ -312,6 +314,7 @@ nes_video_attr_next_row:
 ; Synchronize NES background palette RAM into CGB palettes 0-3.
 ; Input: HL = mapped palette address ($C830-$C84F), A = NES color index.
 nes_video_sync_palette_write:
+    PROFILE_INC nes_profile_palette_sync
     ld [nes_palette_sync_color], a
     ld a, l
     sub $30
@@ -446,6 +449,7 @@ nes_rgb555_table:
 
 ; Project virtual NES OAM into the first 40 CGB sprites.
 nes_video_sync_oam:
+    PROFILE_INC nes_profile_oam_sync
     call nes_video_wait_oam
     ld hl, nes_oam_ram
     ld de, $FE00
