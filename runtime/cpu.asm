@@ -151,6 +151,10 @@ nes_cpu_read:
     ld a, l
     cp $11
     jr z, .read_4011
+    cp $16
+    jr z, .read_4016
+    cp $17
+    jr z, .read_4017
     jr .unsupported
 
 .ram:
@@ -197,6 +201,14 @@ nes_cpu_read:
     ld a, [nes_dac]
     ret
 
+.read_4016:
+    jp nes_controller_read
+
+.read_4017:
+    ; No second controller yet.
+    ld a, $01
+    ret
+
 .unsupported:
     xor a
     ret
@@ -219,6 +231,8 @@ nes_cpu_write:
     jr z, .write_4011
     cp $14
     jr z, .write_4014
+    cp $16
+    jr z, .write_4016
     jr .unsupported
 
 .ram:
@@ -257,6 +271,10 @@ nes_cpu_write:
 .write_4014:
     ld a, e
     jp nes_oam_dma
+
+.write_4016:
+    ld a, e
+    jp nes_controller_write
 
 .unsupported:
     ret
