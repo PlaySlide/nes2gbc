@@ -2,7 +2,6 @@
 ; Correctness-first implementation. Later passes may cache A/X/Y/P in host registers.
 
 DEF NES_RAM_BASE EQU $C000
-DEF rLY EQU $FF44
 
 SECTION "NES CPU state", WRAM0[$C800]
 nes_a:  ds 1
