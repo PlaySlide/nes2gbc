@@ -7,7 +7,7 @@ all: $(ROM)
 build:
 	mkdir -p build
 
-$(OBJ): main.asm hardware.inc io.asm cpu.asm ppu.asm video.asm generated.asm | build
+$(OBJ): main.asm hardware.inc io.asm cpu.asm ppu.asm video.asm input.asm generated.asm | build
 	rgbasm -o $@ main.asm
 
 $(ROM): $(OBJ)
