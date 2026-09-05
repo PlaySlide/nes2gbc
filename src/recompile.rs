@@ -167,8 +167,8 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
         crate::ines::Mirroring::Vertical => 1,
         crate::ines::Mirroring::FourScreen => 2,
     };
-    let prg_16k_mirror = usize::from(config.prg_len == 0x4000);
-    let chr_banks_8k = (config.chr_len / 0x2000).max(1);
+    let prg_16k_mirror = if config.prg_len == 0x4000 { 1usize } else { 0usize };
+    let chr_banks_8k = ((config.chr_len + 0x1FFF) / 0x2000).max(1);
     let chr_mask = chr_banks_8k.next_power_of_two() - 1;
 
     writeln!(out, "; Cartridge/runtime metadata").unwrap();
