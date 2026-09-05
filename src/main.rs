@@ -11,7 +11,7 @@ fn main() -> ExitCode {
     };
 
     let mut emit_asm: Option<PathBuf> = None;
-    let mut max_blocks: Option<usize> = None;
+    let mut max_blocks: Option<usize> = Some(64);
 
     let rest: Vec<_> = args.collect();
     let mut i = 0;
