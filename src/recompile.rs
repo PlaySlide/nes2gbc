@@ -237,6 +237,11 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
         writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
 
+        ; Most reset/startup code runs with NMI disabled. Avoid the expensive
+        ; helper/LY polling entirely until PPUCTRL bit 7 is actually enabled.
+        writeln!(out, "    ld a, [nes_ppuctrl]").unwrap();
+        writeln!(out, "    bit 7, a").unwrap();
+        writeln!(out, "    jr z, :+").unwrap();
         writeln!(out, "    ld a, [nes_nmi_active]").unwrap();
         writeln!(out, "    and a").unwrap();
         writeln!(out, "    jr nz, :+").unwrap();
