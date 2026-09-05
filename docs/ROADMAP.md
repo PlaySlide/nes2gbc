@@ -21,11 +21,11 @@
 
 ## Milestone 2 — native LR35902 code generation
 
-- [ ] NES semantic IR
+- [x] NES semantic IR (initial reset-path subset)
 - [ ] A/X/Y and flag model
-- [ ] direct NES RAM mapping into GBC WRAM
+- [x] direct zero-page / internal RAM mapping into GBC WRAM
 - [ ] stack semantics
-- [ ] branches / JSR / RTS / JMP
+- [x] initial branches / JSR / RTS / absolute JMP emission
 - [ ] block dispatcher for indirect control flow
 - [ ] flag liveness optimization
 
@@ -35,7 +35,7 @@
 - [x] CGB double-speed initialization
 - [ ] VBlank synchronization
 - [ ] controller translation
-- [ ] virtual NES PPU registers
+- [x] initial $2000/$2001/$2002 virtual register shims
 - [ ] nametable -> BG tile map synchronization
 - [ ] NES attribute -> CGB palette attributes
 - [ ] virtual OAM -> GBC shadow OAM
