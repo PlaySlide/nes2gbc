@@ -51,6 +51,10 @@ Start:
     ld [nes_nmi_active], a
     ld [nes_current_code_bank], a
     ld [nes_dispatch_cache_valid], a
+    ld [nes_view_mode], a
+    ld [nes_view_x], a
+    ld [nes_view_y], a
+    ld [nes_view_select_prev], a
 
     ld a, $FD
     ld [nes_sp], a
