@@ -139,6 +139,15 @@ nes_map_cpu_addr_hl:
 ; Dispatch tables occupy ROM banks 32-39. Each table bank covers $1000 NES addresses.
 ; Input HL = NES PC.
 nes_dispatch_hl:
+    ; Record every requested NES PC before this routine repurposes HL for the
+    ; dispatch-table lookup. If we hang, mGBA can show the exact missing target.
+    ld a, h
+    ld [nes_debug_pc_hi], a
+    ld a, l
+    ld [nes_debug_pc_lo], a
+    xor a
+    ld [nes_debug_fault], a
+
     ld a, h
     cp $80
     jp c, nes_unimplemented
@@ -189,6 +198,8 @@ nes_restore_code_bank:
     ret
 
 nes_unimplemented:
+    ld a, $FF
+    ld [nes_debug_fault], a
     di
 .hang:
     halt
