@@ -21,7 +21,7 @@ fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
  let mut pc=start;let mut n=0usize;
  while n<8{
   let i=match dec(mapper,prg,pc){Ok(i)=>i,Err(_)=>return false};n+=1;
-  if branch(i.def.mnemonic)||matches!(i.def.mnemonic,Mnemonic::Jmp|Mnemonic::Jsr|Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){return true}
+  if matches!(i.def.mnemonic,Mnemonic::Jmp|Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){return true}
   pc=pc.wrapping_add(i.def.len()as u16);
  }
  true
@@ -84,5 +84,5 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
  let mut ep=entries.to_vec();ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
 }
 #[cfg(test)]mod tests{use super::*;fn put(p:&mut[u8],a:u16,b:&[u8]){let o=(a-0x8000)as usize;p[o..o+b.len()].copy_from_slice(b)}#[test]fn branch_cfg(){let mut p=vec![0xea;0x8000];put(&mut p,0x8000,&[0xa9,0,0xf0,2,0x60,0xea,0x60]);let g=discover(0,&p,&[0x8000]).unwrap();assert!(g.blocks.contains_key(&0x8004));assert!(g.blocks.contains_key(&0x8006))}
-#[test]fn discovers_indexed_indirect_jump_table_targets(){let mut p=vec![0xea;0x8000];put(&mut p,0x9000,&[0xB9,0x00,0xA0,0x85,0x02,0xC8,0xB9,0x00,0xA0,0x85,0x03,0x6C,0x02,0x00]);put(&mut p,0xA000,&[0x00,0x91]);put(&mut p,0x9100,&[0x60]);let g=discover(0,&p,&[0x9000]).unwrap();assert!(g.blocks.contains_key(&0x9100));let b=g.blocks.get(&0x9000).unwrap();assert!(b.edges.iter().any(|e|matches!(e.kind,EdgeKind::IndirectJump{pointer:0x0002})&&e.target==Some(0x9100)));}}
+#[test]fn discovers_indexed_indirect_jump_table_targets(){let mut p=vec![0xea;0x8000];put(&mut p,0x9000,&[0xB9,0x00,0xA0,0x85,0x02,0xC8,0xB9,0x00,0xA0,0x85,0x03,0x6C,0x02,0x00]);put(&mut p,0xA000,&[0x00,0x91,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);put(&mut p,0x9100,&[0x60]);let g=discover(0,&p,&[0x9000]).unwrap();assert!(g.blocks.contains_key(&0x9100));let b=g.blocks.get(&0x9000).unwrap();assert!(b.edges.iter().any(|e|matches!(e.kind,EdgeKind::IndirectJump{pointer:0x0002})&&e.target==Some(0x9100)));}}
 }
