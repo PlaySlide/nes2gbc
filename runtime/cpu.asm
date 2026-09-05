@@ -238,7 +238,13 @@ nes_cpu_write:
     ret nz
     ld a, [nes_chr_bank_mask]
     and e
+    ld b, a
+    ld a, [nes_chr_bank]
+    cp b
+    ret z
+    ld a, b
     ld [nes_chr_bank], a
+    call nes_upload_chr_bank
     ret
 
 .write_4011:
