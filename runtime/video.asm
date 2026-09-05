@@ -434,9 +434,17 @@ nes_video_sync_oam:
 
 .loop:
     ; NES Y is top minus one; GBC OAM Y is screen Y plus 16.
+    ; Hide sprites below our 144-line viewport instead of letting 8-bit
+    ; coordinate arithmetic wrap them back onto the top of the GBC screen.
     ld a, [hli]
+    cp $8F
+    jr nc, .hide_y
     inc a
     add $10
+    jr .write_y
+.hide_y:
+    xor a
+.write_y:
     ld [de], a
     inc de
 
@@ -445,9 +453,16 @@ nes_video_sync_oam:
     ld a, [hli]
     ld [nes_sprite_attr_tmp], a
 
-    ; X coordinate.
+    ; X coordinate. Hide sprites to the right of the 160-pixel viewport
+    ; instead of allowing $F8-$FF coordinates to wrap back onto the left.
     ld a, [hli]
+    cp $A0
+    jr nc, .hide_x
     add $08
+    jr .write_x
+.hide_x:
+    xor a
+.write_x:
     ld [de], a
     inc de
 
