@@ -158,6 +158,7 @@ pub struct RuntimeConfig<'a> {
     pub irq: u16,
     pub prg_file: &'a str,
     pub chr_file: &'a str,
+    pub chr_gbc_file: &'a str,
 }
 
 pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
@@ -181,6 +182,8 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "    ld [nes_prg_16k_mirror], a").unwrap();
     writeln!(out, "    ld a, \${:02X}", chr_mask as u8).unwrap();
     writeln!(out, "    ld [nes_chr_bank_mask], a").unwrap();
+    writeln!(out, "    ld a, \${:02X}", (3 + chr_banks_8k) as u8).unwrap();
+    writeln!(out, "    ld [nes_chr_gbc_bank_base], a").unwrap();
     writeln!(out, "    xor a").unwrap();
     writeln!(out, "    ld [nes_chr_bank], a").unwrap();
     writeln!(out, "    ret").unwrap();
@@ -216,6 +219,19 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
             writeln!(out, "    INCBIN \"{}\", \${start:04X}, \${len:04X}", config.chr_file).unwrap();
         }
     }
+    writeln!(out).unwrap();
+    let chr_gbc_bank_base = chr_bank_base + chr_banks_8k;
+    for bank in 0..chr_banks_8k {
+        let start = bank * 0x2000;
+        let len = if config.chr_len == 0 { 0 } else { (config.chr_len - start).min(0x2000) };
+        writeln!(out, "SECTION \"GBC converted CHR {bank}\", ROMX[\$4000], BANK[{}]", chr_gbc_bank_base + bank).unwrap();
+        if len == 0 {
+            writeln!(out, "    ds \$2000, 0").unwrap();
+        } else {
+            writeln!(out, "    INCBIN \"{}\", \${start:04X}, \${len:04X}", config.chr_gbc_file).unwrap();
+        }
+    }
+
     out
 }
 
