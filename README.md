@@ -37,7 +37,7 @@ The first slice parses iNES/NES 2.0 headers, decodes official 6502 opcodes, disc
 ```sh
 cargo build
 cargo test
-cargo run -- path/to/game.nes
+cargo run -- path/to/game.nes\ncargo run -- path/to/game.nes --emit-asm runtime/generated.asm --max-blocks 64
 ```
 
 Expected output for the initial CNROM target begins like:
