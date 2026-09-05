@@ -21,6 +21,7 @@ nes_ppu_latch:        ds 1
 nes_ppu_read_buffer:  ds 1
 nes_dac:              ds 1
 nes_saved_lcdc:       ds 1
+nes_palette_sync_color: ds 1
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
