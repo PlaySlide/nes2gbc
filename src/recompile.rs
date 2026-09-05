@@ -139,10 +139,6 @@ fn flag_mask(flag: Flag) -> u8 {
     }
 }
 
-fn same_code_bank(banks: &BTreeMap<u16, u16>, current_bank: u16, target: u16) -> bool {
-    banks.get(&target).copied() == Some(current_bank)
-}
-
 fn emit_static_target(
     out: &mut String,
     target: u16,
@@ -234,10 +230,14 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         .unwrap();
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
+        writeln!(out, "    ld a, [nes_nmi_active]").unwrap();
+        writeln!(out, "    and a").unwrap();
+        writeln!(out, "    jr nz, :+").unwrap();
         writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
         writeln!(out, "    call nes_poll_nmi_hl").unwrap();
         writeln!(out, "    and a").unwrap();
         writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
+        writeln!(out, ":").unwrap();
 
         for instruction in &block.instructions {
             writeln!(
