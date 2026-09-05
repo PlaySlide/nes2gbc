@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
-use crate::{cfg::{ControlFlowGraph, EdgeKind}, ir::{self, Flag, IrOp}, lr35902};
+use crate::{cfg::{ControlFlowGraph, EdgeKind}, cpu6502::{AddressingMode, DecodedInstruction, Mnemonic}, ir::{self, Flag, IrOp}, lr35902};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EmitOptions {
@@ -53,6 +53,79 @@ fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTree
 const DISPATCH_BANK_START: u16 = 32;
 const CODE_BANK_START: u16 = 40;
 const ESTIMATED_BANK_BUDGET: usize = 0x3000;
+
+const NES_FRAME_CPU_CYCLES: u16 = 29_780;
+
+fn instruction_base_cycles(i: DecodedInstruction) -> u16 {
+    use AddressingMode::*;
+    use Mnemonic::*;
+
+    match i.def.mnemonic {
+        Brk => 7,
+        Jsr => 6,
+        Rti | Rts => 6,
+        Jmp if i.def.mode == Indirect => 5,
+        Jmp => 3,
+
+        Bcc | Bcs | Beq | Bmi | Bne | Bpl | Bvc | Bvs => 2,
+
+        Pha | Php => 3,
+        Pla | Plp => 4,
+
+        Asl | Lsr | Rol | Ror => match i.def.mode {
+            Accumulator => 2,
+            ZeroPage => 5,
+            ZeroPageX => 6,
+            Absolute => 6,
+            AbsoluteX => 7,
+            _ => 2,
+        },
+
+        Inc | Dec => match i.def.mode {
+            ZeroPage => 5,
+            ZeroPageX => 6,
+            Absolute => 6,
+            AbsoluteX => 7,
+            _ => 2,
+        },
+
+        Sta | Stx | Sty => match i.def.mode {
+            ZeroPage => 3,
+            ZeroPageX | ZeroPageY => 4,
+            Absolute => 4,
+            AbsoluteX | AbsoluteY => 5,
+            IndexedIndirect | IndirectIndexed => 6,
+            _ => 2,
+        },
+
+        Bit => match i.def.mode {
+            ZeroPage => 3,
+            Absolute => 4,
+            _ => 2,
+        },
+
+        Lda | Ldx | Ldy | And | Ora | Eor | Adc | Sbc | Cmp | Cpx | Cpy => match i.def.mode {
+            Immediate => 2,
+            ZeroPage => 3,
+            ZeroPageX | ZeroPageY => 4,
+            Absolute => 4,
+            AbsoluteX | AbsoluteY => 4,
+            IndexedIndirect => 6,
+            IndirectIndexed => 5,
+            _ => 2,
+        },
+
+        Clc | Cld | Cli | Clv | Dex | Dey | Inx | Iny | Nop | Sec | Sed | Sei |
+        Tax | Tay | Tsx | Txa | Txs | Tya => 2,
+    }
+}
+
+fn block_base_cycles(block: &crate::cfg::BasicBlock) -> u16 {
+    block.instructions.iter()
+        .map(|&i| instruction_base_cycles(i))
+        .fold(0u16, u16::saturating_add)
+        .max(1)
+}
 
 fn estimated_block_size(block: &crate::cfg::BasicBlock) -> usize {
     64 + block.instructions.len() * 96
@@ -230,10 +303,12 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         .unwrap();
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
+        let block_cycles = block_base_cycles(block);
         writeln!(out, "    ld a, [nes_nmi_active]").unwrap();
         writeln!(out, "    and a").unwrap();
         writeln!(out, "    jr nz, :+").unwrap();
         writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
+        writeln!(out, "    ld bc, ${block_cycles:04X}").unwrap();
         writeln!(out, "    call nes_poll_nmi_hl").unwrap();
         writeln!(out, "    and a").unwrap();
         writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
@@ -377,6 +452,11 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
 mod tests {
     use super::*;
     use crate::cfg;
+
+    #[test]
+    fn nes_frame_cycle_budget_matches_ntsc_cpu_rate() {
+        assert_eq!(NES_FRAME_CPU_CYCLES, 29_780);
+    }
 
     #[test]
     fn reset_entry_dispatches_into_banked_code() {
