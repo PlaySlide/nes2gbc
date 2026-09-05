@@ -64,12 +64,9 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
         Operand::AbsoluteX(addr) => {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
+                writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
                 writeln!(out, "    ld a, [nes_x]").unwrap();
-                writeln!(out, "    add ${:02X}", mapped as u8).unwrap();
-                writeln!(out, "    ld l, a").unwrap();
-                writeln!(out, "    ld a, ${:02X}", (mapped >> 8) as u8).unwrap();
-                writeln!(out, "    adc $00").unwrap();
-                writeln!(out, "    ld h, a").unwrap();
+                writeln!(out, "    call nes_add_a_to_hl").unwrap();
                 true
             } else {
                 false
@@ -78,12 +75,9 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
         Operand::AbsoluteY(addr) => {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
+                writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
                 writeln!(out, "    ld a, [nes_y]").unwrap();
-                writeln!(out, "    add ${:02X}", mapped as u8).unwrap();
-                writeln!(out, "    ld l, a").unwrap();
-                writeln!(out, "    ld a, ${:02X}", (mapped >> 8) as u8).unwrap();
-                writeln!(out, "    adc $00").unwrap();
-                writeln!(out, "    ld h, a").unwrap();
+                writeln!(out, "    call nes_add_a_to_hl").unwrap();
                 true
             } else {
                 false
@@ -116,26 +110,14 @@ fn emit_indirect_addr(out: &mut String, src: Operand) {
             writeln!(out, "    ld a, [de]").unwrap();
             writeln!(out, "    ld h, a").unwrap();
             writeln!(out, "    ld a, [nes_y]").unwrap();
-            writeln!(out, "    add l").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    jr nc, :+").unwrap();
-            writeln!(out, "    inc h").unwrap();
-            writeln!(out, ":").unwrap();
+            writeln!(out, "    call nes_add_a_to_hl").unwrap();
         }
         _ => unreachable!(),
     }
 }
 fn emit_load_operand_to_a(out: &mut String, src: Operand) {
     match src {
-        Operand::Immediate(v) => {
-            writeln!(out, "    ld a, ${v:02X}").unwrap();
-        }
-        Operand::ZeroPage(zp) => {
-            writeln!(out, "    ld a, [${:04X}]", NES_RAM_BASE + zp as u16).unwrap();
-        }
-        Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
-            writeln!(out, "    ld a, [${:04X}]", direct_ram_addr(addr).unwrap()).unwrap();
-        }
+        Operand::Immediate(v) => { writeln!(out, "    ld a, ${v:02X}").unwrap(); }
         _ => {
             if emit_effective_addr(out, src) {
                 writeln!(out, "    ld a, [hl]").unwrap();
@@ -169,22 +151,10 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
 }
 
 fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
-    match dst {
-        Operand::ZeroPage(zp) => {
-            writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
-            return;
-        }
-        Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
-            writeln!(out, "    ld [${:04X}], a", direct_ram_addr(addr).unwrap()).unwrap();
-            return;
-        }
-        _ => {}
-    }
-
-    writeln!(out, "    ld c, a").unwrap();
+    writeln!(out, "    push af").unwrap();
 
     if emit_effective_addr(out, dst) {
-        writeln!(out, "    ld a, c").unwrap();
+        writeln!(out, "    pop af").unwrap();
         writeln!(out, "    ld [hl], a").unwrap();
         return;
     }
@@ -207,13 +177,13 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
             emit_indirect_addr(out, dst);
         }
         _ => {
-            writeln!(out, "    ld a, c").unwrap();
+            writeln!(out, "    pop af").unwrap();
             writeln!(out, "    call nes_unimplemented_operand_write").unwrap();
             return;
         }
     }
 
-    writeln!(out, "    ld a, c").unwrap();
+    writeln!(out, "    pop af").unwrap();
     writeln!(out, "    call nes_cpu_write").unwrap();
 }
 fn emit_update_nz(out: &mut String) {
@@ -427,25 +397,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_zero_page_load_store_use_absolute_wram_access() {
+    fn direct_zero_page_maps_to_wram() {
         let asm = emit_ops(&[
             IrOp::Load { dst: Register::A, src: Operand::ZeroPage(0x10) },
             IrOp::Store { src: Register::A, dst: Operand::ZeroPage(0x11) },
         ]);
-        assert!(asm.contains("ld a, [$C010]"));
-        assert!(asm.contains("ld [$C011], a"));
-        assert!(!asm.contains("ld h, $C0"));
-    }
-
-    #[test]
-    fn indexed_internal_ram_avoids_address_helper_calls() {
-        let asm = emit_ops(&[
-            IrOp::Load { dst: Register::A, src: Operand::AbsoluteX(0x0200) },
-            IrOp::Store { src: Register::A, dst: Operand::AbsoluteY(0x0300) },
-        ]);
-        assert!(!asm.contains("call nes_add_a_to_hl"));
-        assert!(!asm.contains("push af"));
-        assert!(!asm.contains("pop af"));
+        assert!(asm.contains("ld h, $C0"));
+        assert!(asm.contains("ld l, $10"));
+        assert!(asm.contains("ld [hl], a"));
     }
 
     #[test]
