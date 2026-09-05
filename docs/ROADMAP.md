@@ -22,18 +22,18 @@
 ## Milestone 2 — native LR35902 code generation
 
 - [x] NES semantic IR (initial reset-path subset)
-- [ ] A/X/Y and flag model
+- [x] canonical A/X/Y/SP/P state with shadow C/Z/I/D/V/N flags
 - [x] direct zero-page / internal RAM mapping into GBC WRAM
-- [ ] stack semantics
-- [x] initial branches / JSR / RTS / absolute JMP emission
+- [x] virtual 6502 stack with PHA/PLA/PHP/PLP and JSR/RTS return handling
+- [x] branches / JSR / RTS / absolute JMP with explicit fallthrough and PC dispatcher
 - [ ] block dispatcher for indirect control flow
-- [ ] flag liveness optimization
+- [ ] flag liveness optimization (correct shadow flags implemented first)
 
 ## Milestone 3 — GBC runtime
 
 - [x] RGBDS boot skeleton
 - [x] CGB double-speed initialization
-- [ ] VBlank synchronization
+- [x] initial PPUSTATUS vblank polling from GBC LY
 - [ ] controller translation
 - [x] initial $2000/$2001/$2002 virtual register shims
 - [ ] nametable -> BG tile map synchronization
@@ -62,3 +62,13 @@
 - raster effects
 - aggressive cross-block optimization
 - differential execution traces against Mesen/SameBoy
+
+
+### CPU coverage added after initial reset slice
+
+- indexed zero-page / absolute addressing
+- indirect indexed address formation
+- INX/INY/DEX/DEY and register transfers
+- AND/ORA/EOR
+- ADC/SBC with 6502 C/V/N/Z semantics
+- canonical RAM mirroring and generic CPU read/write shims
