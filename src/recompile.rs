@@ -230,8 +230,8 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         .unwrap();
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
-        ; Keep an exact current NES-PC breadcrumb even when optimized direct
-        ; jumps bypass the dynamic dispatcher.
+        // Keep an exact current NES-PC breadcrumb even when optimized direct
+        // jumps bypass the dynamic dispatcher.
         writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
         writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
         writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
