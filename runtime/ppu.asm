@@ -18,7 +18,7 @@ nes_ppu_cpu_read:
 
 .status:
     ; Approximate NES vblank from the live GBC scanline.
-    ldh a, [rLY & $FF]
+    ldh a, [rLY]
     cp 144
     jr c, .not_vblank
     ld a, [nes_ppu_status]
@@ -97,14 +97,14 @@ nes_ppu_cpu_write:
     jr nz, .scroll_y
     ld a, e
     ld [nes_ppu_scroll_x], a
-    ldh [rSCX & $FF], a
+    ldh [rSCX], a
     ld a, $01
     ld [nes_ppu_latch], a
     ret
 .scroll_y:
     ld a, e
     ld [nes_ppu_scroll_y], a
-    ldh [rSCY & $FF], a
+    ldh [rSCY], a
     xor a
     ld [nes_ppu_latch], a
     ret
@@ -231,7 +231,7 @@ nes_ppu_map_nametable_hl:
     ld h, a
 .normalized:
     ld a, $01
-    ldh [rSVBK & $FF], a
+    ldh [rSVBK], a
 
     ; Inner offset high bits are A9-A8.
     ld a, h
