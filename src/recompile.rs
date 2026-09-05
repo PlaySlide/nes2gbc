@@ -142,6 +142,78 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     out
 }
 
+
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig<'a> {
+    pub mapper: u16,
+    pub mirroring: crate::ines::Mirroring,
+    pub prg_len: usize,
+    pub chr_len: usize,
+    pub nmi: u16,
+    pub irq: u16,
+    pub prg_file: &'a str,
+    pub chr_file: &'a str,
+}
+
+pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
+    let mut out = String::new();
+    let mirroring = match config.mirroring {
+        crate::ines::Mirroring::Horizontal => 0,
+        crate::ines::Mirroring::Vertical => 1,
+        crate::ines::Mirroring::FourScreen => 2,
+    };
+    let prg_16k_mirror = usize::from(config.prg_len == 0x4000);
+    let chr_banks_8k = (config.chr_len / 0x2000).max(1);
+    let chr_mask = chr_banks_8k.next_power_of_two() - 1;
+
+    writeln!(out, "; Cartridge/runtime metadata").unwrap();
+    writeln!(out, "nes_generated_init:").unwrap();
+    writeln!(out, "    ld a, \${:02X}", config.mapper as u8).unwrap();
+    writeln!(out, "    ld [nes_mapper], a").unwrap();
+    writeln!(out, "    ld a, \${mirroring:02X}").unwrap();
+    writeln!(out, "    ld [nes_mirroring], a").unwrap();
+    writeln!(out, "    ld a, \${prg_16k_mirror:02X}").unwrap();
+    writeln!(out, "    ld [nes_prg_16k_mirror], a").unwrap();
+    writeln!(out, "    ld a, \${:02X}", chr_mask as u8).unwrap();
+    writeln!(out, "    ld [nes_chr_bank_mask], a").unwrap();
+    writeln!(out, "    xor a").unwrap();
+    writeln!(out, "    ld [nes_chr_bank], a").unwrap();
+    writeln!(out, "    ret").unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(out, "nes_nmi_entry:").unwrap();
+    writeln!(out, "    jp nes_{:04X}", config.nmi).unwrap();
+    writeln!(out, "nes_irq_entry:").unwrap();
+    writeln!(out, "    jp nes_{:04X}", config.irq).unwrap();
+    writeln!(out).unwrap();
+
+    if config.prg_len == 0x4000 {
+        writeln!(out, "SECTION \"NES PRG data 0\", ROMX[\$4000], BANK[1]").unwrap();
+        writeln!(out, "    INCBIN \"{}\", 0, \$4000", config.prg_file).unwrap();
+    } else {
+        for bank in 0..((config.prg_len + 0x3FFF) / 0x4000) {
+            let start = bank * 0x4000;
+            let len = (config.prg_len - start).min(0x4000);
+            writeln!(out, "SECTION \"NES PRG data {bank}\", ROMX[\$4000], BANK[{}]", bank + 1).unwrap();
+            writeln!(out, "    INCBIN \"{}\", \${start:04X}, \${len:04X}", config.prg_file).unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+
+    let chr_bank_base = 3usize;
+    for bank in 0..chr_banks_8k {
+        let start = bank * 0x2000;
+        let len = if config.chr_len == 0 { 0 } else { (config.chr_len - start).min(0x2000) };
+        writeln!(out, "SECTION \"NES CHR data {bank}\", ROMX[\$4000], BANK[{}]", chr_bank_base + bank).unwrap();
+        if len == 0 {
+            writeln!(out, "    ds \$2000, 0").unwrap();
+        } else {
+            writeln!(out, "    INCBIN \"{}\", \${start:04X}, \${len:04X}", config.chr_file).unwrap();
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
