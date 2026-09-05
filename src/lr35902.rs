@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crate::ir::{Flag, IrOp, LogicOp, Operand, Register, StackValue};
+use crate::ir::{ArithmeticOp, Flag, IrOp, LogicOp, Operand, Register, StackValue};
 
 pub const NES_RAM_BASE: u16 = 0xC000;
 
@@ -236,6 +236,17 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 }
                 writeln!(out, "    ld [nes_a], a").unwrap();
                 emit_update_nz(&mut out);
+            }
+
+            IrOp::Arithmetic { op, rhs } => {
+                emit_load_operand_to_a(&mut out, rhs);
+                writeln!(out, "    ld e, a").unwrap();
+                writeln!(out, "    ld a, [nes_a]").unwrap();
+                match op {
+                    ArithmeticOp::Adc => writeln!(out, "    call nes_adc_a_e").unwrap(),
+                    ArithmeticOp::Sbc => writeln!(out, "    call nes_sbc_a_e").unwrap(),
+                }
+                writeln!(out, "    ld [nes_a], a").unwrap();
             }
 
             IrOp::Compare { reg, rhs } => {
