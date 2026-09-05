@@ -28,6 +28,12 @@ pub enum LogicOp { And, Ora, Eor }
 pub enum ArithmeticOp { Adc, Sbc }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModifyOp { Inc, Dec, Asl, Lsr, Rol, Ror }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModifyTarget { Accumulator, Memory(Operand) }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackValue { A, Status }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,13 +46,18 @@ pub enum IrOp {
     Dec(Register),
     Logic { op: LogicOp, rhs: Operand },
     Arithmetic { op: ArithmeticOp, rhs: Operand },
+    Modify { op: ModifyOp, target: ModifyTarget },
+    Bit { rhs: Operand },
     Compare { reg: Register, rhs: Operand },
     StackPush(StackValue),
     StackPop(StackValue),
     Branch { flag: Flag, when: bool, target: u16 },
     Jump(u16),
+    JumpIndirect { pointer: u16 },
     Call { target: u16, return_addr: u16 },
     Return,
+    ReturnInterrupt,
+    Break { return_pc: u16 },
     ReadIo { addr: u16, dst: Register },
     WriteIo { addr: u16, src: Register },
     Nop,
@@ -139,6 +150,18 @@ pub fn lower_instruction(i: DecodedInstruction) -> Result<Vec<IrOp>, LowerError>
         (Adc, _) => vec![Arithmetic { op: ArithmeticOp::Adc, rhs: op()? }],
         (Sbc, _) => vec![Arithmetic { op: ArithmeticOp::Sbc, rhs: op()? }],
 
+        (Inc, _) => vec![Modify { op: ModifyOp::Inc, target: ModifyTarget::Memory(op()?) }],
+        (Dec, _) => vec![Modify { op: ModifyOp::Dec, target: ModifyTarget::Memory(op()?) }],
+        (Asl, AddressingMode::Accumulator) => vec![Modify { op: ModifyOp::Asl, target: ModifyTarget::Accumulator }],
+        (Lsr, AddressingMode::Accumulator) => vec![Modify { op: ModifyOp::Lsr, target: ModifyTarget::Accumulator }],
+        (Rol, AddressingMode::Accumulator) => vec![Modify { op: ModifyOp::Rol, target: ModifyTarget::Accumulator }],
+        (Ror, AddressingMode::Accumulator) => vec![Modify { op: ModifyOp::Ror, target: ModifyTarget::Accumulator }],
+        (Asl, _) => vec![Modify { op: ModifyOp::Asl, target: ModifyTarget::Memory(op()?) }],
+        (Lsr, _) => vec![Modify { op: ModifyOp::Lsr, target: ModifyTarget::Memory(op()?) }],
+        (Rol, _) => vec![Modify { op: ModifyOp::Rol, target: ModifyTarget::Memory(op()?) }],
+        (Ror, _) => vec![Modify { op: ModifyOp::Ror, target: ModifyTarget::Memory(op()?) }],
+        (Bit, _) => vec![IrOp::Bit { rhs: op()? }],
+
         (Cmp, _) => vec![Compare { reg: A, rhs: op()? }],
         (Cpx, _) => vec![Compare { reg: X, rhs: op()? }],
         (Cpy, _) => vec![Compare { reg: Y, rhs: op()? }],
@@ -158,11 +181,14 @@ pub fn lower_instruction(i: DecodedInstruction) -> Result<Vec<IrOp>, LowerError>
         (Bvs, AddressingMode::Relative) => vec![Branch { flag: Overflow, when: true, target: relative_target(i) }],
 
         (Jmp, AddressingMode::Absolute) => vec![Jump(i.operand)],
+        (Jmp, AddressingMode::Indirect) => vec![JumpIndirect { pointer: i.operand }],
         (Jsr, AddressingMode::Absolute) => vec![Call {
             target: i.operand,
             return_addr: i.pc.wrapping_add(2),
         }],
         (Rts, AddressingMode::Implied) => vec![Return],
+        (Rti, AddressingMode::Implied) => vec![ReturnInterrupt],
+        (Brk, AddressingMode::Implied) => vec![Break { return_pc: i.pc.wrapping_add(2) }],
         (Nop, AddressingMode::Implied) => vec![Nop],
         _ => return Err(unsupported()),
     };
