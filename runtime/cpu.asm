@@ -160,15 +160,11 @@ ENDC
     ld a, [nes_dispatch_cache_valid]
     and a
     jr z, .cache_miss
-    ld a, [nes_debug_pc_hi]
-    ld b, a
     ld a, [nes_dispatch_cache_pc_hi]
-    cp b
+    cp h
     jr nz, .cache_miss
-    ld a, [nes_debug_pc_lo]
-    ld b, a
     ld a, [nes_dispatch_cache_pc_lo]
-    cp b
+    cp l
     jr nz, .cache_miss
 
     ld a, [nes_dispatch_cache_bank]
@@ -189,6 +185,12 @@ ENDC
     jp hl
 
 .cache_miss:
+    ; Cache-key state is independent from optional debug breadcrumbs.
+    ld a, h
+    ld [nes_dispatch_cache_pc_hi], a
+    ld a, l
+    ld [nes_dispatch_cache_pc_lo], a
+
     ; Table bank = high nibble($8-$F) + $18 => banks $20-$27 (32-39).
     ld a, h
     swap a
@@ -221,10 +223,6 @@ ENDC
     ; Cache the resolved translation before switching back to its code bank.
     ld a, $01
     ld [nes_dispatch_cache_valid], a
-    ld a, [nes_debug_pc_hi]
-    ld [nes_dispatch_cache_pc_hi], a
-    ld a, [nes_debug_pc_lo]
-    ld [nes_dispatch_cache_pc_lo], a
     ld a, b
     ld [nes_dispatch_cache_bank], a
     ld a, d
