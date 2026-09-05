@@ -28,6 +28,11 @@ fn terminal_mnemonic(m: crate::cpu6502::Mnemonic) -> bool {
 fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTreeSet<u16> {
     let mut selected = BTreeSet::new();
     let mut queue = VecDeque::from([reset]);
+    for &entry in &graph.entry_points {
+        if entry != reset {
+            queue.push_back(entry);
+        }
+    }
 
     while let Some(addr) = queue.pop_front() {
         if selected.len() >= limit || !selected.insert(addr) {
