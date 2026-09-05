@@ -1,0 +1,41 @@
+use std::collections::{BTreeMap,BTreeSet,VecDeque};
+use std::fmt;
+use crate::cpu6502::{self,AddressingMode,DecodeError,DecodedInstruction,Mnemonic,Vectors};
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]pub enum EdgeKind{Fallthrough,BranchTaken,Jump,Call,CallReturn,IndirectJump{pointer:u16}}
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]pub struct Edge{pub kind:EdgeKind,pub target:Option<u16>}
+#[derive(Debug,Clone,PartialEq,Eq)]pub struct BasicBlock{pub start:u16,pub instructions:Vec<DecodedInstruction>,pub edges:Vec<Edge>}
+#[derive(Debug,Clone,PartialEq,Eq)]pub struct AnalysisDiagnostic{pub pc:u16,pub error:DecodeError}
+#[derive(Debug,Clone,PartialEq,Eq)]pub struct ControlFlowGraph{pub blocks:BTreeMap<u16,BasicBlock>,pub entry_points:Vec<u16>,pub diagnostics:Vec<AnalysisDiagnostic>}
+#[derive(Debug,Clone,PartialEq,Eq)]pub enum AnalysisError{UnsupportedMapper(u16),UnsupportedPrgSize(usize),UnmappedAddress(u16),Decode(DecodeError)}
+impl fmt::Display for AnalysisError{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{match self{
+Self::UnsupportedMapper(m)=>write!(f,"CFG discovery currently supports mapper 0 and 3, not mapper {m}"),
+Self::UnsupportedPrgSize(n)=>write!(f,"CFG discovery currently expects 16 KiB or 32 KiB fixed PRG, got {} KiB",n/1024),
+Self::UnmappedAddress(a)=>write!(f,"CPU address ${a:04X} is outside fixed PRG ROM"),Self::Decode(e)=>e.fmt(f)}}}
+impl std::error::Error for AnalysisError{} impl From<DecodeError> for AnalysisError{fn from(v:DecodeError)->Self{Self::Decode(v)}}
+fn off(mapper:u16,len:usize,a:u16)->Result<usize,AnalysisError>{if mapper!=0&&mapper!=3{return Err(AnalysisError::UnsupportedMapper(mapper))}if a<0x8000{return Err(AnalysisError::UnmappedAddress(a))}let x=(a-0x8000)as usize;match len{0x4000=>Ok(x&0x3fff),0x8000=>Ok(x),n=>Err(AnalysisError::UnsupportedPrgSize(n))}}
+fn dec(mapper:u16,prg:&[u8],pc:u16)->Result<DecodedInstruction,AnalysisError>{let o=off(mapper,prg.len(),pc)?;Ok(cpu6502::decode(pc,&prg[o..])?)}
+fn branch(m:Mnemonic)->bool{matches!(m,Mnemonic::Bcc|Mnemonic::Bcs|Mnemonic::Beq|Mnemonic::Bmi|Mnemonic::Bne|Mnemonic::Bpl|Mnemonic::Bvc|Mnemonic::Bvs)}
+fn rel(i:DecodedInstruction)->u16{let n=i.pc.wrapping_add(i.def.len()as u16);n.wrapping_add((i.operand as u8 as i8)as i16 as u16)}
+fn q(q:&mut VecDeque<u16>,seen:&mut BTreeSet<u16>,t:u16){if t>=0x8000&&seen.insert(t){q.push_back(t)}}
+pub fn discover_from_vectors(mapper:u16,prg:&[u8],v:Vectors)->Result<ControlFlowGraph,AnalysisError>{discover(mapper,prg,&[v.reset,v.nmi,v.irq_brk])}
+pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,AnalysisError>{
+ if mapper!=0&&mapper!=3{return Err(AnalysisError::UnsupportedMapper(mapper))}if prg.len()!=0x4000&&prg.len()!=0x8000{return Err(AnalysisError::UnsupportedPrgSize(prg.len()))}
+ let mut work=VecDeque::new();let mut seen=BTreeSet::new();for &e in entries{q(&mut work,&mut seen,e)}
+ let mut blocks=BTreeMap::new();let mut diagnostics=Vec::new();
+ while let Some(start)=work.pop_front(){if blocks.contains_key(&start){continue}let mut pc=start;let mut ins=Vec::new();let mut edges=Vec::new();
+  loop{
+   if pc!=start&&(blocks.contains_key(&pc)||seen.contains(&pc)){edges.push(Edge{kind:EdgeKind::Fallthrough,target:Some(pc)});break}
+   let i=match dec(mapper,prg,pc){Ok(i)=>i,Err(AnalysisError::Decode(error))=>{diagnostics.push(AnalysisDiagnostic{pc,error});break},Err(e)=>return Err(e)};
+   let next=pc.wrapping_add(i.def.len()as u16);ins.push(i);
+   if branch(i.def.mnemonic){let t=rel(i);edges.push(Edge{kind:EdgeKind::BranchTaken,target:Some(t)});edges.push(Edge{kind:EdgeKind::Fallthrough,target:Some(next)});q(&mut work,&mut seen,t);q(&mut work,&mut seen,next);break}
+   match i.def.mnemonic{
+    Mnemonic::Jsr=>{let t=i.operand;edges.push(Edge{kind:EdgeKind::Call,target:Some(t)});edges.push(Edge{kind:EdgeKind::CallReturn,target:Some(next)});q(&mut work,&mut seen,t);q(&mut work,&mut seen,next);break}
+    Mnemonic::Jmp if i.def.mode==AddressingMode::Absolute=>{let t=i.operand;edges.push(Edge{kind:EdgeKind::Jump,target:Some(t)});q(&mut work,&mut seen,t);break}
+    Mnemonic::Jmp if i.def.mode==AddressingMode::Indirect=>{edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:None});break}
+    Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk=>break,_=>pc=next
+   }
+  } blocks.insert(start,BasicBlock{start,instructions:ins,edges});
+ }
+ let mut ep=entries.to_vec();ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
+}
+#[cfg(test)]mod tests{use super::*;fn put(p:&mut[u8],a:u16,b:&[u8]){let o=(a-0x8000)as usize;p[o..o+b.len()].copy_from_slice(b)}#[test]fn branch_cfg(){let mut p=vec![0xea;0x8000];put(&mut p,0x8000,&[0xa9,0,0xf0,2,0x60,0xea,0x60]);let g=discover(0,&p,&[0x8000]).unwrap();assert!(g.blocks.contains_key(&0x8004));assert!(g.blocks.contains_key(&0x8006))}}
