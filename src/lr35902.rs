@@ -68,11 +68,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
                 writeln!(out, "    ld a, [nes_x]").unwrap();
-                writeln!(out, "    add l").unwrap();
-                writeln!(out, "    ld l, a").unwrap();
-                writeln!(out, "    jr nc, .no_carry\@").unwrap();
-                writeln!(out, "    inc h").unwrap();
-                writeln!(out, ".no_carry\@:").unwrap();
+                writeln!(out, "    call nes_add_a_to_hl").unwrap();
                 true
             } else {
                 false
@@ -83,11 +79,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
                 writeln!(out, "    ld a, [nes_y]").unwrap();
-                writeln!(out, "    add l").unwrap();
-                writeln!(out, "    ld l, a").unwrap();
-                writeln!(out, "    jr nc, .no_carry\@").unwrap();
-                writeln!(out, "    inc h").unwrap();
-                writeln!(out, ".no_carry\@:").unwrap();
+                writeln!(out, "    call nes_add_a_to_hl").unwrap();
                 true
             } else {
                 false
@@ -114,11 +106,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             writeln!(out, "    ld a, [de]").unwrap();
             writeln!(out, "    ld h, a").unwrap();
             writeln!(out, "    ld a, [nes_y]").unwrap();
-            writeln!(out, "    add l").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    jr nc, .iy_no_carry\@").unwrap();
-            writeln!(out, "    inc h").unwrap();
-            writeln!(out, ".iy_no_carry\@:").unwrap();
+            writeln!(out, "    call nes_add_a_to_hl").unwrap();
             writeln!(out, "    call nes_map_cpu_addr_hl").unwrap();
             true
         }
