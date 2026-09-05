@@ -1,6 +1,68 @@
-use std::{env, fs, path::PathBuf, process::ExitCode};
+use std::{collections::BTreeMap, env, fs, path::PathBuf, process::ExitCode};
 
 use nes2gbc::{assets, cfg, cpu6502, ines, recompile};
+
+fn print_hot_profile(graph: &cfg::ControlFlowGraph) {
+    let mut mnemonics: BTreeMap<String, usize> = BTreeMap::new();
+    let mut modes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut indexed = 0usize;
+    let mut branches = 0usize;
+    let mut loads_stores = 0usize;
+    let mut arithmetic = 0usize;
+    let mut rmw = 0usize;
+    let mut stack_control = 0usize;
+
+    for instruction in graph.blocks.values().flat_map(|block| &block.instructions) {
+        *mnemonics.entry(format!("{:?}", instruction.def.mnemonic)).or_default() += 1;
+        *modes.entry(format!("{:?}", instruction.def.mode)).or_default() += 1;
+
+        use cpu6502::AddressingMode as M;
+        use cpu6502::Mnemonic as O;
+
+        if matches!(
+            instruction.def.mode,
+            M::ZeroPageX | M::ZeroPageY | M::AbsoluteX | M::AbsoluteY |
+            M::IndexedIndirect | M::IndirectIndexed
+        ) {
+            indexed += 1;
+        }
+
+        match instruction.def.mnemonic {
+            O::Bcc | O::Bcs | O::Beq | O::Bmi | O::Bne | O::Bpl | O::Bvc | O::Bvs => branches += 1,
+            O::Lda | O::Ldx | O::Ldy | O::Sta | O::Stx | O::Sty => loads_stores += 1,
+            O::Adc | O::Sbc | O::Cmp | O::Cpx | O::Cpy | O::And | O::Ora | O::Eor | O::Bit => arithmetic += 1,
+            O::Asl | O::Lsr | O::Rol | O::Ror | O::Inc | O::Dec | O::Inx | O::Iny | O::Dex | O::Dey => rmw += 1,
+            O::Jmp | O::Jsr | O::Rts | O::Rti | O::Brk | O::Pha | O::Php | O::Pla | O::Plp => stack_control += 1,
+            _ => {}
+        }
+    }
+
+    let total: usize = mnemonics.values().sum();
+    let mut top_mnemonics: Vec<_> = mnemonics.into_iter().collect();
+    top_mnemonics.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut top_modes: Vec<_> = modes.into_iter().collect();
+    top_modes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    println!("Static hot-op profile:");
+    println!("  load/store: {loads_stores} ({:.1}%)", loads_stores as f64 * 100.0 / total.max(1) as f64);
+    println!("  branch: {branches} ({:.1}%)", branches as f64 * 100.0 / total.max(1) as f64);
+    println!("  ALU/compare/logic: {arithmetic} ({:.1}%)", arithmetic as f64 * 100.0 / total.max(1) as f64);
+    println!("  shift/inc/dec: {rmw} ({:.1}%)", rmw as f64 * 100.0 / total.max(1) as f64);
+    println!("  stack/control: {stack_control} ({:.1}%)", stack_control as f64 * 100.0 / total.max(1) as f64);
+    println!("  indexed addressing: {indexed} ({:.1}%)", indexed as f64 * 100.0 / total.max(1) as f64);
+
+    print!("  top mnemonics:");
+    for (name, count) in top_mnemonics.into_iter().take(10) {
+        print!(" {name}={count}");
+    }
+    println!();
+
+    print!("  top addressing modes:");
+    for (name, count) in top_modes.into_iter().take(8) {
+        print!(" {name}={count}");
+    }
+    println!();
+}
 
 fn main() -> ExitCode {
     let mut args = env::args_os();
@@ -108,6 +170,7 @@ fn main() -> ExitCode {
     println!("Unresolved indirect jumps: {indirect_jumps}");
     println!("Resolved indirect jump targets: {resolved_indirect_targets}");
     println!("Analysis diagnostics: {}", graph.diagnostics.len());
+    print_hot_profile(&graph);
 
     for diagnostic in graph.diagnostics.iter().take(8) {
         println!("  ${:04X}: {}", diagnostic.pc, diagnostic.error);
