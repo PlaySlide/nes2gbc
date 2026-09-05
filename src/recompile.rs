@@ -221,15 +221,15 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "; Cartridge/runtime metadata").unwrap();
     writeln!(out, "SECTION \"Generated runtime metadata\", ROM0").unwrap();
     writeln!(out, "nes_generated_init:").unwrap();
-    writeln!(out, "    ld a, \${:02X}", config.mapper as u8).unwrap();
+    writeln!(out, "    ld a, ${:02X}", config.mapper as u8).unwrap();
     writeln!(out, "    ld [nes_mapper], a").unwrap();
-    writeln!(out, "    ld a, \${mirroring:02X}").unwrap();
+    writeln!(out, "    ld a, ${mirroring:02X}").unwrap();
     writeln!(out, "    ld [nes_mirroring], a").unwrap();
-    writeln!(out, "    ld a, \${prg_16k_mirror:02X}").unwrap();
+    writeln!(out, "    ld a, ${prg_16k_mirror:02X}").unwrap();
     writeln!(out, "    ld [nes_prg_16k_mirror], a").unwrap();
-    writeln!(out, "    ld a, \${:02X}", chr_mask as u8).unwrap();
+    writeln!(out, "    ld a, ${:02X}", chr_mask as u8).unwrap();
     writeln!(out, "    ld [nes_chr_bank_mask], a").unwrap();
-    writeln!(out, "    ld a, \${:02X}", (3 + chr_banks_8k) as u8).unwrap();
+    writeln!(out, "    ld a, ${:02X}", (3 + chr_banks_8k) as u8).unwrap();
     writeln!(out, "    ld [nes_chr_gbc_bank_base], a").unwrap();
     writeln!(out, "    xor a").unwrap();
     writeln!(out, "    ld [nes_chr_bank], a").unwrap();
@@ -245,14 +245,14 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out).unwrap();
 
     if config.prg_len == 0x4000 {
-        writeln!(out, "SECTION \"NES PRG data 0\", ROMX[\$4000], BANK[1]").unwrap();
-        writeln!(out, "    INCBIN \"{}\", 0, \$4000", config.prg_file).unwrap();
+        writeln!(out, "SECTION \"NES PRG data 0\", ROMX[$4000], BANK[1]").unwrap();
+        writeln!(out, "    INCBIN \"{}\", 0, $4000", config.prg_file).unwrap();
     } else {
         for bank in 0..((config.prg_len + 0x3FFF) / 0x4000) {
             let start = bank * 0x4000;
             let len = (config.prg_len - start).min(0x4000);
-            writeln!(out, "SECTION \"NES PRG data {bank}\", ROMX[\$4000], BANK[{}]", bank + 1).unwrap();
-            writeln!(out, "    INCBIN \"{}\", \${start:04X}, \${len:04X}", config.prg_file).unwrap();
+            writeln!(out, "SECTION \"NES PRG data {bank}\", ROMX[$4000], BANK[{}]", bank + 1).unwrap();
+            writeln!(out, "    INCBIN \"{}\", ${start:04X}, ${len:04X}", config.prg_file).unwrap();
         }
     }
     writeln!(out).unwrap();
@@ -261,11 +261,11 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     for bank in 0..chr_banks_8k {
         let start = bank * 0x2000;
         let len = if config.chr_len == 0 { 0 } else { (config.chr_len - start).min(0x2000) };
-        writeln!(out, "SECTION \"NES CHR data {bank}\", ROMX[\$4000], BANK[{}]", chr_bank_base + bank).unwrap();
+        writeln!(out, "SECTION \"NES CHR data {bank}\", ROMX[$4000], BANK[{}]", chr_bank_base + bank).unwrap();
         if len == 0 {
-            writeln!(out, "    ds \$2000, 0").unwrap();
+            writeln!(out, "    ds $2000, 0").unwrap();
         } else {
-            writeln!(out, "    INCBIN \"{}\", \${start:04X}, \${len:04X}", config.chr_file).unwrap();
+            writeln!(out, "    INCBIN \"{}\", ${start:04X}, ${len:04X}", config.chr_file).unwrap();
         }
     }
     writeln!(out).unwrap();
@@ -273,11 +273,11 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     for bank in 0..chr_banks_8k {
         let start = bank * 0x2000;
         let len = if config.chr_len == 0 { 0 } else { (config.chr_len - start).min(0x2000) };
-        writeln!(out, "SECTION \"GBC converted CHR {bank}\", ROMX[\$4000], BANK[{}]", chr_gbc_bank_base + bank).unwrap();
+        writeln!(out, "SECTION \"GBC converted CHR {bank}\", ROMX[$4000], BANK[{}]", chr_gbc_bank_base + bank).unwrap();
         if len == 0 {
-            writeln!(out, "    ds \$2000, 0").unwrap();
+            writeln!(out, "    ds $2000, 0").unwrap();
         } else {
-            writeln!(out, "    INCBIN \"{}\", \${start:04X}, \${len:04X}", config.chr_gbc_file).unwrap();
+            writeln!(out, "    INCBIN \"{}\", ${start:04X}, ${len:04X}", config.chr_gbc_file).unwrap();
         }
     }
 
@@ -290,33 +290,35 @@ mod tests {
     use crate::cfg;
 
     #[test]
-    fn emitted_program_starts_from_reset_not_address_order() {
+    fn reset_entry_dispatches_into_banked_code() {
         let mut prg = vec![0xEA; 0x8000];
-        prg[0x0000] = 0x60;
         prg[0x1000] = 0x60;
-        let graph = cfg::discover(0, &prg, &[0x8000, 0x9000]).unwrap();
+        let graph = cfg::discover(0, &prg, &[0x9000]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0x9000, max_blocks: Some(1) });
-        assert!(asm.contains("jp nes_9000"));
-        assert!(asm.contains("nes_9000:"));
+        assert!(asm.contains("SECTION \"Generated NES reset entry\", ROM0"));
+        assert!(asm.contains("ld hl, $9000"));
+        assert!(asm.contains("jp nes_dispatch_hl"));
+        assert!(asm.contains("SECTION \"NES block 9000\", ROMX, BANK[40]"));
     }
 
     #[test]
-    fn branch_has_explicit_not_taken_edge() {
+    fn branch_not_taken_uses_pc_dispatch() {
         let mut prg = vec![0xEA; 0x8000];
         prg[0..5].copy_from_slice(&[0xD0, 0x02, 0x60, 0xEA, 0x60]);
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(3) });
-        assert!(asm.contains("jp nz, nes_8004"));
-        assert!(asm.contains("jp nes_8002"));
+        assert!(asm.contains("ld hl, $8002"));
+        assert!(asm.contains("jp nes_dispatch_hl"));
     }
 
     #[test]
-    fn dispatcher_contains_selected_addresses() {
+    fn dispatch_table_points_at_selected_block_bank() {
         let mut prg = vec![0xEA; 0x8000];
         prg[0] = 0x60;
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(1) });
-        assert!(asm.contains("nes_dispatch_hl:"));
-        assert!(asm.contains("jp z, nes_8000"));
+        assert!(asm.contains("SECTION \"NES dispatch table 0\", ROMX[$4000], BANK[32]"));
+        assert!(asm.contains("db BANK(nes_8000), $00"));
+        assert!(asm.contains("dw nes_8000"));
     }
 }
