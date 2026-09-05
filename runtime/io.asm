@@ -6,6 +6,7 @@ nes_mirroring:        ds 1
 nes_prg_16k_mirror:   ds 1
 nes_chr_bank_mask:    ds 1
 nes_chr_bank:         ds 1
+nes_chr_gbc_bank_base: ds 1
 
 SECTION "NES virtual IO state", WRAM0[$C818]
 nes_ppu_status:       ds 1
