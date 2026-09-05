@@ -9,6 +9,8 @@ nes_ppu_cpu_read:
     ld a, l
     cp $02
     jr z, .status
+    cp $04
+    jr z, .oamdata
     cp $07
     jp z, nes_ppu_read_data
     xor a
@@ -36,6 +38,13 @@ nes_ppu_cpu_read:
     ld a, e
     ret
 
+.oamdata:
+    ld hl, nes_oam_ram
+    ld a, [nes_oamaddr]
+    call nes_add_a_to_hl
+    ld a, [hl]
+    ret
+
 ; Input: L = mirrored PPU register index, E = value
 nes_ppu_cpu_write:
     ld a, l
@@ -46,6 +55,8 @@ nes_ppu_cpu_write:
     jr z, .mask
     cp $03
     jr z, .oamaddr
+    cp $04
+    jr z, .oamdata_write
     cp $05
     jr z, .scroll
     cp $06
@@ -62,9 +73,21 @@ nes_ppu_cpu_write:
 .mask:
     ld a, e
     ld [nes_ppumask], a
+    call nes_video_update_mask
     ret
 .oamaddr:
     ld a, e
+    ld [nes_oamaddr], a
+    ret
+
+.oamdata_write:
+    ld hl, nes_oam_ram
+    ld a, [nes_oamaddr]
+    call nes_add_a_to_hl
+    ld a, e
+    ld [hl], a
+    ld a, [nes_oamaddr]
+    inc a
     ld [nes_oamaddr], a
     ret
 
@@ -285,3 +308,26 @@ nes_ppu_increment_addr:
     and $3F
     ld [nes_ppu_addr_hi], a
     ret
+
+
+; $4014 OAM DMA. Input A = source page.
+nes_oam_dma:
+    ld h, a
+    ld l, $00
+    ld d, $C9
+    ld a, [nes_oamaddr]
+    ld e, a
+
+.loop:
+    push hl
+    push de
+    call nes_cpu_read
+    pop de
+    pop hl
+
+    ld [de], a
+    inc e
+    inc l
+    jr nz, .loop
+
+    jp nes_video_sync_oam
