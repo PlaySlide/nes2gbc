@@ -1,0 +1,10 @@
+/target/
+/build/
+/generated/
+*.nes
+*.gb
+*.gbc
+*.sav
+*.sym
+*.map
+.DS_Store
