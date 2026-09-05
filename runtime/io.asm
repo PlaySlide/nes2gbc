@@ -26,7 +26,7 @@ nes_sprite_attr_tmp:  ds 1
 nes_sprite_bank_tmp:  ds 1
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
-nes_nmi_vblank_seen:   ds 1
+nes_host_vblank_pending: ds 1
 nes_current_code_bank: ds 1
 
 ; Debug breadcrumbs. These live in the gap before palette RAM so they do not
