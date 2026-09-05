@@ -1,5 +1,11 @@
 OUTPUT := build/runtime.gbc
 OBJ := build/runtime.o
+TRACE ?= 0
+
+RGBASM_FLAGS :=
+ifeq ($(TRACE),1)
+RGBASM_FLAGS += -D NES2GBC_DEBUG_TRACE=1
+endif
 
 .PHONY: all clean
 all: $(OUTPUT)
@@ -8,7 +14,7 @@ build:
 	mkdir -p build
 
 $(OBJ): main.asm hardware.inc io.asm cpu.asm ppu.asm video.asm input.asm generated.asm | build
-	rgbasm -o "$@" main.asm
+	rgbasm $(RGBASM_FLAGS) -o "$@" main.asm
 
 $(OUTPUT): $(OBJ)
 	rgblink -o "$@" -n build/runtime.sym -m build/runtime.map "$<"
