@@ -29,6 +29,12 @@ nes_controller_shift:  ds 1
 nes_nmi_vblank_seen:   ds 1
 nes_current_code_bank: ds 1
 
+; Debug breadcrumbs. These live in the gap before palette RAM so they do not
+; disturb the existing fixed WRAM layout.
+nes_debug_pc_hi:       ds 1 ; $C82B - last requested NES dispatch PC, high byte
+nes_debug_pc_lo:       ds 1 ; $C82C - last requested NES dispatch PC, low byte
+nes_debug_fault:       ds 1 ; $C82D - $FF if nes_unimplemented was reached
+
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
 
