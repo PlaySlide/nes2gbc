@@ -97,14 +97,14 @@ nes_ppu_cpu_write:
     jr nz, .scroll_y
     ld a, e
     ld [nes_ppu_scroll_x], a
-    ldh [rSCX], a
+    call nes_view_apply_scroll
     ld a, $01
     ld [nes_ppu_latch], a
     ret
 .scroll_y:
     ld a, e
     ld [nes_ppu_scroll_y], a
-    ldh [rSCY], a
+    call nes_view_apply_scroll
     xor a
     ld [nes_ppu_latch], a
     ret
