@@ -1,5 +1,5 @@
 ; nes2gbc Game Boy Color runtime skeleton.
-DEF rKEY1 EQU $FF4D
+INCLUDE "hardware.inc"
 
 SECTION "VBlank Vector", ROM0[$0040]
     reti
@@ -40,9 +40,11 @@ Start:
     ld [nes_p], a
 
     call nes_generated_init
+    call nes_video_init
     jp nes_reset
 
 INCLUDE "io.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
+INCLUDE "video.asm"
 INCLUDE "generated.asm"
