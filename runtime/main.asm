@@ -38,6 +38,7 @@ Start:
     ld [nes_nmi_vblank_seen], a
     ld [nes_nmi_active], a
     ld [nes_current_code_bank], a
+    ld [nes_dispatch_cache_valid], a
 
     ld a, $FD
     ld [nes_sp], a
