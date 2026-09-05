@@ -5,6 +5,9 @@ SECTION "NES video bridge", ROM0
 
 nes_video_init:
     ; Enter a safe LCD-off setup window once at boot.
+    ldh a, [rLCDC & $FF]
+    bit 7, a
+    jr z, .initial_lcd_off
 .wait_initial_vblank:
     ldh a, [rLY & $FF]
     cp 144
@@ -12,6 +15,7 @@ nes_video_init:
     ldh a, [rLCDC & $FF]
     and $7F
     ldh [rLCDC & $FF], a
+.initial_lcd_off:
 
     call nes_upload_chr_bank
 
@@ -58,8 +62,8 @@ nes_video_init:
     ret
 
 nes_video_fill_zero:
-    xor a
 .loop:
+    xor a
     ld [hli], a
     dec bc
     ld a, b
