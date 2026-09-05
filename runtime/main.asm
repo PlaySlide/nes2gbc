@@ -68,6 +68,8 @@ Start:
 
     call nes_generated_init
     call nes_video_init
+    ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
+    call nes_profile_reset
 
     ; Use the real GBC VBlank interrupt only as a one-byte event latch. The
     ; translated NES interrupt is still delivered at compiler-selected safe points.
@@ -79,6 +81,7 @@ Start:
     jp nes_reset
 
 INCLUDE "io.asm"
+INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
 INCLUDE "video.asm"
