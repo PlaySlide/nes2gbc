@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crate::ir::{ArithmeticOp, Flag, IrOp, LogicOp, Operand, Register, StackValue};
+use crate::ir::{ArithmeticOp, Flag, IrOp, LogicOp, ModifyOp, ModifyTarget, Operand, Register, StackValue};
 
 pub const NES_RAM_BASE: u16 = 0xC000;
 
@@ -262,6 +262,46 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 writeln!(out, "    ld [nes_a], a").unwrap();
             }
 
+            IrOp::Modify { op, target } => {
+                let memory_target = match target {
+                    ModifyTarget::Accumulator => {
+                        writeln!(out, "    ld a, [nes_a]").unwrap();
+                        None
+                    }
+                    ModifyTarget::Memory(mem) => {
+                        emit_load_operand_to_a(&mut out, mem);
+                        Some(mem)
+                    }
+                };
+
+                match op {
+                    ModifyOp::Inc => {
+                        writeln!(out, "    inc a").unwrap();
+                        emit_update_nz(&mut out);
+                    }
+                    ModifyOp::Dec => {
+                        writeln!(out, "    dec a").unwrap();
+                        emit_update_nz(&mut out);
+                    }
+                    ModifyOp::Asl => { writeln!(out, "    call nes_asl_a").unwrap(); }
+                    ModifyOp::Lsr => { writeln!(out, "    call nes_lsr_a").unwrap(); }
+                    ModifyOp::Rol => { writeln!(out, "    call nes_rol_a").unwrap(); }
+                    ModifyOp::Ror => { writeln!(out, "    call nes_ror_a").unwrap(); }
+                }
+
+                if let Some(mem) = memory_target {
+                    emit_store_a_to_operand(&mut out, mem);
+                } else {
+                    writeln!(out, "    ld [nes_a], a").unwrap();
+                }
+            }
+
+            IrOp::Bit { rhs } => {
+                emit_load_operand_to_a(&mut out, rhs);
+                writeln!(out, "    ld e, a").unwrap();
+                writeln!(out, "    ld a, [nes_a]").unwrap();
+                writeln!(out, "    call nes_bit_a_e").unwrap();
+            }
             IrOp::Compare { reg, rhs } => {
                 emit_load_operand_to_a(&mut out, rhs);
                 writeln!(out, "    ld e, a").unwrap();
@@ -298,6 +338,12 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
 
             IrOp::Jump(target) => { writeln!(out, "    jp {}", label(target)).unwrap(); }
 
+            IrOp::JumpIndirect { pointer } => {
+                writeln!(out, "    ld hl, ${pointer:04X}").unwrap();
+                writeln!(out, "    call nes_jmp_indirect_hl").unwrap();
+                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+            }
+
             IrOp::Call { target, return_addr } => {
                 writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
                 writeln!(out, "    call nes_stack_push_return_hl").unwrap();
@@ -308,6 +354,17 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 writeln!(out, "    call nes_stack_pop_return_hl").unwrap();
                 writeln!(out, "    inc hl").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
+            }
+
+            IrOp::ReturnInterrupt => {
+                writeln!(out, "    call nes_rti_pop_hl").unwrap();
+                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+            }
+
+            IrOp::Break { return_pc } => {
+                writeln!(out, "    ld hl, ${return_pc:04X}").unwrap();
+                writeln!(out, "    call nes_brk_hl").unwrap();
+                writeln!(out, "    jp nes_irq_entry").unwrap();
             }
 
             IrOp::ReadIo { addr, dst } => {
