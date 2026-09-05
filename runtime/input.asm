@@ -2,6 +2,73 @@
 
 SECTION "NES input helpers", ROM0
 
+; Apply the current debug crop on top of the game's own NES scroll values.
+nes_view_apply_scroll:
+    ld a, [nes_ppu_scroll_x]
+    ld b, a
+    ld a, [nes_view_x]
+    add b
+    ldh [rSCX], a
+
+    ld a, [nes_ppu_scroll_y]
+    ld b, a
+    ld a, [nes_view_y]
+    add b
+    ldh [rSCY], a
+    ret
+
+; Cycle TL -> TR -> BL -> BR -> center -> TL.
+nes_view_cycle:
+    ld a, [nes_view_mode]
+    inc a
+    cp $05
+    jr c, .mode_ready
+    xor a
+.mode_ready:
+    ld [nes_view_mode], a
+
+    and a
+    jr z, .top_left
+    cp $01
+    jr z, .top_right
+    cp $02
+    jr z, .bottom_left
+    cp $03
+    jr z, .bottom_right
+
+    ; center: (256-160)/2, (240-144)/2 = 48,48
+    ld a, $30
+    ld [nes_view_x], a
+    ld [nes_view_y], a
+    jp nes_view_apply_scroll
+
+.top_right:
+    ld a, $60
+    ld [nes_view_x], a
+    xor a
+    ld [nes_view_y], a
+    jp nes_view_apply_scroll
+
+.bottom_left:
+    xor a
+    ld [nes_view_x], a
+    ld a, $60
+    ld [nes_view_y], a
+    jp nes_view_apply_scroll
+
+.bottom_right:
+    ld a, $60
+    ld [nes_view_x], a
+    ld [nes_view_y], a
+    jp nes_view_apply_scroll
+
+.top_left:
+    xor a
+    ld [nes_view_x], a
+    ld [nes_view_y], a
+    jp nes_view_apply_scroll
+
+
 nes_controller_latch:
     ; Action buttons: GBC A/B/Select/Start map directly to NES bits 0-3.
     ld a, $10
@@ -10,6 +77,26 @@ nes_controller_latch:
     cpl
     and $0F
     ld b, a
+
+    ; GBC Select is a temporary debug-camera key. Edge-trigger the viewport
+    ; cycle and suppress Select from the emulated NES controller.
+    bit 2, b
+    jr z, .select_released
+    ld a, [nes_view_select_prev]
+    and a
+    jr nz, .select_held
+    ld a, $01
+    ld [nes_view_select_prev], a
+    push bc
+    call nes_view_cycle
+    pop bc
+.select_held:
+    res 2, b
+    jr .select_done
+.select_released:
+    xor a
+    ld [nes_view_select_prev], a
+.select_done:
 
     ; Directions: GBC R,L,U,D -> NES bits 7,6,4,5.
     ld a, $20
