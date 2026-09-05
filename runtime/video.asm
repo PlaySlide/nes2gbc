@@ -559,7 +559,7 @@ nes_video_sync_oam:
     inc de
 
     dec b
-    jr nz, .loop
+    jp nz, .loop
     ret
 
 ; Reflect PPUMASK BG/sprite visibility into LCDC bits 0/1.
