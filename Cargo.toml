@@ -1,0 +1,17 @@
+[package]
+name = "nes2gbc"
+version = "0.1.0"
+edition = "2021"
+description = "Experimental NES to Game Boy Color static recompiler"
+repository = "https://github.com/PlaySlide/nes2gbc"
+publish = false
+
+[lib]
+name = "nes2gbc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nes2gbc"
+path = "src/main.rs"
+
+[dependencies]
