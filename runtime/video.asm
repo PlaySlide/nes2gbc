@@ -129,15 +129,18 @@ nes_video_copy:
     jr nz, .loop
     ret
 
-; Wait until VRAM is writable. This intentionally stalls rather than losing a write.
+; Wait only while the LCD controller is actively transferring pixels (mode 3).
+; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
+; entire frame waiting for LY>=144 for every translated NES PPU write.
 nes_video_wait_vram:
     ldh a, [rLCDC]
     bit 7, a
     ret z
 .wait:
-    ldh a, [rLY]
-    cp 144
-    jr c, .wait
+    ldh a, [rSTAT]
+    and $03
+    cp $03
+    jr z, .wait
     ret
 
 ; Input: HL = physical virtual nametable address ($D000-$D7FF), A = written byte.
@@ -234,8 +237,11 @@ nes_video_sync_attribute_write:
     ldh [rVBK], a
 
     call nes_video_attr_top_row
+    call nes_video_wait_vram
     call nes_video_attr_top_row
+    call nes_video_wait_vram
     call nes_video_attr_bottom_row
+    call nes_video_wait_vram
     call nes_video_attr_bottom_row
 
     xor a
@@ -374,6 +380,7 @@ nes_video_set_bg_color:
     inc hl
     ld d, [hl]
 
+    call nes_video_wait_vram
     ld a, c
     ldh [rBGPI], a
     ld a, e
@@ -407,6 +414,7 @@ nes_video_set_obj_color:
     inc hl
     ld d, [hl]
 
+    call nes_video_wait_vram
     ld a, c
     ldh [rOBPI], a
     ld a, e
