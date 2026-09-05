@@ -441,13 +441,20 @@ nes_video_sync_oam:
     ld b, 40
 
 .loop:
-    ; NES Y is top minus one; GBC OAM Y is screen Y plus 16.
-    ; Hide sprites below our 144-line viewport instead of letting 8-bit
-    ; coordinate arithmetic wrap them back onto the top of the GBC screen.
+    ; Crop NES screen-space Y into the selected 144-line debug viewport.
+    ; $EF-$FF are always offscreen/hidden on the source NES.
     ld a, [hli]
-    cp $8F
+    cp $EF
     jr nc, .hide_y
     inc a
+    ld [nes_view_coord_tmp], a
+    ld a, [nes_view_y]
+    ld c, a
+    ld a, [nes_view_coord_tmp]
+    sub c
+    jr c, .hide_y
+    cp $90
+    jr nc, .hide_y
     add $10
     jr .write_y
 .hide_y:
@@ -456,14 +463,20 @@ nes_video_sync_oam:
     ld [de], a
     inc de
 
+    ; Keep the tile number in scratch RAM while C is free for crop arithmetic.
     ld a, [hli]
-    ld c, a
+    ld [nes_view_sprite_tile_tmp], a
     ld a, [hli]
     ld [nes_sprite_attr_tmp], a
 
-    ; X coordinate. Hide sprites to the right of the 160-pixel viewport
-    ; instead of allowing $F8-$FF coordinates to wrap back onto the left.
+    ; Crop NES screen-space X into the selected 160-pixel debug viewport.
     ld a, [hli]
+    ld [nes_view_coord_tmp], a
+    ld a, [nes_view_x]
+    ld c, a
+    ld a, [nes_view_coord_tmp]
+    sub c
+    jr c, .hide_x
     cp $A0
     jr nc, .hide_x
     add $08
@@ -479,7 +492,8 @@ nes_video_sync_oam:
     bit 5, a
     jr z, .sprite_8x8
 
-    ld a, c
+    ld a, [nes_view_sprite_tile_tmp]
+    ld c, a
     and $FE
     ld [de], a
     inc de
@@ -491,7 +505,7 @@ nes_video_sync_oam:
     jr .bank_ready
 
 .sprite_8x8:
-    ld a, c
+    ld a, [nes_view_sprite_tile_tmp]
     ld [de], a
     inc de
     ld a, [nes_ppuctrl]
