@@ -113,6 +113,7 @@ nes_upload_chr_bank:
     xor a
     ldh [rVBK & $FF], a
 
+    call nes_restore_code_bank
     ld a, [nes_saved_lcdc]
     ldh [rLCDC & $FF], a
     ret
