@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
-use nes2gbc::{cfg, cpu6502, ines, recompile};
+use nes2gbc::{assets, cfg, cpu6502, ines, recompile};
 
 fn main() -> ExitCode {
     let mut args = env::args_os();
@@ -111,8 +111,10 @@ fn main() -> ExitCode {
         let stem = out_path.file_stem().and_then(|s| s.to_str()).unwrap_or("generated");
         let prg_name = format!("{stem}.prg.bin");
         let chr_name = format!("{stem}.chr.bin");
+        let chr_gbc_name = format!("{stem}.chr.gbc.bin");
         let prg_path = parent.join(&prg_name);
         let chr_path = parent.join(&chr_name);
+        let chr_gbc_path = parent.join(&chr_gbc_name);
 
         let mut asm = recompile::emit_cfg(
             &graph,
@@ -128,6 +130,7 @@ fn main() -> ExitCode {
             irq: vectors.irq_brk,
             prg_file: &prg_name,
             chr_file: &chr_name,
+            chr_gbc_file: &chr_gbc_name,
         }));
 
         if let Err(err) = fs::write(&out_path, asm) {
@@ -142,10 +145,16 @@ fn main() -> ExitCode {
             eprintln!("error writing {}: {err}", chr_path.display());
             return ExitCode::FAILURE;
         }
+        let converted_chr = assets::convert_chr_to_gbc(cart.chr_rom);
+        if let Err(err) = fs::write(&chr_gbc_path, converted_chr) {
+            eprintln!("error writing {}: {err}", chr_gbc_path.display());
+            return ExitCode::FAILURE;
+        }
 
         println!("Generated LR35902 assembly: {}", out_path.display());
         println!("Embedded PRG data: {}", prg_path.display());
         println!("Embedded CHR data: {}", chr_path.display());
+        println!("Converted GBC tile data: {}", chr_gbc_path.display());
     }
 
     ExitCode::SUCCESS
