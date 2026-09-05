@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Write;
 
 use crate::{cfg::{ControlFlowGraph, EdgeKind}, ir, lr35902};
@@ -11,13 +11,33 @@ pub struct EmitOptions {
 
 impl Default for EmitOptions {
     fn default() -> Self {
-        Self { reset: 0x8000, max_blocks: None }
+        Self { reset: 0x8000, max_blocks: Some(64) }
     }
 }
 
 fn terminal_mnemonic(m: crate::cpu6502::Mnemonic) -> bool {
     use crate::cpu6502::Mnemonic::*;
     matches!(m, Bcc|Bcs|Beq|Bmi|Bne|Bpl|Bvc|Bvs|Jmp|Jsr|Rts|Rti|Brk)
+}
+
+fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTreeSet<u16> {
+    let mut selected = BTreeSet::new();
+    let mut queue = VecDeque::from([reset]);
+
+    while let Some(addr) = queue.pop_front() {
+        if selected.len() >= limit || !selected.insert(addr) {
+            continue;
+        }
+        let Some(block) = graph.blocks.get(&addr) else { continue };
+
+        for target in block.edges.iter().filter_map(|edge| edge.target) {
+            if graph.blocks.contains_key(&target) && !selected.contains(&target) {
+                queue.push_back(target);
+            }
+        }
+    }
+
+    selected
 }
 
 pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
@@ -30,11 +50,12 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     writeln!(out, "    jp nes_{:04X}", options.reset).unwrap();
     writeln!(out).unwrap();
 
-    let limit = options.max_blocks.unwrap_or(usize::MAX);
-    let mut emitted = BTreeSet::new();
+    let limit = options.max_blocks.unwrap_or(graph.blocks.len());
+    let selected = select_reachable(graph, options.reset, limit);
+    let mut external_targets = BTreeSet::new();
 
-    for block in graph.blocks.values().take(limit) {
-        emitted.insert(block.start);
+    for addr in &selected {
+        let Some(block) = graph.blocks.get(addr) else { continue };
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
         for instruction in &block.instructions {
@@ -63,12 +84,29 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 }
             }
         }
+
+        for target in block.edges.iter().filter_map(|edge| edge.target) {
+            if !selected.contains(&target) && graph.blocks.contains_key(&target) {
+                external_targets.insert(target);
+            }
+        }
         writeln!(out).unwrap();
     }
 
-    if options.max_blocks.is_some() {
-        writeln!(out, "; Development emission intentionally limited to {} CFG blocks.", emitted.len()).unwrap();
+    if !external_targets.is_empty() {
+        writeln!(out, "; Targets outside this development slice trap here so the ROM still links.").unwrap();
+        for target in external_targets {
+            writeln!(out, "nes_{target:04X}:").unwrap();
+            writeln!(out, "    jp nes_unimplemented").unwrap();
+        }
+        writeln!(out).unwrap();
     }
+
+    writeln!(out, "nes_unimplemented:").unwrap();
+    writeln!(out, "    di").unwrap();
+    writeln!(out, ".hang:").unwrap();
+    writeln!(out, "    halt").unwrap();
+    writeln!(out, "    jr .hang").unwrap();
 
     out
 }
@@ -76,18 +114,25 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{cfg, cpu6502};
+    use crate::cfg;
 
     #[test]
-    fn emitted_program_has_reset_trampoline() {
+    fn emitted_program_starts_from_reset_not_address_order() {
         let mut prg = vec![0xEA; 0x8000];
-        prg[0] = 0x60;
-        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
-        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: None });
-        assert!(asm.contains("nes_reset:"));
-        assert!(asm.contains("jp nes_8000"));
-        assert!(asm.contains("nes_8000:"));
-        assert!(asm.contains("ret"));
-        let _ = cpu6502::opcode_def(0x60);
+        prg[0x0000] = 0x60; // $8000
+        prg[0x1000] = 0x60; // $9000 reset target
+        let graph = cfg::discover(0, &prg, &[0x8000, 0x9000]).unwrap();
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x9000, max_blocks: Some(1) });
+        assert!(asm.contains("jp nes_9000"));
+        assert!(asm.contains("nes_9000:"));
+    }
+
+    #[test]
+    fn omitted_target_gets_linkable_trap_stub() {
+        let mut prg = vec![0xEA; 0x8000];
+        prg[0x1000..0x1005].copy_from_slice(&[0xD0, 0x02, 0x60, 0xEA, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x9000]).unwrap();
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x9000, max_blocks: Some(1) });
+        assert!(asm.contains("jp nes_unimplemented"));
     }
 }
