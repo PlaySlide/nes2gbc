@@ -25,6 +25,13 @@ Start:
     ld [nes_ppu_status], a
     ld [nes_ppuctrl], a
     ld [nes_ppumask], a
+    ld [nes_oamaddr], a
+    ld [nes_ppu_scroll_x], a
+    ld [nes_ppu_scroll_y], a
+    ld [nes_ppu_addr_hi], a
+    ld [nes_ppu_addr_lo], a
+    ld [nes_ppu_latch], a
+    ld [nes_ppu_read_buffer], a
     ld [nes_dac], a
 
     ld a, $FD
