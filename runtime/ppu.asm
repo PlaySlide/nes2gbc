@@ -6,6 +6,7 @@ SECTION "NES PPU helpers", ROM0
 ; Input: L = mirrored PPU register index ($00-$07)
 ; Output: A = register value
 nes_ppu_cpu_read:
+    PROFILE_INC nes_profile_ppu_read
     ld a, l
     cp $02
     jr z, .status
@@ -47,6 +48,7 @@ nes_ppu_cpu_read:
 
 ; Input: L = mirrored PPU register index, E = value
 nes_ppu_cpu_write:
+    PROFILE_INC nes_profile_ppu_write
     ld a, l
     and $07
     cp $00
