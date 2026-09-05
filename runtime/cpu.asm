@@ -484,7 +484,7 @@ nes_cpu_write:
 
 
 ; Input: A = lhs, E = rhs. Uses 6502 carry-in from nes_p.
-; Output: A = result, updates C/V/N/Z in nes_p.
+; Output: A = result, updates C/V in nes_p and lazy Z/N shadows.
 nes_adc_a_e:
     ld d, a
     ld a, [nes_p]
@@ -503,8 +503,9 @@ nes_adc_a_e:
     inc l
 .adc_captured:
 
+    ; Preserve all status bits except C/V; Z/N are represented lazily.
     ld a, [nes_p]
-    and $3C
+    and $BE
     ld b, a
     ld a, l
     and a
@@ -513,20 +514,6 @@ nes_adc_a_e:
     or $01
     ld b, a
 .adc_no_carry:
-
-    ld a, c
-    and a
-    jr nz, .adc_not_zero
-    ld a, b
-    or $02
-    ld b, a
-.adc_not_zero:
-    bit 7, c
-    jr z, .adc_not_negative
-    ld a, b
-    or $80
-    ld b, a
-.adc_not_negative:
 
     ; overflow = ~(lhs ^ rhs) & (lhs ^ result) & $80
     ld a, d
@@ -544,7 +531,10 @@ nes_adc_a_e:
 .adc_no_overflow:
     ld a, b
     ld [nes_p], a
+
     ld a, c
+    ld [nes_z_shadow], a
+    ld [nes_n_shadow], a
     ret
 
 ; SBC on the 6502 is lhs + (~rhs) + C.
@@ -558,33 +548,22 @@ nes_sbc_a_e:
     ld a, d
     jp nes_adc_a_e
 
-; BIT: A = accumulator, E = memory operand. Updates Z from A&E and N/V from operand.
+; BIT: Z comes from A&E, N from operand bit7, V from operand bit6.
 nes_bit_a_e:
     ld d, a
-    ld a, [nes_p]
-    and $3D
-    ld b, a
 
     ld a, d
     and e
-    jr nz, .bit_not_zero
-    ld a, b
-    or $02
-    ld b, a
-.bit_not_zero:
+    ld [nes_z_shadow], a
+    ld a, e
+    ld [nes_n_shadow], a
+
+    ld a, [nes_p]
+    and $BF
     bit 6, e
     jr z, .bit_no_v
-    ld a, b
     or $40
-    ld b, a
 .bit_no_v:
-    bit 7, e
-    jr z, .bit_no_n
-    ld a, b
-    or $80
-    ld b, a
-.bit_no_n:
-    ld a, b
     ld [nes_p], a
     ret
 
@@ -689,7 +668,7 @@ nes_brk_hl:
     ld a, c
     call nes_stack_push_a
 
-    ld a, [nes_p]
+    call nes_materialize_p
     or $30
     call nes_stack_push_a
 
@@ -705,9 +684,7 @@ nes_rti_pop_hl:
     xor a
     ld [nes_nmi_active], a
     call nes_stack_pop_a
-    or $20
-    and $EF
-    ld [nes_p], a
+    call nes_set_p_from_a
 
     call nes_stack_pop_a
     ld c, a
@@ -748,7 +725,7 @@ nes_poll_nmi_hl:
     ld a, c
     call nes_stack_push_a
 
-    ld a, [nes_p]
+    call nes_materialize_p
     and $EF
     or $20
     call nes_stack_push_a
