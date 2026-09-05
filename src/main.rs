@@ -95,11 +95,14 @@ fn main() -> ExitCode {
 
     let instruction_count: usize = graph.blocks.values().map(|block| block.instructions.len()).sum();
     let indirect_jumps = graph.blocks.values().flat_map(|block| &block.edges)
-        .filter(|edge| matches!(edge.kind, cfg::EdgeKind::IndirectJump { .. })).count();
+        .filter(|edge| matches!(edge.kind, cfg::EdgeKind::IndirectJump { .. }) && edge.target.is_none()).count();
+    let resolved_indirect_targets = graph.blocks.values().flat_map(|block| &block.edges)
+        .filter(|edge| matches!(edge.kind, cfg::EdgeKind::IndirectJump { .. }) && edge.target.is_some()).count();
 
     println!("CFG blocks: {}", graph.blocks.len());
     println!("CFG instructions: {instruction_count}");
     println!("Unresolved indirect jumps: {indirect_jumps}");
+    println!("Resolved indirect jump targets: {resolved_indirect_targets}");
     println!("Analysis diagnostics: {}", graph.diagnostics.len());
 
     for diagnostic in graph.diagnostics.iter().take(8) {
