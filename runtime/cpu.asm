@@ -573,7 +573,7 @@ nes_rti_pop_hl:
 ; Input HL = NES PC to resume if interrupted. Output A = 1 when caller should jump to NMI.
 nes_poll_nmi_hl:
     ; Leaving VBlank arms the next NMI.
-    ldh a, [rLY & $FF]
+    ldh a, [rLY]
     cp 144
     jr nc, .in_vblank
     xor a
