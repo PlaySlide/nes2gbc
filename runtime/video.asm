@@ -309,12 +309,15 @@ nes_video_sync_palette_write:
     ld b, $00
     ld a, [nes_palette_sync_color]
     call nes_video_set_bg_color
+    ld c, $00
     ld b, $01
     ld a, [nes_palette_sync_color]
     call nes_video_set_bg_color
+    ld c, $00
     ld b, $02
     ld a, [nes_palette_sync_color]
     call nes_video_set_bg_color
+    ld c, $00
     ld b, $03
     ld a, [nes_palette_sync_color]
     jp nes_video_set_bg_color
