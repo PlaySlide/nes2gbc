@@ -36,6 +36,14 @@ nes_debug_pc_lo:       ds 1 ; $C82C - last requested NES dispatch PC, low byte
 nes_debug_fault:       ds 1 ; $C82D - $FF if nes_unimplemented was reached
 nes_nmi_active:        ds 1 ; $C82E - nonzero while translated NMI handler is active
 
+SECTION "NES dispatch cache", WRAM0[$C850]
+nes_dispatch_cache_valid:   ds 1
+nes_dispatch_cache_pc_hi:   ds 1
+nes_dispatch_cache_pc_lo:   ds 1
+nes_dispatch_cache_bank:    ds 1
+nes_dispatch_cache_addr_hi: ds 1
+nes_dispatch_cache_addr_lo: ds 1
+
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
 
