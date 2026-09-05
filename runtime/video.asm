@@ -1,20 +1,12 @@
 ; GBC video bridge for the virtual NES PPU.
 ; Correctness-first: expensive operations may wait for VBlank or briefly disable LCD.
 
-DEF rLCDC EQU $FF40
-DEF rSCY  EQU $FF42
-DEF rSCX  EQU $FF43
-DEF rLYV  EQU $FF44
-DEF rVBK  EQU $FF4F
-DEF rBGPI EQU $FF68
-DEF rBGPD EQU $FF69
-
 SECTION "NES video bridge", ROM0
 
 nes_video_init:
     ; Enter a safe LCD-off setup window once at boot.
 .wait_initial_vblank:
-    ldh a, [rLYV & $FF]
+    ldh a, [rLY & $FF]
     cp 144
     jr c, .wait_initial_vblank
     ldh a, [rLCDC & $FF]
@@ -85,7 +77,7 @@ nes_upload_chr_bank:
     jr z, .lcd_off
 
 .wait_vblank:
-    ldh a, [rLYV & $FF]
+    ldh a, [rLY & $FF]
     cp 144
     jr c, .wait_vblank
 
@@ -138,7 +130,7 @@ nes_video_wait_vram:
     bit 7, a
     ret z
 .wait:
-    ldh a, [rLYV & $FF]
+    ldh a, [rLY & $FF]
     cp 144
     jr c, .wait
     ret
