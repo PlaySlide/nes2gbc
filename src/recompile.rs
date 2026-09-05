@@ -7,11 +7,12 @@ use crate::{cfg::{ControlFlowGraph, EdgeKind}, ir::{self, Flag, IrOp}, lr35902};
 pub struct EmitOptions {
     pub reset: u16,
     pub max_blocks: Option<usize>,
+    pub debug_trace: bool,
 }
 
 impl Default for EmitOptions {
     fn default() -> Self {
-        Self { reset: 0x8000, max_blocks: Some(64) }
+        Self { reset: 0x8000, max_blocks: Some(64), debug_trace: false }
     }
 }
 
@@ -230,12 +231,14 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         .unwrap();
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
-        // Keep an exact current NES-PC breadcrumb even when optimized direct
-        // jumps bypass the dynamic dispatcher.
-        writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
-        writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
-        writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
-        writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+        if options.debug_trace {
+            // Keep an exact current NES-PC breadcrumb even when optimized direct
+            // jumps bypass the dynamic dispatcher.
+            writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
+            writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
+            writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
+            writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+        }
 
         // Most reset/startup code runs with NMI disabled. Avoid the expensive
         // helper/LY polling entirely until PPUCTRL bit 7 is actually enabled.
@@ -395,7 +398,7 @@ mod tests {
         let mut prg = vec![0xEA; 0x8000];
         prg[0x1000] = 0x60;
         let graph = cfg::discover(0, &prg, &[0x9000]).unwrap();
-        let asm = emit_cfg(&graph, EmitOptions { reset: 0x9000, max_blocks: Some(1) });
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x9000, max_blocks: Some(1), debug_trace: false });
         assert!(asm.contains("SECTION \"Generated NES reset entry\", ROM0"));
         assert!(asm.contains("ld hl, $9000"));
         assert!(asm.contains("jp nes_dispatch_hl"));
@@ -407,7 +410,7 @@ mod tests {
         let mut prg = vec![0xEA; 0x8000];
         prg[0..5].copy_from_slice(&[0xD0, 0x02, 0x60, 0xEA, 0x60]);
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
-        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(3) });
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(3), debug_trace: false });
         assert!(asm.contains("jp nes_8004") || asm.contains("jp nes_8002"));
     }
 
@@ -416,7 +419,7 @@ mod tests {
         let mut prg = vec![0xEA; 0x8000];
         prg[0x7FFF] = 0x60;
         let graph = cfg::discover(0, &prg, &[0xFFFF]).unwrap();
-        let asm = emit_cfg(&graph, EmitOptions { reset: 0xFFFF, max_blocks: Some(1) });
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0xFFFF, max_blocks: Some(1), debug_trace: false });
         assert!(asm.contains("nes_FFFF:"));
         assert!(asm.contains("BANK(nes_FFFF)"));
     }
@@ -426,7 +429,7 @@ mod tests {
         let mut prg = vec![0xEA; 0x8000];
         prg[0] = 0x60;
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
-        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(1) });
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(1), debug_trace: false });
         assert!(asm.contains("SECTION \"NES dispatch table 0\", ROMX[$4000], BANK[32]"));
         assert!(asm.contains("db BANK(nes_8000), $00"));
         assert!(asm.contains("dw nes_8000"));
