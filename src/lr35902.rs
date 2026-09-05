@@ -32,6 +32,16 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
     }
 }
 
+fn emit_add_a_to_hl(out: &mut String) {
+    // Exact inline equivalent of runtime nes_add_a_to_hl. A contains the
+    // unsigned 8-bit index and HL the base address.
+    writeln!(out, "    add l").unwrap();
+    writeln!(out, "    ld l, a").unwrap();
+    writeln!(out, "    jr nc, :+").unwrap();
+    writeln!(out, "    inc h").unwrap();
+    writeln!(out, ":").unwrap();
+}
+
 fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
     match op {
         Operand::ZeroPage(zp) => {
@@ -66,7 +76,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
                 writeln!(out, "    ld a, [nes_x]").unwrap();
-                writeln!(out, "    call nes_add_a_to_hl").unwrap();
+                emit_add_a_to_hl(out);
                 true
             } else {
                 false
@@ -77,7 +87,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
                 writeln!(out, "    ld a, [nes_y]").unwrap();
-                writeln!(out, "    call nes_add_a_to_hl").unwrap();
+                emit_add_a_to_hl(out);
                 true
             } else {
                 false
@@ -110,7 +120,7 @@ fn emit_indirect_addr(out: &mut String, src: Operand) {
             writeln!(out, "    ld a, [de]").unwrap();
             writeln!(out, "    ld h, a").unwrap();
             writeln!(out, "    ld a, [nes_y]").unwrap();
-            writeln!(out, "    call nes_add_a_to_hl").unwrap();
+            emit_add_a_to_hl(out);
         }
         _ => unreachable!(),
     }
@@ -130,13 +140,13 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                     Operand::AbsoluteX(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                         writeln!(out, "    ld a, [nes_x]").unwrap();
-                        writeln!(out, "    call nes_add_a_to_hl").unwrap();
+                        emit_add_a_to_hl(out);
                         writeln!(out, "    call nes_cpu_read").unwrap();
                     }
                     Operand::AbsoluteY(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                         writeln!(out, "    ld a, [nes_y]").unwrap();
-                        writeln!(out, "    call nes_add_a_to_hl").unwrap();
+                        emit_add_a_to_hl(out);
                         writeln!(out, "    call nes_cpu_read").unwrap();
                     }
                     Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
@@ -166,12 +176,12 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
         Operand::AbsoluteX(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
             writeln!(out, "    ld a, [nes_x]").unwrap();
-            writeln!(out, "    call nes_add_a_to_hl").unwrap();
+            emit_add_a_to_hl(out);
         }
         Operand::AbsoluteY(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
             writeln!(out, "    ld a, [nes_y]").unwrap();
-            writeln!(out, "    call nes_add_a_to_hl").unwrap();
+            emit_add_a_to_hl(out);
         }
         Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
             emit_indirect_addr(out, dst);
@@ -430,6 +440,17 @@ mod tests {
         assert!(asm.contains("ld h, $C0"));
         assert!(asm.contains("ld l, $10"));
         assert!(asm.contains("ld [hl], a"));
+    }
+
+    #[test]
+    fn indexed_addressing_inlines_add_to_hl() {
+        let asm = emit_ops(&[
+            IrOp::Load { dst: Register::A, src: Operand::AbsoluteX(0x0200) },
+            IrOp::Load { dst: Register::A, src: Operand::IndirectIndexed(0x10) },
+        ]);
+        assert!(asm.contains("add l"));
+        assert!(asm.contains("ld l, a"));
+        assert!(!asm.contains("call nes_add_a_to_hl"));
     }
 
     #[test]
