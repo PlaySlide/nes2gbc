@@ -24,4 +24,5 @@ Start:
     jp nes_reset
 
 INCLUDE "io.asm"
+INCLUDE "cpu.asm"
 INCLUDE "generated.asm"
