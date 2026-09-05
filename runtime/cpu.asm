@@ -568,6 +568,8 @@ nes_brk_hl:
 
 ; RTI pops P then PC low/high. Output HL = exact restored PC.
 nes_rti_pop_hl:
+    xor a
+    ld [nes_nmi_active], a
     call nes_stack_pop_a
     or $20
     and $EF
@@ -596,12 +598,20 @@ nes_poll_nmi_hl:
     bit 7, a
     jr z, .no_nmi
 
+    ; Do not nest a translated NMI inside an NMI handler that has spilled
+    ; across multiple host frames. The static recompiler is much slower than
+    ; the original 6502 around PPU-heavy code, so this guard is essential.
+    ld a, [nes_nmi_active]
+    and a
+    jr nz, .no_nmi
+
     ld a, [nes_nmi_vblank_seen]
     and a
     jr nz, .no_nmi
 
     ld a, $01
     ld [nes_nmi_vblank_seen], a
+    ld [nes_nmi_active], a
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
     ld b, h
