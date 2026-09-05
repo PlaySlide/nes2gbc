@@ -117,7 +117,15 @@ fn emit_indirect_addr(out: &mut String, src: Operand) {
 }
 fn emit_load_operand_to_a(out: &mut String, src: Operand) {
     match src {
-        Operand::Immediate(v) => { writeln!(out, "    ld a, ${v:02X}").unwrap(); }
+        Operand::Immediate(v) => {
+            writeln!(out, "    ld a, ${v:02X}").unwrap();
+        }
+        Operand::ZeroPage(zp) => {
+            writeln!(out, "    ld a, [${:04X}]", NES_RAM_BASE + zp as u16).unwrap();
+        }
+        Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
+            writeln!(out, "    ld a, [${:04X}]", direct_ram_addr(addr).unwrap()).unwrap();
+        }
         _ => {
             if emit_effective_addr(out, src) {
                 writeln!(out, "    ld a, [hl]").unwrap();
@@ -151,6 +159,18 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
 }
 
 fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
+    match dst {
+        Operand::ZeroPage(zp) => {
+            writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
+            return;
+        }
+        Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
+            writeln!(out, "    ld [${:04X}], a", direct_ram_addr(addr).unwrap()).unwrap();
+            return;
+        }
+        _ => {}
+    }
+
     writeln!(out, "    push af").unwrap();
 
     if emit_effective_addr(out, dst) {
@@ -397,14 +417,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_zero_page_maps_to_wram() {
+    fn direct_zero_page_load_store_use_absolute_wram_access() {
         let asm = emit_ops(&[
             IrOp::Load { dst: Register::A, src: Operand::ZeroPage(0x10) },
             IrOp::Store { src: Register::A, dst: Operand::ZeroPage(0x11) },
         ]);
-        assert!(asm.contains("ld h, $C0"));
-        assert!(asm.contains("ld l, $10"));
-        assert!(asm.contains("ld [hl], a"));
+        assert!(asm.contains("ld a, [$C010]"));
+        assert!(asm.contains("ld [$C011], a"));
+        assert!(!asm.contains("ld h, $C0"));
     }
 
     #[test]
