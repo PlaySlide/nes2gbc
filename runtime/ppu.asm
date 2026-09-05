@@ -1,9 +1,6 @@
 ; NES PPU register semantics backed by GBC WRAM/ROM banks.
 ; This is a semantic model, not cycle-accurate PPU emulation.
 
-DEF rLY   EQU $FF44
-DEF rSVBK EQU $FF70
-
 SECTION "NES PPU helpers", ROM0
 
 ; Input: L = mirrored PPU register index ($00-$07)
