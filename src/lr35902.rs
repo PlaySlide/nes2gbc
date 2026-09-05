@@ -187,7 +187,8 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
     writeln!(out, "    call nes_cpu_write").unwrap();
 }
 fn emit_update_nz(out: &mut String) {
-    writeln!(out, "    call nes_set_nz_from_a").unwrap();
+    writeln!(out, "    ld [nes_z_shadow], a").unwrap();
+    writeln!(out, "    ld [nes_n_shadow], a").unwrap();
 }
 
 pub fn emit_ops(ops: &[IrOp]) -> String {
@@ -196,13 +197,25 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
     for op in ops {
         match *op {
             IrOp::SetFlag { flag, value } => {
-                writeln!(out, "    ld a, [nes_p]").unwrap();
-                if value {
-                    writeln!(out, "    or ${:02X}", flag_mask(flag)).unwrap();
-                } else {
-                    writeln!(out, "    and ${:02X}", !flag_mask(flag)).unwrap();
+                match flag {
+                    Flag::Zero => {
+                        writeln!(out, "    ld a, ${:02X}", if value { 0x00 } else { 0x01 }).unwrap();
+                        writeln!(out, "    ld [nes_z_shadow], a").unwrap();
+                    }
+                    Flag::Negative => {
+                        writeln!(out, "    ld a, ${:02X}", if value { 0x80 } else { 0x00 }).unwrap();
+                        writeln!(out, "    ld [nes_n_shadow], a").unwrap();
+                    }
+                    _ => {
+                        writeln!(out, "    ld a, [nes_p]").unwrap();
+                        if value {
+                            writeln!(out, "    or ${:02X}", flag_mask(flag)).unwrap();
+                        } else {
+                            writeln!(out, "    and ${:02X}", !flag_mask(flag)).unwrap();
+                        }
+                        writeln!(out, "    ld [nes_p], a").unwrap();
+                    }
                 }
-                writeln!(out, "    ld [nes_p], a").unwrap();
             }
 
             IrOp::Load { dst, src } => {
@@ -312,7 +325,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 writeln!(out, "    call nes_stack_push_a").unwrap();
             }
             IrOp::StackPush(StackValue::Status) => {
-                writeln!(out, "    ld a, [nes_p]").unwrap();
+                writeln!(out, "    call nes_materialize_p").unwrap();
                 writeln!(out, "    or $30").unwrap();
                 writeln!(out, "    call nes_stack_push_a").unwrap();
             }
@@ -323,15 +336,27 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             }
             IrOp::StackPop(StackValue::Status) => {
                 writeln!(out, "    call nes_stack_pop_a").unwrap();
-                writeln!(out, "    or $20").unwrap();
-                writeln!(out, "    and $EF").unwrap();
-                writeln!(out, "    ld [nes_p], a").unwrap();
+                writeln!(out, "    call nes_set_p_from_a").unwrap();
             }
 
             IrOp::Branch { flag, when, target } => {
-                writeln!(out, "    ld a, [nes_p]").unwrap();
-                writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
-                writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                match flag {
+                    Flag::Zero => {
+                        writeln!(out, "    ld a, [nes_z_shadow]").unwrap();
+                        writeln!(out, "    and a").unwrap();
+                        writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
+                    }
+                    Flag::Negative => {
+                        writeln!(out, "    ld a, [nes_n_shadow]").unwrap();
+                        writeln!(out, "    bit 7, a").unwrap();
+                        writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    }
+                    _ => {
+                        writeln!(out, "    ld a, [nes_p]").unwrap();
+                        writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
+                        writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    }
+                }
                 writeln!(out, "    ld hl, ${target:04X}").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
                 writeln!(out, ":").unwrap();
@@ -408,12 +433,24 @@ mod tests {
     }
 
     #[test]
-    fn branches_read_shadow_status() {
-        let asm = emit_ops(&[IrOp::Branch { flag: Flag::Negative, when: false, target: 0x9000 }]);
-        assert!(asm.contains("ld a, [nes_p]"));
-        assert!(asm.contains("and $80"));
-        assert!(asm.contains("jr nz, :+"));
+    fn zero_and_negative_branches_use_lazy_shadows() {
+        let asm = emit_ops(&[
+            IrOp::Branch { flag: Flag::Negative, when: false, target: 0x9000 },
+            IrOp::Branch { flag: Flag::Zero, when: true, target: 0x9010 },
+        ]);
+        assert!(asm.contains("ld a, [nes_n_shadow]"));
+        assert!(asm.contains("bit 7, a"));
+        assert!(asm.contains("ld a, [nes_z_shadow]"));
+        assert!(asm.contains("and a"));
         assert!(asm.contains("ld hl, $9000"));
-        assert!(asm.contains("jp nes_dispatch_hl"));
+        assert!(asm.contains("ld hl, $9010"));
+    }
+
+    #[test]
+    fn nz_updates_are_inlined_without_helper_call() {
+        let asm = emit_ops(&[IrOp::Load { dst: Register::A, src: Operand::Immediate(0) }]);
+        assert!(asm.contains("ld [nes_z_shadow], a"));
+        assert!(asm.contains("ld [nes_n_shadow], a"));
+        assert!(!asm.contains("call nes_set_nz_from_a"));
     }
 }
