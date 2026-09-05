@@ -361,6 +361,9 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "    ld [nes_chr_gbc_bank_base], a").unwrap();
     writeln!(out, "    xor a").unwrap();
     writeln!(out, "    ld [nes_chr_bank], a").unwrap();
+    if prg_16k_mirror != 0 {
+        writeln!(out, "    call nes_cache_prg16_to_wram").unwrap();
+    }
     writeln!(out, "    ret").unwrap();
     writeln!(out).unwrap();
 
@@ -425,6 +428,23 @@ mod tests {
         let selected: BTreeSet<u16> = graph.blocks.keys().copied().collect();
         let points = nmi_poll_points(&graph, &selected);
         assert!(points.contains(&0x8002));
+    }
+
+    #[test]
+    fn runtime_config_caches_mirrored_16k_prg() {
+        let cfg = RuntimeConfig {
+            mapper: 0,
+            mirroring: crate::ines::Mirroring::Horizontal,
+            prg_len: 0x4000,
+            chr_len: 0x2000,
+            nmi: 0xC000,
+            irq: 0xC000,
+            prg_file: "test.prg.bin",
+            chr_file: "test.chr.bin",
+            chr_gbc_file: "test.chr.gbc.bin",
+        };
+        let asm = emit_runtime_config(&cfg);
+        assert!(asm.contains("call nes_cache_prg16_to_wram"));
     }
 
     #[test]
