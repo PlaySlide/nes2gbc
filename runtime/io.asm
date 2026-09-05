@@ -47,6 +47,14 @@ nes_debug_bus_hi:           ds 1 ; last generic NES CPU bus-read address
 nes_debug_bus_lo:           ds 1
 nes_debug_bus_value:        ds 1 ; last PRG byte returned by generic CPU read
 
+SECTION "NES debug viewport", WRAM0[$C860]
+nes_view_mode:              ds 1 ; 0 TL, 1 TR, 2 BL, 3 BR, 4 center
+nes_view_x:                 ds 1
+nes_view_y:                 ds 1
+nes_view_select_prev:       ds 1
+nes_view_coord_tmp:         ds 1
+nes_view_sprite_tile_tmp:   ds 1
+
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
 
