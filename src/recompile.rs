@@ -15,6 +15,11 @@ impl Default for EmitOptions {
     }
 }
 
+fn is_branch(m: crate::cpu6502::Mnemonic) -> bool {
+    use crate::cpu6502::Mnemonic::*;
+    matches!(m, Bcc|Bcs|Beq|Bmi|Bne|Bpl|Bvc|Bvs)
+}
+
 fn terminal_mnemonic(m: crate::cpu6502::Mnemonic) -> bool {
     use crate::cpu6502::Mnemonic::*;
     matches!(m, Bcc|Bcs|Beq|Bmi|Bne|Bpl|Bvc|Bvs|Jmp|Jsr|Rts|Rti|Brk)
@@ -38,6 +43,23 @@ fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTree
     }
 
     selected
+}
+
+fn emit_dispatch(out: &mut String, selected: &BTreeSet<u16>) {
+    writeln!(out, "nes_dispatch_hl:").unwrap();
+    for addr in selected {
+        let hi = (addr >> 8) as u8;
+        let lo = *addr as u8;
+        writeln!(out, "    ld a, h").unwrap();
+        writeln!(out, "    cp ${hi:02X}").unwrap();
+        writeln!(out, "    jr nz, .next_{addr:04X}").unwrap();
+        writeln!(out, "    ld a, l").unwrap();
+        writeln!(out, "    cp ${lo:02X}").unwrap();
+        writeln!(out, "    jp z, nes_{addr:04X}").unwrap();
+        writeln!(out, ".next_{addr:04X}:").unwrap();
+    }
+    writeln!(out, "    jp nes_unimplemented").unwrap();
+    writeln!(out).unwrap();
 }
 
 pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
@@ -75,7 +97,14 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         }
 
         if let Some(last) = block.instructions.last() {
-            if !terminal_mnemonic(last.def.mnemonic) {
+            if is_branch(last.def.mnemonic) {
+                if let Some(target) = block.edges.iter()
+                    .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
+                    .and_then(|edge| edge.target)
+                {
+                    writeln!(out, "    jp nes_{target:04X}").unwrap();
+                }
+            } else if !terminal_mnemonic(last.def.mnemonic) {
                 if let Some(target) = block.edges.iter()
                     .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                     .and_then(|edge| edge.target)
@@ -102,6 +131,8 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         writeln!(out).unwrap();
     }
 
+    emit_dispatch(&mut out, &selected);
+
     writeln!(out, "nes_unimplemented:").unwrap();
     writeln!(out, "    di").unwrap();
     writeln!(out, ".hang:").unwrap();
@@ -119,8 +150,8 @@ mod tests {
     #[test]
     fn emitted_program_starts_from_reset_not_address_order() {
         let mut prg = vec![0xEA; 0x8000];
-        prg[0x0000] = 0x60; // $8000
-        prg[0x1000] = 0x60; // $9000 reset target
+        prg[0x0000] = 0x60;
+        prg[0x1000] = 0x60;
         let graph = cfg::discover(0, &prg, &[0x8000, 0x9000]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0x9000, max_blocks: Some(1) });
         assert!(asm.contains("jp nes_9000"));
@@ -128,11 +159,22 @@ mod tests {
     }
 
     #[test]
-    fn omitted_target_gets_linkable_trap_stub() {
+    fn branch_has_explicit_not_taken_edge() {
         let mut prg = vec![0xEA; 0x8000];
-        prg[0x1000..0x1005].copy_from_slice(&[0xD0, 0x02, 0x60, 0xEA, 0x60]);
-        let graph = cfg::discover(0, &prg, &[0x9000]).unwrap();
-        let asm = emit_cfg(&graph, EmitOptions { reset: 0x9000, max_blocks: Some(1) });
-        assert!(asm.contains("jp nes_unimplemented"));
+        prg[0..5].copy_from_slice(&[0xD0, 0x02, 0x60, 0xEA, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(3) });
+        assert!(asm.contains("jp nz, nes_8004"));
+        assert!(asm.contains("jp nes_8002"));
+    }
+
+    #[test]
+    fn dispatcher_contains_selected_addresses() {
+        let mut prg = vec![0xEA; 0x8000];
+        prg[0] = 0x60;
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(1) });
+        assert!(asm.contains("nes_dispatch_hl:"));
+        assert!(asm.contains("jp z, nes_8000"));
     }
 }
