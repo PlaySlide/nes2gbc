@@ -102,18 +102,21 @@ nes_stack_pop_a:
 ; 6502 JSR pushes high byte then low byte of PC-1/return address.
 ; Input: HL = 6502 return address (address of last JSR operand byte).
 nes_stack_push_return_hl:
-    ld a, h
+    ld b, h
+    ld c, l
+    ld a, b
     call nes_stack_push_a
-    ld a, l
+    ld a, c
     call nes_stack_push_a
     ret
 
 ; Output: HL = stacked 6502 return address. RTS increments it before dispatch.
 nes_stack_pop_return_hl:
     call nes_stack_pop_a
-    ld l, a
+    ld c, a
     call nes_stack_pop_a
     ld h, a
+    ld l, c
     ret
 
 ; Input A = unsigned 8-bit offset, HL = base. Output HL += A.
@@ -263,11 +266,17 @@ nes_adc_a_e:
     ld a, d
     adc e
     ld c, a
+    ld l, $00
+    jr nc, .adc_captured
+    inc l
+.adc_captured:
 
     ld a, [nes_p]
     and $3C
     ld b, a
-    jr nc, .adc_no_carry
+    ld a, l
+    and a
+    jr z, .adc_no_carry
     ld a, b
     or $01
     ld b, a
@@ -437,9 +446,11 @@ nes_jmp_indirect_hl:
 ; BRK pushes return PC high/low, then status with B set, and sets I.
 ; Input HL = PC after BRK's padding byte.
 nes_brk_hl:
-    ld a, h
+    ld b, h
+    ld c, l
+    ld a, b
     call nes_stack_push_a
-    ld a, l
+    ld a, c
     call nes_stack_push_a
 
     ld a, [nes_p]
@@ -461,9 +472,10 @@ nes_rti_pop_hl:
     ld [nes_p], a
 
     call nes_stack_pop_a
-    ld l, a
+    ld c, a
     call nes_stack_pop_a
     ld h, a
+    ld l, c
     ret
 
 nes_unimplemented_operand_read:
