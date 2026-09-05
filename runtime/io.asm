@@ -27,6 +27,7 @@ nes_sprite_bank_tmp:  ds 1
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
 nes_nmi_vblank_seen:   ds 1
+nes_current_code_bank: ds 1
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
