@@ -5,16 +5,16 @@ SECTION "NES input helpers", ROM0
 nes_controller_latch:
     ; Action buttons: GBC A/B/Select/Start map directly to NES bits 0-3.
     ld a, $10
-    ldh [rP1 & $FF], a
-    ldh a, [rP1 & $FF]
+    ldh [rP1], a
+    ldh a, [rP1]
     cpl
     and $0F
     ld b, a
 
     ; Directions: GBC R,L,U,D -> NES bits 7,6,4,5.
     ld a, $20
-    ldh [rP1 & $FF], a
-    ldh a, [rP1 & $FF]
+    ldh [rP1], a
+    ldh a, [rP1]
     cpl
     and $0F
     ld c, a
