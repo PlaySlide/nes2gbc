@@ -43,6 +43,9 @@ nes_dispatch_cache_pc_lo:   ds 1
 nes_dispatch_cache_bank:    ds 1
 nes_dispatch_cache_addr_hi: ds 1
 nes_dispatch_cache_addr_lo: ds 1
+nes_debug_bus_hi:           ds 1 ; last generic NES CPU bus-read address
+nes_debug_bus_lo:           ds 1
+nes_debug_bus_value:        ds 1 ; last PRG byte returned by generic CPU read
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
