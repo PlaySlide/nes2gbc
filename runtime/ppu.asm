@@ -60,6 +60,7 @@ nes_ppu_cpu_write:
 .ctrl:
     ld a, e
     ld [nes_ppuctrl], a
+    call nes_video_update_ctrl
     ret
 .mask:
     ld a, e
@@ -76,12 +77,14 @@ nes_ppu_cpu_write:
     jr nz, .scroll_y
     ld a, e
     ld [nes_ppu_scroll_x], a
+    ldh [rSCX & $FF], a
     ld a, $01
     ld [nes_ppu_latch], a
     ret
 .scroll_y:
     ld a, e
     ld [nes_ppu_scroll_y], a
+    ldh [rSCY & $FF], a
     xor a
     ld [nes_ppu_latch], a
     ret
@@ -140,6 +143,7 @@ nes_ppu_write_data:
     call nes_ppu_map_nametable_hl
     ld a, e
     ld [hl], a
+    call nes_video_sync_nametable_write
     jp nes_ppu_increment_addr
 
 .pattern:
