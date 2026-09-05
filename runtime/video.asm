@@ -5,60 +5,60 @@ SECTION "NES video bridge", ROM0
 
 nes_video_init:
     ; Enter a safe LCD-off setup window once at boot.
-    ldh a, [rLCDC & $FF]
+    ldh a, [rLCDC]
     bit 7, a
     jr z, .initial_lcd_off
 .wait_initial_vblank:
-    ldh a, [rLY & $FF]
+    ldh a, [rLY]
     cp 144
     jr c, .wait_initial_vblank
-    ldh a, [rLCDC & $FF]
+    ldh a, [rLCDC]
     and $7F
-    ldh [rLCDC & $FF], a
+    ldh [rLCDC], a
 .initial_lcd_off:
 
     call nes_upload_chr_bank
 
     ; LCD is off after upload: clear both BG maps and their CGB attributes.
     xor a
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ld hl, $9800
     ld bc, $0800
     call nes_video_fill_zero
 
     ld a, $01
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ld hl, $9800
     ld bc, $0800
     call nes_video_fill_zero
 
     xor a
-    ldh [rVBK & $FF], a
-    ldh [rSCX & $FF], a
-    ldh [rSCY & $FF], a
+    ldh [rVBK], a
+    ldh [rSCX], a
+    ldh [rSCY], a
 
     ; Palette 0: white -> light gray -> dark gray -> black.
     ld a, $80
-    ldh [rBGPI & $FF], a
+    ldh [rBGPI], a
     ld a, $FF
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     ld a, $7F
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     ld a, $B5
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     ld a, $56
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     ld a, $4A
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     ld a, $29
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     xor a
-    ldh [rBGPD & $FF], a
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
+    ldh [rBGPD], a
 
     ; LCD on, BG on, unsigned tile IDs, map $9800.
     ld a, $91
-    ldh [rLCDC & $FF], a
+    ldh [rLCDC], a
     ret
 
 nes_video_fill_zero:
@@ -75,19 +75,19 @@ nes_video_fill_zero:
 ; pattern table $0000 -> CGB VRAM bank 0 $8000
 ; pattern table $1000 -> CGB VRAM bank 1 $8000
 nes_upload_chr_bank:
-    ldh a, [rLCDC & $FF]
+    ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
     bit 7, a
     jr z, .lcd_off
 
 .wait_vblank:
-    ldh a, [rLY & $FF]
+    ldh a, [rLY]
     cp 144
     jr c, .wait_vblank
 
-    ldh a, [rLCDC & $FF]
+    ldh a, [rLCDC]
     and $7F
-    ldh [rLCDC & $FF], a
+    ldh [rLCDC], a
 
 .lcd_off:
     ld a, [nes_chr_gbc_bank_base]
@@ -97,25 +97,25 @@ nes_upload_chr_bank:
     ld [$2000], a
 
     xor a
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ld hl, $4000
     ld de, $8000
     ld bc, $1000
     call nes_video_copy
 
     ld a, $01
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ld hl, $5000
     ld de, $8000
     ld bc, $1000
     call nes_video_copy
 
     xor a
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
 
     call nes_restore_code_bank
     ld a, [nes_saved_lcdc]
-    ldh [rLCDC & $FF], a
+    ldh [rLCDC], a
     ret
 
 nes_video_copy:
@@ -131,11 +131,11 @@ nes_video_copy:
 
 ; Wait until VRAM is writable. This intentionally stalls rather than losing a write.
 nes_video_wait_vram:
-    ldh a, [rLCDC & $FF]
+    ldh a, [rLCDC]
     bit 7, a
     ret z
 .wait:
-    ldh a, [rLY & $FF]
+    ldh a, [rLY]
     cp 144
     jr c, .wait
     ret
@@ -165,20 +165,20 @@ nes_video_sync_nametable_write:
 
     ; Tile ID.
     xor a
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ld a, c
     ld [de], a
 
     ; CGB attribute: palette 0, VRAM bank follows NES BG pattern-table select.
     ld a, $01
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ld a, [nes_ppuctrl]
     and $10
     srl a
     ld [de], a
 
     xor a
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ret
 
 .attribute:
@@ -231,7 +231,7 @@ nes_video_sync_attribute_write:
 
     call nes_video_wait_vram
     ld a, $01
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
 
     call nes_video_attr_top_row
     call nes_video_attr_top_row
@@ -239,7 +239,7 @@ nes_video_sync_attribute_write:
     call nes_video_attr_bottom_row
 
     xor a
-    ldh [rVBK & $FF], a
+    ldh [rVBK], a
     ret
 
 nes_video_attr_top_row:
@@ -375,11 +375,11 @@ nes_video_set_bg_color:
     ld d, [hl]
 
     ld a, c
-    ldh [rBGPI & $FF], a
+    ldh [rBGPI], a
     ld a, e
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     ld a, d
-    ldh [rBGPD & $FF], a
+    ldh [rBGPD], a
     ret
 
 nes_video_set_obj_color:
@@ -408,11 +408,11 @@ nes_video_set_obj_color:
     ld d, [hl]
 
     ld a, c
-    ldh [rOBPI & $FF], a
+    ldh [rOBPI], a
     ld a, e
-    ldh [rOBPD & $FF], a
+    ldh [rOBPD], a
     ld a, d
-    ldh [rOBPD & $FF], a
+    ldh [rOBPD], a
     ret
 
 nes_rgb555_table:
@@ -516,7 +516,7 @@ nes_video_sync_oam:
 
 ; Reflect PPUMASK BG/sprite visibility into LCDC bits 0/1.
 nes_video_update_mask:
-    ldh a, [rLCDC & $FF]
+    ldh a, [rLCDC]
     and $FC
     ld b, a
 
@@ -535,12 +535,12 @@ nes_video_update_mask:
     ld b, a
 .mask_store:
     ld a, b
-    ldh [rLCDC & $FF], a
+    ldh [rLCDC], a
     ret
 
 ; Reflect NES base-nametable selection and sprite size into GBC LCDC.
 nes_video_update_ctrl:
-    ldh a, [rLCDC & $FF]
+    ldh a, [rLCDC]
     and $F3
     ld b, a
 
@@ -576,5 +576,5 @@ nes_video_update_ctrl:
 .store:
     ld a, b
 .write:
-    ldh [rLCDC & $FF], a
+    ldh [rLCDC], a
     ret
