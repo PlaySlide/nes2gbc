@@ -12,6 +12,15 @@ DEF rBGPD EQU $FF69
 SECTION "NES video bridge", ROM0
 
 nes_video_init:
+    ; Enter a safe LCD-off setup window once at boot.
+.wait_initial_vblank:
+    ldh a, [rLYV & $FF]
+    cp 144
+    jr c, .wait_initial_vblank
+    ldh a, [rLCDC & $FF]
+    and $7F
+    ldh [rLCDC & $FF], a
+
     call nes_upload_chr_bank
 
     ; LCD is off after upload: clear both BG maps and their CGB attributes.
@@ -142,8 +151,7 @@ nes_video_sync_nametable_write:
     ld a, h
     and $03
     cp $03
-    ret c
-    jr nz, .tile
+    jr c, .tile
     ld a, l
     cp $C0
     ret nc
