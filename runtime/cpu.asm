@@ -313,6 +313,159 @@ nes_sbc_a_e:
     ld e, a
     jp nes_adc_a_e
 
+; BIT: A = accumulator, E = memory operand. Updates Z from A&E and N/V from operand.
+nes_bit_a_e:
+    ld d, a
+    ld a, [nes_p]
+    and $3D
+    ld b, a
+
+    ld a, d
+    and e
+    jr nz, .bit_not_zero
+    ld a, b
+    or $02
+    ld b, a
+.bit_not_zero:
+    bit 6, e
+    jr z, .bit_no_v
+    ld a, b
+    or $40
+    ld b, a
+.bit_no_v:
+    bit 7, e
+    jr z, .bit_no_n
+    ld a, b
+    or $80
+    ld b, a
+.bit_no_n:
+    ld a, b
+    ld [nes_p], a
+    ret
+
+; Shift/rotate helpers. Input/output A, update 6502 C/N/Z.
+nes_asl_a:
+    ld e, a
+    ld a, [nes_p]
+    and $FE
+    bit 7, e
+    jr z, .asl_c_done
+    or $01
+.asl_c_done:
+    ld [nes_p], a
+    ld a, e
+    add a
+    jp nes_set_nz_from_a
+
+nes_lsr_a:
+    ld e, a
+    ld a, [nes_p]
+    and $FE
+    bit 0, e
+    jr z, .lsr_c_done
+    or $01
+.lsr_c_done:
+    ld [nes_p], a
+    ld a, e
+    srl a
+    jp nes_set_nz_from_a
+
+nes_rol_a:
+    ld d, a
+    ld a, [nes_p]
+    and $01
+    ld c, a
+
+    ld a, [nes_p]
+    and $FE
+    bit 7, d
+    jr z, .rol_new_c_done
+    or $01
+.rol_new_c_done:
+    ld [nes_p], a
+
+    ld a, d
+    add a
+    ld e, a
+    ld a, c
+    and $01
+    or e
+    jp nes_set_nz_from_a
+
+nes_ror_a:
+    ld d, a
+    ld a, [nes_p]
+    and $01
+    ld c, a
+
+    ld a, [nes_p]
+    and $FE
+    bit 0, d
+    jr z, .ror_new_c_done
+    or $01
+.ror_new_c_done:
+    ld [nes_p], a
+
+    ld a, d
+    srl a
+    ld e, a
+    ld a, c
+    and $01
+    jr z, .ror_no_old_c
+    ld a, e
+    or $80
+    jp nes_set_nz_from_a
+.ror_no_old_c:
+    ld a, e
+    jp nes_set_nz_from_a
+
+; 6502 JMP (indirect), including the NMOS page-wrap bug.
+; Input HL = pointer address. Output HL = fetched target.
+nes_jmp_indirect_hl:
+    push hl
+    call nes_cpu_read
+    ld b, a
+    pop hl
+
+    ; Increment only the low byte; $xxFF wraps to $xx00.
+    inc l
+    call nes_cpu_read
+    ld h, a
+    ld l, b
+    ret
+
+; BRK pushes return PC high/low, then status with B set, and sets I.
+; Input HL = PC after BRK's padding byte.
+nes_brk_hl:
+    ld a, h
+    call nes_stack_push_a
+    ld a, l
+    call nes_stack_push_a
+
+    ld a, [nes_p]
+    or $30
+    call nes_stack_push_a
+
+    ld a, [nes_p]
+    or $04
+    and $EF
+    or $20
+    ld [nes_p], a
+    ret
+
+; RTI pops P then PC low/high. Output HL = exact restored PC.
+nes_rti_pop_hl:
+    call nes_stack_pop_a
+    or $20
+    and $EF
+    ld [nes_p], a
+
+    call nes_stack_pop_a
+    ld l, a
+    call nes_stack_pop_a
+    ld h, a
+    ret
+
 nes_unimplemented_operand_read:
     xor a
     ret
