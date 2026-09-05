@@ -1,24 +1,26 @@
 ROM ?=
 MAX_BLOCKS ?=
+TRACE ?= 0
 
 .PHONY: help generate gbc test clean
 
 help:
 	@echo 'nes2gbc'
 	@echo '  make gbc ROM="path/to/game.nes"'
+	@echo '  make gbc ROM="path/to/game.nes" TRACE=1       # enable runtime breadcrumbs'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
 	@echo '  make test'
 
 generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)"; \
+		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	else \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm; \
+		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 
 gbc: generate
-	$(MAKE) -C runtime
+	$(MAKE) -C runtime TRACE="$(TRACE)"
 
 test:
 	cargo test --all-targets
