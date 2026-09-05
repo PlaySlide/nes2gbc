@@ -173,9 +173,23 @@ fn emit_static_control(
 
     match ops[0] {
         IrOp::Branch { flag, when, target } if banks.contains_key(&target) => {
-            writeln!(out, "    ld a, [nes_p]").unwrap();
-            writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
-            writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+            match flag {
+                Flag::Zero => {
+                    writeln!(out, "    ld a, [nes_z_shadow]").unwrap();
+                    writeln!(out, "    and a").unwrap();
+                    writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
+                }
+                Flag::Negative => {
+                    writeln!(out, "    ld a, [nes_n_shadow]").unwrap();
+                    writeln!(out, "    bit 7, a").unwrap();
+                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                }
+                _ => {
+                    writeln!(out, "    ld a, [nes_p]").unwrap();
+                    writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
+                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                }
+            }
             emit_static_target(out, target, current_bank, banks);
             writeln!(out, ":").unwrap();
             true
@@ -457,6 +471,16 @@ mod tests {
         assert!(asm.contains("ld hl, $9000"));
         assert!(asm.contains("jp nes_dispatch_hl"));
         assert!(asm.contains("SECTION \"NES block 9000\", ROMX, BANK[40]"));
+    }
+
+    #[test]
+    fn static_nz_branches_use_lazy_status_shadows() {
+        let mut prg = vec![0xEA; 0x8000];
+        prg[0..6].copy_from_slice(&[0xA9, 0x00, 0xF0, 0x01, 0x60, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(4), debug_trace: false });
+        assert!(asm.contains("ld a, [nes_z_shadow]"));
+        assert!(asm.contains("and a"));
     }
 
     #[test]
