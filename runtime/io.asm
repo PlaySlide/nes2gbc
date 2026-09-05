@@ -22,9 +22,13 @@ nes_ppu_read_buffer:  ds 1
 nes_dac:              ds 1
 nes_saved_lcdc:       ds 1
 nes_palette_sync_color: ds 1
+nes_sprite_attr_tmp:  ds 1
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
+
+SECTION "NES virtual OAM", WRAM0[$C900]
+nes_oam_ram: ds 256
 
 ; Two physical NES nametables. Mirroring maps the four logical tables here.
 SECTION "NES nametable RAM", WRAMX[$D000], BANK[1]
