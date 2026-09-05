@@ -266,6 +266,36 @@ ENDC
     halt
     jr .hang
 
+; Cache a mirrored 16 KiB NES PRG into CGB WRAMX banks 2-5.
+; This is a one-time startup cost for NROM-style 16 KiB cartridges and avoids
+; destructive MBC ROM-bank switches on every later PRG data-table read.
+nes_cache_prg16_to_wram:
+    ld a, $01
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+
+    ld de, $4000
+    ld a, $02
+.copy_bank:
+    ldh [rSVBK], a
+    push af
+    ld hl, $D000
+    ld bc, $1000
+.copy_byte:
+    ld a, [de]
+    ld [hli], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .copy_byte
+    pop af
+    inc a
+    cp $06
+    jr c, .copy_bank
+    ret
+
 ; Generic CPU read. Input HL = NES CPU address, output A = value.
 nes_cpu_read:
 IF DEF(NES2GBC_DEBUG_TRACE)
@@ -306,23 +336,35 @@ ENDC
     jp nes_ppu_cpu_read
 
 .prg:
+    ; Mirrored 16 KiB PRG is cached in WRAMX banks 2-5 at startup.
+    ld a, [nes_prg_16k_mirror]
+    and a
+    jr z, .prg_banked_rom
+
+    ; NES $8000-$BFFF and $C000-$FFFF both mirror the same 16 KiB image.
+    ; Bits 13-12 choose the 4 KiB WRAM bank; low 12 bits select the byte.
+    ld a, h
+    and $30
+    swap a
+    add $02
+    ldh [rSVBK], a
+    ld a, h
+    and $0F
+    or $D0
+    ld h, a
+    ld a, [hl]
+    ret
+
+.prg_banked_rom:
     ; Preserve NES address, select the ROMX bank, then map offset to $4000-$7FFF.
     ld d, h
     ld e, l
-
-    ld a, [nes_prg_16k_mirror]
-    and a
-    jr nz, .prg_bank_1
 
     ld a, d
     cp $C0
     ld a, $01
     jr c, .prg_select
     ld a, $02
-    jr .prg_select
-
-.prg_bank_1:
-    ld a, $01
 
 .prg_select:
     ld [$2000], a
