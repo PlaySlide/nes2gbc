@@ -1,6 +1,7 @@
 ROM ?=
 MAX_BLOCKS ?=
 TRACE ?= 0
+PROFILE ?= 0
 
 .PHONY: help generate gbc test clean
 
@@ -8,6 +9,7 @@ help:
 	@echo 'nes2gbc'
 	@echo '  make gbc ROM="path/to/game.nes"'
 	@echo '  make gbc ROM="path/to/game.nes" TRACE=1       # enable runtime breadcrumbs'
+	@echo '  make gbc ROM="path/to/game.nes" PROFILE=1     # count hot runtime paths'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
 	@echo '  make test'
 
@@ -20,7 +22,7 @@ generate:
 	fi
 
 gbc: generate
-	$(MAKE) -C runtime TRACE="$(TRACE)"
+	$(MAKE) -C runtime TRACE="$(TRACE)" PROFILE="$(PROFILE)"
 
 test:
 	cargo test --all-targets
