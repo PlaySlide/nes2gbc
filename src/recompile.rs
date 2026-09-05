@@ -112,8 +112,8 @@ fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
                 writeln!(out, "    ds {}, $00", (offset - cursor) * 4).unwrap();
             }
 
-            writeln!(out, "    db BANK(nes_{addr:04X}), $00").unwrap();
-            writeln!(out, "    dw nes_{addr:04X}").unwrap();
+            writeln!(out, "    db BANK(nes_{addr:04X}_entry), $00").unwrap();
+            writeln!(out, "    dw nes_{addr:04X}_entry").unwrap();
             cursor = offset + 1;
         }
 
@@ -186,7 +186,9 @@ fn emit_static_control(
         }
         IrOp::Call { target, return_addr } if banks.contains_key(&target) => {
             writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
+            writeln!(out, "    push bc").unwrap();
             writeln!(out, "    call nes_stack_push_return_hl").unwrap();
+            writeln!(out, "    pop bc").unwrap();
             emit_static_target(out, target, current_bank, banks);
             true
         }
@@ -254,6 +256,11 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             "SECTION \"NES block {addr:04X}\", ROMX, BANK[{bank}]"
         )
         .unwrap();
+        writeln!(out, "nes_{:04X}_entry:", block.start).unwrap();
+        writeln!(out, "    ld a, [nes_x]").unwrap();
+        writeln!(out, "    ld b, a").unwrap();
+        writeln!(out, "    ld a, [nes_y]").unwrap();
+        writeln!(out, "    ld c, a").unwrap();
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
         if options.debug_trace {
@@ -271,6 +278,10 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             writeln!(out, "    ld a, [nes_host_vblank_pending]").unwrap();
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jr z, :+").unwrap();
+            writeln!(out, "    ld a, b").unwrap();
+            writeln!(out, "    ld [nes_x], a").unwrap();
+            writeln!(out, "    ld a, c").unwrap();
+            writeln!(out, "    ld [nes_y], a").unwrap();
             writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
             writeln!(out, "    call nes_poll_nmi_hl").unwrap();
             writeln!(out, "    and a").unwrap();
@@ -460,6 +471,20 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_block_entry_reloads_xy_cache() {
+        let mut prg = vec![0xEA; 0x8000];
+        prg[0] = 0x60;
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(1), debug_trace: false });
+        assert!(asm.contains("nes_8000_entry:"));
+        assert!(asm.contains("ld a, [nes_x]"));
+        assert!(asm.contains("ld b, a"));
+        assert!(asm.contains("ld a, [nes_y]"));
+        assert!(asm.contains("ld c, a"));
+        assert!(asm.contains("nes_8000:"));
+    }
+
+    #[test]
     fn branch_not_taken_uses_pc_dispatch() {
         let mut prg = vec![0xEA; 0x8000];
         prg[0..5].copy_from_slice(&[0xD0, 0x02, 0x60, 0xEA, 0x60]);
@@ -485,7 +510,7 @@ mod tests {
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(1), debug_trace: false });
         assert!(asm.contains("SECTION \"NES dispatch table 0\", ROMX[$4000], BANK[32]"));
-        assert!(asm.contains("db BANK(nes_8000), $00"));
-        assert!(asm.contains("dw nes_8000"));
+        assert!(asm.contains("db BANK(nes_8000_entry), $00"));
+        assert!(asm.contains("dw nes_8000_entry"));
     }
 }
