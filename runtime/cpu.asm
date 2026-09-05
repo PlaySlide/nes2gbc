@@ -9,42 +9,71 @@ nes_x:  ds 1
 nes_y:  ds 1
 nes_sp: ds 1
 nes_p:  ds 1
+; Lazy status shadows. Z is set iff nes_z_shadow == 0; N follows bit 7.
+nes_z_shadow: ds 1
+nes_n_shadow: ds 1
 
 SECTION "NES CPU helpers", ROM0
 
-; Input: A = result value. Output: A preserved, Z/N bits in nes_p updated.
+; Input: A = result value. Output: A preserved.
+; Z/N are lazy: Z iff shadow == 0, N from shadow bit 7.
 nes_set_nz_from_a:
-    ld e, a
+    ld [nes_z_shadow], a
+    ld [nes_n_shadow], a
+    ret
+
+; Materialize lazy Z/N into nes_p. Output A = complete 6502 P.
+nes_materialize_p:
     ld a, [nes_p]
     and $7D
-    ld d, a
-    ld a, e
+    ld e, a
+
+    ld a, [nes_z_shadow]
     and a
-    jr nz, .not_zero
-    ld a, d
-    or $02
-    ld d, a
-.not_zero:
-    bit 7, e
-    jr z, .not_negative
-    ld a, d
-    or $80
-    ld d, a
-.not_negative:
-    ld a, d
-    ld [nes_p], a
+    jr nz, .no_z
     ld a, e
+    or $02
+    ld e, a
+.no_z:
+    ld a, [nes_n_shadow]
+    bit 7, a
+    jr z, .no_n
+    ld a, e
+    or $80
+    ld e, a
+.no_n:
+    ld a, e
+    ld [nes_p], a
+    ret
+
+; Input A = popped/restored P. Normalize B/U and refresh lazy Z/N.
+; Output A = normalized P.
+nes_set_p_from_a:
+    or $20
+    and $EF
+    ld e, a
+    ld [nes_p], a
+
+    bit 1, e
+    ld a, $01
+    jr z, .z_ready
+    xor a
+.z_ready:
+    ld [nes_z_shadow], a
+
+    ld a, e
+    ld [nes_n_shadow], a
     ret
 
 ; Compare canonical accumulator-like value in A against E.
-; Updates C/Z/N exactly as 6502 CMP-family subtraction.
+; Updates C in nes_p and lazy Z/N from the subtraction result.
 nes_compare_a_e:
     ld d, a
     sub e
     ld c, a
 
     ld a, [nes_p]
-    and $7C
+    and $FE
     ld b, a
 
     ; 6502 carry means no borrow, i.e. original >= rhs.
@@ -55,23 +84,12 @@ nes_compare_a_e:
     or $01
     ld b, a
 .carry_done:
-
-    ld a, c
-    and a
-    jr nz, .zero_done
-    ld a, b
-    or $02
-    ld b, a
-.zero_done:
-
-    bit 7, c
-    jr z, .negative_done
-    ld a, b
-    or $80
-    ld b, a
-.negative_done:
     ld a, b
     ld [nes_p], a
+
+    ld a, c
+    ld [nes_z_shadow], a
+    ld [nes_n_shadow], a
     ret
 
 ; Virtual 6502 stack lives in mirrored RAM page $0100 at $C100.
