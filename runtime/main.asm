@@ -31,9 +31,9 @@ Start:
 
     ; Canonical power-on state used by the recompiled 6502.
     xor a
-    ld [nes_a], a
-    ld [nes_x], a
-    ld [nes_y], a
+    ldh [nes_a], a
+    ldh [nes_x], a
+    ldh [nes_y], a
     ld [nes_ppu_status], a
     ld [nes_ppuctrl], a
     ld [nes_ppumask], a
@@ -57,15 +57,15 @@ Start:
     ld [nes_view_select_prev], a
 
     ld a, $FD
-    ld [nes_sp], a
+    ldh [nes_sp], a
     ld a, $24
-    ld [nes_p], a
+    ldh [nes_p], a
     ; Initial P=$24 has C=0, Z=0, N=0.
     ld a, $01
-    ld [nes_z_shadow], a
+    ldh [nes_z_shadow], a
     xor a
-    ld [nes_n_shadow], a
-    ld [nes_c_shadow], a
+    ldh [nes_n_shadow], a
+    ldh [nes_c_shadow], a
 
     call nes_generated_init
     call nes_video_init
