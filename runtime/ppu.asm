@@ -68,23 +68,35 @@ nes_ppu_cpu_write:
     ret
 
 .ctrl:
-    ; NES background pattern-table select (PPUCTRL bit 4) is global. CGB
-    ; represents that selection per tile using attribute bit 3, so when the
-    ; NES global bit changes every existing tile attribute must flip with it.
+    ; Keep the old/new delta: several PPUCTRL bits have global rendering
+    ; semantics that must invalidate already-projected CGB state.
     ld a, [nes_ppuctrl]
     xor e
+    ld b, a
+
+    ld a, e
+    ld [nes_ppuctrl], a
+
+    ; Sprite pattern-table select (bit 3) and sprite size (bit 5) affect every
+    ; OAM entry without rewriting NES OAM. Rebuild the projected shadow now
+    ; and schedule a fresh hardware OAM commit for the next host VBlank.
+    ld a, b
+    and $28
+    jr z, .ctrl_bg_check
+    call nes_video_build_oam_shadow
+    ld a, $01
+    ld [nes_oam_dirty], a
+
+.ctrl_bg_check:
+    ; NES background pattern-table select (bit 4) is global. CGB represents
+    ; that selection per tile using attribute bit 3, so every existing tile
+    ; attribute must flip when the NES global bit changes.
+    ld a, b
     and $10
-    jr z, .ctrl_store
-
-    ld a, e
-    ld [nes_ppuctrl], a
+    jr z, .ctrl_update
     call nes_video_toggle_bg_pattern_bank
-    call nes_video_update_ctrl
-    ret
 
-.ctrl_store:
-    ld a, e
-    ld [nes_ppuctrl], a
+.ctrl_update:
     call nes_video_update_ctrl
     ret
 .mask:
