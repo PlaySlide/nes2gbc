@@ -33,8 +33,11 @@ fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
 // first 16 little-endian table entries and keep only destinations that decode as code.
 fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>{
  if pointer>0x00FE{return Vec::new()}
+
+ // Form 1: pointer construction immediately precedes JMP (ptr):
+ //   LDA table,Y / STA ptr / INY / LDA table,Y / STA ptr+1 / JMP (ptr)
  let start=jmp_pc.saturating_sub(64).max(0x8000);
- let mut table=None;
+ let mut tables=Vec::new();
  let mut pc=start;
  while pc.saturating_add(11)<=jmp_pc{
   let o=match off(mapper,prg.len(),pc){Ok(o)=>o,Err(_)=>break};
@@ -43,17 +46,49 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
    &&prg[o+5]==0xC8&&prg[o+6]==0xB9
    &&prg[o+9]==0x85&&prg[o+10]==pointer.wrapping_add(1)as u8
    &&prg[o+1]==prg[o+7]&&prg[o+2]==prg[o+8]
-  {table=Some(u16::from_le_bytes([prg[o+1],prg[o+2]]));}
+  {
+   let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+   if !tables.contains(&base){tables.push(base)}
+  }
   pc=pc.wrapping_add(1);
  }
- let Some(base)=table else{return Vec::new()};
+
+ // Form 2: a tiny JMP (ptr) trampoline whose caller builds the pointer:
+ //   LDA table,Y / STA ptr / LDA table+1,Y / STA ptr+1 / JSR trampoline
+ //   trampoline: JMP (ptr)
+ //
+ // Balloon Fight uses exactly this for its game-state dispatcher. The index is
+ // already scaled by two, so table/table+1 are the low/high bytes of adjacent
+ // little-endian targets.
+ if let Ok(jmp_off)=off(mapper,prg.len(),jmp_pc){
+  let jsr_lo=jmp_pc as u8;
+  let jsr_hi=(jmp_pc>>8)as u8;
+  let mut o=0usize;
+  while o+13<=prg.len(){
+   if prg[o]==0xB9
+    &&prg[o+3]==0x85&&prg[o+4]==pointer as u8
+    &&prg[o+5]==0xB9
+    &&prg[o+8]==0x85&&prg[o+9]==pointer.wrapping_add(1)as u8
+    &&prg[o+10]==0x20&&prg[o+11]==jsr_lo&&prg[o+12]==jsr_hi
+   {
+    let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+    let high_base=u16::from_le_bytes([prg[o+6],prg[o+7]]);
+    if high_base==base.wrapping_add(1)&&!tables.contains(&base){tables.push(base)}
+   }
+   o+=1;
+  }
+  let _=jmp_off;
+ }
+
  let mut out=Vec::new();
- for i in 0..16u16{
-  let a=base.wrapping_add(i*2);
-  let Ok(o)=off(mapper,prg.len(),a)else{continue};
-  if o+1>=prg.len(){continue}
-  let target=u16::from_le_bytes([prg[o],prg[o+1]]);
-  if target>=0x8000&&looks_like_code(mapper,prg,target)&&!out.contains(&target){out.push(target)}
+ for base in tables{
+  for i in 0..16u16{
+   let a=base.wrapping_add(i*2);
+   let Ok(o)=off(mapper,prg.len(),a)else{continue};
+   if o+1>=prg.len(){continue}
+   let target=u16::from_le_bytes([prg[o],prg[o+1]]);
+   if target>=0x8000&&looks_like_code(mapper,prg,target)&&!out.contains(&target){out.push(target)}
+  }
  }
  out
 }
@@ -101,6 +136,44 @@ mod tests {
 
         assert!(graph.blocks.contains_key(&0x8004));
         assert!(graph.blocks.contains_key(&0x8006));
+    }
+
+    #[test]
+    fn discovers_indirect_targets_built_in_trampoline_caller() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        // Caller: Y already contains an even target-table index.
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xB9, 0x00, 0xA0, // LDA $A000,Y
+                0x85, 0x25,       // STA $25
+                0xB9, 0x01, 0xA0, // LDA $A001,Y
+                0x85, 0x26,       // STA $26
+                0x20, 0x00, 0x91, // JSR $9100
+                0x60,
+            ],
+        );
+        put(&mut prg, 0x9100, &[0x6C, 0x25, 0x00]); // JMP ($0025)
+
+        put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92, 0x00, 0x00]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        let trampoline = graph.blocks.get(&0x9100).unwrap();
+        assert!(trampoline.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0025 })
+                && edge.target == Some(0x9200)
+        }));
+        assert!(trampoline.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0025 })
+                && edge.target == Some(0x9210)
+        }));
     }
 
     #[test]
