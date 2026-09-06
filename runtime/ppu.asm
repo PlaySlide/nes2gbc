@@ -91,6 +91,9 @@ nes_ppu_cpu_write:
     ld a, [nes_oamaddr]
     inc a
     ld [nes_oamaddr], a
+    ; Direct OAMDATA writes invalidate any previously projected GBC shadow.
+    xor a
+    ldh [nes_oam_shadow_ready], a
     ld a, $01
     ld [nes_oam_dirty], a
     ret
@@ -362,6 +365,9 @@ nes_oam_dma:
     jr nz, .generic_loop
 
 .dirty:
+    ; Projection is deliberately done here, outside host VBlank. VBlank only
+    ; copies the finished 160-byte shadow to hardware OAM.
+    call nes_video_build_oam_shadow
     ld a, $01
     ld [nes_oam_dirty], a
     ret
