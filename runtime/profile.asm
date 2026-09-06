@@ -31,8 +31,8 @@ nes_profile_write_other:     ds 4 ; C8D4
 nes_profile_trace_index:     ds 1 ; C8D8, next 16-bit slot (0-127)
 nes_profile_oam_dma_fast:    ds 4 ; C8D9
 nes_profile_oam_dma_generic: ds 4 ; C8DD
-nes_profile_vram_wait_spin:  ds 4 ; C8E1
-nes_profile_oam_wait_spin:   ds 4 ; C8E5
+nes_profile_vram_wait_block: ds 4 ; C8E1
+nes_profile_oam_wait_block:  ds 4 ; C8E5
 nes_profile_end:
 
 SECTION "NES profile block trace", WRAM0[$CA00]
