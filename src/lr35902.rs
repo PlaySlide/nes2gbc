@@ -167,6 +167,9 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
         Operand::ZeroPage(zp) => {
             writeln!(out, "    ld a, [${:04X}]", NES_RAM_BASE + zp as u16).unwrap();
         }
+        Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
+            writeln!(out, "    ld a, [${:04X}]", direct_ram_addr(addr).unwrap()).unwrap();
+        }
         _ => {
             if emit_effective_addr(out, src) {
                 writeln!(out, "    ld a, [hl]").unwrap();
@@ -200,9 +203,16 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
 }
 
 fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
-    if let Operand::ZeroPage(zp) = dst {
-        writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
-        return;
+    match dst {
+        Operand::ZeroPage(zp) => {
+            writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
+            return;
+        }
+        Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
+            writeln!(out, "    ld [${:04X}], a", direct_ram_addr(addr).unwrap()).unwrap();
+            return;
+        }
+        _ => {}
     }
 
     writeln!(out, "    push af").unwrap();
@@ -492,6 +502,18 @@ mod tests {
         assert!(asm.contains("ld a, [$C010]"));
         assert!(asm.contains("ld [$C011], a"));
         assert!(!asm.contains("ld h, $C0"));
+    }
+
+    #[test]
+    fn fixed_absolute_internal_ram_uses_direct_wram_access() {
+        let asm = emit_ops(&[
+            IrOp::Load { dst: Register::A, src: Operand::Absolute(0x0234) },
+            IrOp::Store { src: Register::A, dst: Operand::Absolute(0x17AB) },
+        ]);
+        assert!(asm.contains("ld a, [$C234]"));
+        assert!(asm.contains("ld [$C7AB], a"));
+        assert!(!asm.contains("ld hl, $C234"));
+        assert!(!asm.contains("ld hl, $C7AB"));
     }
 
     #[test]
