@@ -15,13 +15,20 @@ nes_gbc_vblank_isr:
     push de
     push hl
 
-    ; Flush virtual NES OAM exactly once at the start of host VBlank instead
-    ; of blocking translated $4014 writes until VBlank arrives.
+    ; Flush virtual NES OAM exactly once at the start of host VBlank.
+    ; Normal $4014 DMA has already built the 160-byte GBC OAM shadow; direct
+    ; $2004 writers fall back to building it here.
     ld a, [nes_oam_dirty]
     and a
     jr z, .oam_done
     xor a
     ld [nes_oam_dirty], a
+
+    ldh a, [nes_oam_shadow_ready]
+    and a
+    jr nz, .oam_shadow_ready
+    call nes_video_build_oam_shadow
+.oam_shadow_ready:
     call nes_video_sync_oam
 .oam_done:
 
@@ -82,6 +89,7 @@ Start:
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
     ldh [nes_last_indirect_hi], a
+    ldh [nes_oam_shadow_ready], a
 
     ld a, $FD
     ldh [nes_sp], a
