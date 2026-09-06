@@ -79,18 +79,21 @@ nes_set_p_from_a:
 
 ; Compare canonical accumulator-like value in A against E.
 ; Updates lazy C/Z/N shadows from the subtraction.
-; LR35902 SUB sets C on borrow, the inverse of 6502 compare carry. Convert
-; that carry to 0/1 branchlessly with SBC A,A + INC A.
 nes_compare_a_e:
     PROFILE_INC nes_profile_compare
-    sub e
     ld d, a
-
-    sbc a, a
-    inc a
-    ldh [nes_c_shadow], a
+    sub e
+    ld c, a
 
     ld a, d
+    cp e
+    ld a, $00
+    jr c, .carry_ready
+    inc a
+.carry_ready:
+    ldh [nes_c_shadow], a
+
+    ld a, c
     ldh [nes_z_shadow], a
     ldh [nes_n_shadow], a
     ret
