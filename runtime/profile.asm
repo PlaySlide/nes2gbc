@@ -28,7 +28,12 @@ nes_profile_write_ppu:       ds 4 ; C8C8
 nes_profile_write_io:        ds 4 ; C8CC
 nes_profile_write_mapper:    ds 4 ; C8D0
 nes_profile_write_other:     ds 4 ; C8D4
+nes_profile_trace_index:     ds 1 ; C8D8, next 16-bit slot (0-127)
 nes_profile_end:
+
+SECTION "NES profile block trace", WRAM0[$CA00]
+; 128 little-endian NES PCs = 256-byte rolling trace.
+nes_profile_trace_buffer: ds $100
 
 ; Inline counter increment. Preserves AF and HL; leaves BC/DE untouched.
 ; Macro-local labels use RGBDS' unique \@ suffix.
@@ -54,17 +59,61 @@ ENDC
 ENDM
 
 SECTION "NES runtime profile helpers", ROM0
+
+; Input HL = translated NES basic-block PC. Preserve all host registers.
+nes_profile_trace_pc:
+IF DEF(NES2GBC_PROFILE)
+    ld d, h
+    ld e, l
+    push af
+    push bc
+    push de
+    push hl
+
+    ld a, [nes_profile_trace_index]
+    and $7F
+    ld c, a
+    add a
+    ld l, a
+    ld h, $CA
+    ld a, e
+    ld [hli], a
+    ld a, d
+    ld [hl], a
+
+    ld a, c
+    inc a
+    and $7F
+    ld [nes_profile_trace_index], a
+
+    pop hl
+    pop de
+    pop bc
+    pop af
+ENDC
+    ret
+
 nes_profile_reset:
 IF DEF(NES2GBC_PROFILE)
     xor a
     ld hl, nes_profile_dispatch
     ld bc, nes_profile_end - nes_profile_dispatch
-.clear:
+.clear_state:
     xor a
     ld [hli], a
     dec bc
     ld a, b
     or c
-    jr nz, .clear
+    jr nz, .clear_state
+
+    xor a
+    ld hl, nes_profile_trace_buffer
+    ld bc, $0100
+.clear_trace:
+    ld [hli], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, .clear_trace
 ENDC
     ret
