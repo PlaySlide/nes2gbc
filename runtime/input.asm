@@ -78,25 +78,31 @@ nes_controller_latch:
     and $0F
     ld b, a
 
-    ; GBC Select is a temporary debug-camera key. Edge-trigger the viewport
-    ; cycle and suppress Select from the emulated NES controller.
+    ; Ordinary Select now passes through to the NES. Start+Select is the
+    ; debug-camera chord; edge-trigger it and consume both buttons so the
+    ; emulated game does not see the diagnostic combo.
     bit 2, b
-    jr z, .select_released
+    jr z, .view_chord_released
+    bit 3, b
+    jr z, .view_chord_released
+
     ld a, [nes_view_select_prev]
     and a
-    jr nz, .select_held
+    jr nz, .view_chord_held
     ld a, $01
     ld [nes_view_select_prev], a
     push bc
     call nes_view_cycle
     pop bc
-.select_held:
+.view_chord_held:
     res 2, b
-    jr .select_done
-.select_released:
+    res 3, b
+    jr .view_chord_done
+
+.view_chord_released:
     xor a
     ld [nes_view_select_prev], a
-.select_done:
+.view_chord_done:
 
     ; Directions: GBC R,L,U,D -> NES bits 7,6,4,5.
     ld a, $20
