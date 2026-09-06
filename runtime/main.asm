@@ -11,12 +11,29 @@ SECTION "Header Entry", ROM0[$0100]
 SECTION "Runtime", ROM0[$0150]
 nes_gbc_vblank_isr:
     push af
+    push bc
+    push de
+    push hl
+
+    ; Flush virtual NES OAM exactly once at the start of host VBlank instead
+    ; of blocking translated $4014 writes until VBlank arrives.
+    ld a, [nes_oam_dirty]
+    and a
+    jr z, .oam_done
+    xor a
+    ld [nes_oam_dirty], a
+    call nes_video_sync_oam
+.oam_done:
+
     ld a, [nes_nmi_active]
     and a
     jr nz, .done
     ld a, $01
     ld [nes_host_vblank_pending], a
 .done:
+    pop hl
+    pop de
+    pop bc
     pop af
     reti
 
@@ -49,6 +66,7 @@ Start:
     ld [nes_controller_shift], a
     ld [nes_host_vblank_pending], a
     ld [nes_nmi_active], a
+    ld [nes_oam_dirty], a
     ld [nes_current_code_bank], a
     ld [nes_dispatch_cache_valid], a
     ld [nes_view_mode], a
