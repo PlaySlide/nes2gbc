@@ -141,7 +141,10 @@ nes_video_wait_vram:
     ldh a, [rSTAT]
     and $03
     cp $03
-    jr z, .wait
+    jr nz, .done
+    PROFILE_INC nes_profile_vram_wait_spin
+    jr .wait
+.done:
     ret
 
 ; OAM projection is a 160-byte burst, so keep it in the long VBlank window.
@@ -152,7 +155,10 @@ nes_video_wait_oam:
 .wait:
     ldh a, [rLY]
     cp 144
-    jr c, .wait
+    jr nc, .done
+    PROFILE_INC nes_profile_oam_wait_spin
+    jr .wait
+.done:
     ret
 
 ; Input: HL = physical virtual nametable address ($D000-$D7FF), A = written byte.
