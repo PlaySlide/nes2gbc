@@ -162,6 +162,8 @@ nes_ppu_cpu_write:
     ldh [nes_split_top_x], a
     ld a, [nes_ppu_scroll_y]
     ldh [nes_split_top_y], a
+    ld a, [nes_ppuctrl]
+    ldh [nes_split_top_ctrl], a
     ld a, $01
     ldh [nes_scroll_pair_count], a
     ldh [nes_scroll_dirty], a
@@ -172,6 +174,8 @@ nes_ppu_cpu_write:
     ldh [nes_split_bottom_x], a
     ld a, [nes_ppu_scroll_y]
     ldh [nes_split_bottom_y], a
+    ld a, [nes_ppuctrl]
+    ldh [nes_split_bottom_ctrl], a
     ld a, $02
     ldh [nes_scroll_pair_count], a
     ld a, $01
