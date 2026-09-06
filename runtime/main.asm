@@ -73,6 +73,7 @@ Start:
     ldh [nes_view_x], a
     ldh [nes_view_y], a
     ld [nes_view_select_prev], a
+    ld [nes_reset_count], a
 
     ld a, $FD
     ldh [nes_sp], a
