@@ -329,23 +329,23 @@ IF DEF(NES2GBC_DEBUG_TRACE)
 ENDC
     ld a, h
     cp $20
-    jr c, .ram
+    jp c, .ram
     cp $40
-    jr c, .ppu
+    jp c, .ppu
     cp $80
-    jr nc, .prg
+    jp nc, .prg
 
     ; Minimal APU / controller register reads for now.
     cp $40
-    jr nz, .unsupported
+    jp nz, .unsupported
     ld a, l
     cp $11
-    jr z, .read_4011
+    jp z, .read_4011
     cp $16
-    jr z, .read_4016
+    jp z, .read_4016
     cp $17
-    jr z, .read_4017
-    jr .unsupported
+    jp z, .read_4017
+    jp .unsupported
 
 .ram:
     PROFILE_INC nes_profile_read_ram
@@ -434,22 +434,22 @@ nes_cpu_write:
     ld e, a
     ld a, h
     cp $20
-    jr c, .ram
+    jp c, .ram
     cp $40
-    jr c, .ppu
+    jp c, .ppu
     cp $80
-    jr nc, .mapper
+    jp nc, .mapper
 
     cp $40
-    jr nz, .unsupported
+    jp nz, .unsupported
     ld a, l
     cp $11
-    jr z, .write_4011
+    jp z, .write_4011
     cp $14
-    jr z, .write_4014
+    jp z, .write_4014
     cp $16
-    jr z, .write_4016
-    jr .unsupported
+    jp z, .write_4016
+    jp .unsupported
 
 .ram:
     PROFILE_INC nes_profile_write_ram
