@@ -349,7 +349,12 @@ ENDC
 
 .ram:
     PROFILE_INC nes_profile_read_ram
-    call nes_map_cpu_addr_hl
+    ; NES $0000-$1FFF mirrors 2 KiB internal RAM. Map it directly instead
+    ; of paying another CALL/RET through nes_map_cpu_addr_hl.
+    ld a, h
+    and $07
+    or $C0
+    ld h, a
     ld a, [hl]
     ret
 
@@ -453,7 +458,10 @@ nes_cpu_write:
 
 .ram:
     PROFILE_INC nes_profile_write_ram
-    call nes_map_cpu_addr_hl
+    ld a, h
+    and $07
+    or $C0
+    ld h, a
     ld a, e
     ld [hl], a
     ret
