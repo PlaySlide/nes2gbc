@@ -82,12 +82,19 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
 
  let mut out=Vec::new();
  for base in tables{
+  let mut found_any=false;
   for i in 0..16u16{
    let a=base.wrapping_add(i*2);
-   let Ok(o)=off(mapper,prg.len(),a)else{continue};
-   if o+1>=prg.len(){continue}
+   let Ok(o)=off(mapper,prg.len(),a)else{break};
+   if o+1>=prg.len(){break}
    let target=u16::from_le_bytes([prg[o],prg[o+1]]);
-   if target>=0x8000&&looks_like_code(mapper,prg,target)&&!out.contains(&target){out.push(target)}
+   let valid=target>=0x8000&&looks_like_code(mapper,prg,target);
+   if !valid{
+    if found_any{break}
+    continue
+   }
+   found_any=true;
+   if !out.contains(&target){out.push(target)}
   }
  }
  out
@@ -157,7 +164,9 @@ mod tests {
         );
         put(&mut prg, 0x9100, &[0x6C, 0x25, 0x00]); // JMP ($0025)
 
-        put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92, 0x00, 0x00]);
+        let mut table = [0u8; 32];
+        table[0..4].copy_from_slice(&[0x00, 0x92, 0x10, 0x92]);
+        put(&mut prg, 0xA000, &table);
         put(&mut prg, 0x9200, &[0x60]);
         put(&mut prg, 0x9210, &[0x60]);
 
