@@ -380,6 +380,8 @@ nes_video_sync_palette_write:
     jp nes_video_set_obj_color
 
 ; Input: A = NES color index, B = GBC palette 0-3, C = color 0-3.
+; Convert immediately into the HRAM palette shadow. Hardware palette registers
+; are updated coherently during host VBlank.
 nes_video_set_bg_color:
     ld d, a
 
@@ -391,7 +393,6 @@ nes_video_set_bg_color:
     ld a, c
     add a
     add b
-    or $80
     ld c, a
 
     ld a, d
@@ -405,13 +406,17 @@ nes_video_set_bg_color:
     inc hl
     ld d, [hl]
 
-    call nes_video_wait_vram
     ld a, c
-    ldh [rBGPI], a
+    add LOW(nes_gbc_palette_shadow)
+    ld l, a
+    ld h, HIGH(nes_gbc_palette_shadow)
     ld a, e
-    ldh [rBGPD], a
+    ld [hli], a
     ld a, d
-    ldh [rBGPD], a
+    ld [hl], a
+
+    ld a, $01
+    ldh [nes_palette_dirty], a
     ret
 
 nes_video_set_obj_color:
@@ -425,7 +430,7 @@ nes_video_set_obj_color:
     ld a, c
     add a
     add b
-    or $80
+    add $20
     ld c, a
 
     ld a, d
@@ -439,13 +444,41 @@ nes_video_set_obj_color:
     inc hl
     ld d, [hl]
 
-    call nes_video_wait_vram
     ld a, c
-    ldh [rOBPI], a
+    add LOW(nes_gbc_palette_shadow)
+    ld l, a
+    ld h, HIGH(nes_gbc_palette_shadow)
     ld a, e
-    ldh [rOBPD], a
+    ld [hli], a
     ld a, d
+    ld [hl], a
+
+    ld a, $01
+    ldh [nes_palette_dirty], a
+    ret
+
+; Stream the preconverted 64-byte palette shadow to CGB palette RAM.
+; Called only from host VBlank.
+nes_video_sync_palette_shadow:
+    ld hl, nes_gbc_palette_shadow
+
+    ld a, $80
+    ldh [rBGPI], a
+    ld b, $20
+.bg_loop:
+    ld a, [hli]
+    ldh [rBGPD], a
+    dec b
+    jr nz, .bg_loop
+
+    ld a, $80
+    ldh [rOBPI], a
+    ld b, $20
+.obj_loop:
+    ld a, [hli]
     ldh [rOBPD], a
+    dec b
+    jr nz, .obj_loop
     ret
 
 nes_rgb555_table:
