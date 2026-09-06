@@ -199,7 +199,7 @@ nes_video_sync_nametable_write:
     ; CGB attribute: palette 0, VRAM bank follows NES BG pattern-table select.
     ld a, $01
     ldh [rVBK], a
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_oam_ppuctrl_tmp]
     and $10
     srl a
     ld [de], a
@@ -251,7 +251,7 @@ nes_video_sync_attribute_write:
 .dest_ready:
 
     ; Attribute bit 3 selects converted NES pattern table 1 in CGB VRAM bank 1.
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_oam_ppuctrl_tmp]
     and $10
     srl a
     ld c, a
@@ -461,7 +461,10 @@ nes_rgb555_table:
 ; Project virtual NES OAM into the first 40 CGB sprites.
 nes_video_sync_oam:
     PROFILE_INC nes_profile_oam_sync
-    call nes_video_wait_oam
+    ; This routine is only called from the host VBlank ISR now, so no extra
+    ; wait/poll is necessary.
+    ld a, [nes_ppuctrl]
+    ldh [nes_oam_ppuctrl_tmp], a
     ld hl, nes_oam_ram
     ld de, $FE00
     ld b, 40
@@ -473,10 +476,10 @@ nes_video_sync_oam:
     cp $EF
     jr nc, .hide_y
     inc a
-    ld [nes_view_coord_tmp], a
-    ld a, [nes_view_y]
+    ldh [nes_view_coord_tmp], a
+    ldh a, [nes_view_y]
     ld c, a
-    ld a, [nes_view_coord_tmp]
+    ldh a, [nes_view_coord_tmp]
     sub c
     jr c, .hide_y
     cp $90
@@ -491,16 +494,16 @@ nes_video_sync_oam:
 
     ; Keep the tile number in scratch RAM while C is free for crop arithmetic.
     ld a, [hli]
-    ld [nes_view_sprite_tile_tmp], a
+    ldh [nes_view_sprite_tile_tmp], a
     ld a, [hli]
-    ld [nes_sprite_attr_tmp], a
+    ldh [nes_sprite_attr_tmp], a
 
     ; Crop NES screen-space X into the selected 160-pixel debug viewport.
     ld a, [hli]
-    ld [nes_view_coord_tmp], a
-    ld a, [nes_view_x]
+    ldh [nes_view_coord_tmp], a
+    ldh a, [nes_view_x]
     ld c, a
-    ld a, [nes_view_coord_tmp]
+    ldh a, [nes_view_coord_tmp]
     sub c
     jr c, .hide_x
     cp $A0
@@ -514,11 +517,11 @@ nes_video_sync_oam:
     inc de
 
     ; Tile number and pattern-table bank.
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_oam_ppuctrl_tmp]
     bit 5, a
     jr z, .sprite_8x8
 
-    ld a, [nes_view_sprite_tile_tmp]
+    ldh a, [nes_view_sprite_tile_tmp]
     ld c, a
     and $FE
     ld [de], a
@@ -531,38 +534,38 @@ nes_video_sync_oam:
     jr .bank_ready
 
 .sprite_8x8:
-    ld a, [nes_view_sprite_tile_tmp]
+    ldh a, [nes_view_sprite_tile_tmp]
     ld [de], a
     inc de
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_oam_ppuctrl_tmp]
     and $08
 
 .bank_ready:
-    ld [nes_sprite_bank_tmp], a
+    ldh [nes_sprite_bank_tmp], a
 
     ; Palette, CGB VRAM bank, priority, H flip, V flip.
-    ld a, [nes_sprite_attr_tmp]
+    ldh a, [nes_sprite_attr_tmp]
     and $03
     ld c, a
-    ld a, [nes_sprite_bank_tmp]
+    ldh a, [nes_sprite_bank_tmp]
     or c
     ld c, a
 
-    ld a, [nes_sprite_attr_tmp]
+    ldh a, [nes_sprite_attr_tmp]
     bit 5, a
     jr z, .no_priority
     ld a, c
     or $80
     ld c, a
 .no_priority:
-    ld a, [nes_sprite_attr_tmp]
+    ldh a, [nes_sprite_attr_tmp]
     bit 6, a
     jr z, .no_hflip
     ld a, c
     or $20
     ld c, a
 .no_hflip:
-    ld a, [nes_sprite_attr_tmp]
+    ldh a, [nes_sprite_attr_tmp]
     bit 7, a
     jr z, .no_vflip
     ld a, c
@@ -607,7 +610,7 @@ nes_video_update_ctrl:
     and $F3
     ld b, a
 
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_oam_ppuctrl_tmp]
     bit 5, a
     jr z, .size_done
     ld a, b
@@ -620,7 +623,7 @@ nes_video_update_ctrl:
     jr z, .vertical
 
     ; Horizontal mirroring: physical table comes from PPUCTRL bit 1.
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_oam_ppuctrl_tmp]
     and $02
     jr z, .store
     ld a, b
@@ -629,7 +632,7 @@ nes_video_update_ctrl:
 
 .vertical:
     ; Vertical mirroring: physical table comes from PPUCTRL bit 0.
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_oam_ppuctrl_tmp]
     and $01
     jr z, .store
     ld a, b
