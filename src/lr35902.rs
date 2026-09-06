@@ -494,24 +494,28 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             }
 
             IrOp::WriteIo { addr, src } => {
-                writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                 match addr {
                     0x2000..=0x3FFF => {
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    ld e, a").unwrap();
                         writeln!(out, "    ld l, ${:02X}", addr as u8 & 0x07).unwrap();
                         writeln!(out, "    call nes_ppu_cpu_write").unwrap();
                     }
                     0x4011 => {
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    ld [nes_dac], a").unwrap();
                     }
                     0x4014 => {
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    call nes_oam_dma").unwrap();
                     }
                     0x4016 => {
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    call nes_controller_write").unwrap();
                     }
                     _ => {
-                        // Other fixed APU writes are currently no-ops.
+                        // Other fixed APU writes are not emulated yet, so emit
+                        // literally nothing rather than loading a value only to drop it.
                     }
                 }
             }
@@ -536,6 +540,16 @@ mod tests {
         assert!(asm.contains("ld a, [$C010]"));
         assert!(asm.contains("ld [$C011], a"));
         assert!(!asm.contains("ld h, $C0"));
+    }
+
+    #[test]
+    fn ignored_fixed_apu_writes_emit_nothing() {
+        let asm = emit_ops(&[
+            IrOp::WriteIo { addr: 0x4000, src: Register::A },
+            IrOp::WriteIo { addr: 0x4004, src: Register::X },
+            IrOp::WriteIo { addr: 0x400C, src: Register::Y },
+        ]);
+        assert!(asm.is_empty());
     }
 
     #[test]
