@@ -636,6 +636,44 @@ nes_video_sync_oam:
     jr nz, .copy_shadow
     ret
 
+; NES PPUCTRL bit 4 globally selects BG pattern table $0000/$1000.
+; Our CGB representation stores that selection in each tile attribute's VRAM
+; bank bit. Flip bit 3 across both 32x32 maps whenever the NES global select
+; changes so old nametable cells cannot retain a stale pattern-table bank.
+nes_video_toggle_bg_pattern_bank:
+    ldh a, [rLCDC]
+    bit 7, a
+    jr z, .lcd_already_off
+
+    ; LCD may only be disabled safely during VBlank.
+    push af
+    call nes_video_wait_oam
+    pop af
+
+.lcd_already_off:
+    push af
+    and $7F
+    ldh [rLCDC], a
+
+    ld a, $01
+    ldh [rVBK], a
+    ld hl, $9800
+    ld bc, $0800
+.toggle_loop:
+    ld a, [hl]
+    xor $08
+    ld [hli], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, .toggle_loop
+
+    xor a
+    ldh [rVBK], a
+    pop af
+    ldh [rLCDC], a
+    ret
+
 ; Reflect PPUMASK BG/sprite visibility into LCDC bits 0/1.
 nes_video_update_mask:
     ldh a, [rLCDC]
