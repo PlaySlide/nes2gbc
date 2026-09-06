@@ -91,6 +91,8 @@ nes_ppu_cpu_write:
     ld a, [nes_oamaddr]
     inc a
     ld [nes_oamaddr], a
+    ld a, $01
+    ld [nes_oam_dirty], a
     ret
 
 .scroll:
@@ -335,4 +337,6 @@ nes_oam_dma:
     inc l
     jr nz, .loop
 
-    jp nes_video_sync_oam
+    ld a, $01
+    ld [nes_oam_dirty], a
+    ret
