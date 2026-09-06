@@ -52,17 +52,17 @@ nes_ppu_cpu_write:
     ld a, l
     and $07
     cp $00
-    jr z, .ctrl
+    jp z, .ctrl
     cp $01
-    jr z, .mask
+    jp z, .mask
     cp $03
-    jr z, .oamaddr
+    jp z, .oamaddr
     cp $04
-    jr z, .oamdata_write
+    jp z, .oamdata_write
     cp $05
-    jr z, .scroll
+    jp z, .scroll
     cp $06
-    jr z, .addr
+    jp z, .addr
     cp $07
     jp z, nes_ppu_write_data
     ret
