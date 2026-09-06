@@ -98,6 +98,23 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
     }
 }
 
+fn emit_dynamic_cpu_read_hl(out: &mut String) {
+    // Runtime profiling shows the overwhelming majority of dynamic CPU reads
+    // resolve to $0000-$1FFF internal RAM. Handle that case inline and only
+    // pay the generic bus helper for PPU/APU/PRG addresses.
+    writeln!(out, "    ld a, h").unwrap();
+    writeln!(out, "    cp $20").unwrap();
+    writeln!(out, "    jr nc, :+").unwrap();
+    writeln!(out, "    and $07").unwrap();
+    writeln!(out, "    or $C0").unwrap();
+    writeln!(out, "    ld h, a").unwrap();
+    writeln!(out, "    ld a, [hl]").unwrap();
+    writeln!(out, "    jr :++").unwrap();
+    writeln!(out, ":").unwrap();
+    writeln!(out, "    call nes_cpu_read").unwrap();
+    writeln!(out, ":").unwrap();
+}
+
 fn emit_indirect_addr(out: &mut String, src: Operand) {
     match src {
         Operand::IndexedIndirect(zp) => {
@@ -141,17 +158,17 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                         writeln!(out, "    ld a, [nes_x]").unwrap();
                         emit_add_a_to_hl(out);
-                        writeln!(out, "    call nes_cpu_read").unwrap();
+                        emit_dynamic_cpu_read_hl(out);
                     }
                     Operand::AbsoluteY(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                         writeln!(out, "    ld a, [nes_y]").unwrap();
                         emit_add_a_to_hl(out);
-                        writeln!(out, "    call nes_cpu_read").unwrap();
+                        emit_dynamic_cpu_read_hl(out);
                     }
                     Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
                         emit_indirect_addr(out, src);
-                        writeln!(out, "    call nes_cpu_read").unwrap();
+                        emit_dynamic_cpu_read_hl(out);
                     }
                     _ => writeln!(out, "    call nes_unimplemented_operand_read").unwrap(),
                 }
@@ -440,6 +457,18 @@ mod tests {
         assert!(asm.contains("ld h, $C0"));
         assert!(asm.contains("ld l, $10"));
         assert!(asm.contains("ld [hl], a"));
+    }
+
+    #[test]
+    fn dynamic_indexed_reads_fast_path_internal_ram() {
+        let asm = emit_ops(&[
+            IrOp::Load { dst: Register::A, src: Operand::IndirectIndexed(0x10) },
+        ]);
+        assert!(asm.contains("cp $20"));
+        assert!(asm.contains("and $07"));
+        assert!(asm.contains("or $C0"));
+        assert!(asm.contains("ld a, [hl]"));
+        assert!(asm.contains("call nes_cpu_read"));
     }
 
     #[test]
