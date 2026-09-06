@@ -93,11 +93,14 @@ nes_ppu_cpu_write:
     ; attribute must flip when the NES global bit changes.
     ld a, b
     and $10
-    jr z, .ctrl_update
+    jr z, .ctrl_defer
     call nes_video_toggle_bg_pattern_bank
 
-.ctrl_update:
-    call nes_video_update_ctrl
+.ctrl_defer:
+    ; Base nametable and sprite-size changes should become visible on the same
+    ; host frame boundary as SCX/SCY and OAM, not halfway through scanout.
+    ld a, $01
+    ldh [nes_ctrl_dirty], a
     ret
 .mask:
     ld a, e
@@ -129,18 +132,24 @@ nes_ppu_cpu_write:
     ld a, [nes_ppu_latch]
     and a
     jr nz, .scroll_y
+
+    ; First $2005 write updates virtual X only. Do not touch hardware SCX yet:
+    ; committing half of a scroll pair can tear the host frame.
     ld a, e
     ld [nes_ppu_scroll_x], a
-    call nes_view_apply_scroll
     ld a, $01
     ld [nes_ppu_latch], a
     ret
+
 .scroll_y:
     ld a, e
     ld [nes_ppu_scroll_y], a
-    call nes_view_apply_scroll
     xor a
     ld [nes_ppu_latch], a
+
+    ; A complete X/Y pair is ready. Commit it once at host VBlank.
+    ld a, $01
+    ldh [nes_scroll_dirty], a
     ret
 
 .addr:
