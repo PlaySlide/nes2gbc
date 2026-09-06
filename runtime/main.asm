@@ -73,7 +73,10 @@ Start:
     ldh [nes_view_x], a
     ldh [nes_view_y], a
     ld [nes_view_select_prev], a
-    ld [nes_reset_count], a
+    ldh [nes_reset_count], a
+    ldh [nes_fault_hram], a
+    ldh [nes_last_indirect_lo], a
+    ldh [nes_last_indirect_hi], a
 
     ld a, $FD
     ldh [nes_sp], a
