@@ -175,22 +175,22 @@ fn emit_static_control(
         IrOp::Branch { flag, when, target } if banks.contains_key(&target) => {
             match flag {
                 Flag::Carry => {
-                    writeln!(out, "    ld a, [nes_c_shadow]").unwrap();
+                    writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
                     writeln!(out, "    and a").unwrap();
                     writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                 }
                 Flag::Zero => {
-                    writeln!(out, "    ld a, [nes_z_shadow]").unwrap();
+                    writeln!(out, "    ldh a, [nes_z_shadow]").unwrap();
                     writeln!(out, "    and a").unwrap();
                     writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
                 }
                 Flag::Negative => {
-                    writeln!(out, "    ld a, [nes_n_shadow]").unwrap();
+                    writeln!(out, "    ldh a, [nes_n_shadow]").unwrap();
                     writeln!(out, "    bit 7, a").unwrap();
                     writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                 }
                 _ => {
-                    writeln!(out, "    ld a, [nes_p]").unwrap();
+                    writeln!(out, "    ldh a, [nes_p]").unwrap();
                     writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
                     writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                 }
@@ -489,7 +489,7 @@ mod tests {
         prg[0..4].copy_from_slice(&[0x38, 0xB0, 0x00, 0x60]);
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(4), debug_trace: false });
-        assert!(asm.contains("ld a, [nes_c_shadow]"));
+        assert!(asm.contains("ldh a, [nes_c_shadow]"));
     }
 
     #[test]
@@ -498,7 +498,7 @@ mod tests {
         prg[0..6].copy_from_slice(&[0xA9, 0x00, 0xF0, 0x01, 0x60, 0x60]);
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg(&graph, EmitOptions { reset: 0x8000, max_blocks: Some(4), debug_trace: false });
-        assert!(asm.contains("ld a, [nes_z_shadow]"));
+        assert!(asm.contains("ldh a, [nes_z_shadow]"));
         assert!(asm.contains("and a"));
     }
 
