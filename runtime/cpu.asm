@@ -12,6 +12,7 @@ nes_p:  ds 1
 ; Lazy status shadows. Z is set iff nes_z_shadow == 0; N follows bit 7.
 nes_z_shadow: ds 1
 nes_n_shadow: ds 1
+nes_c_shadow: ds 1
 
 SECTION "NES CPU helpers", ROM0
 
@@ -22,12 +23,19 @@ nes_set_nz_from_a:
     ld [nes_n_shadow], a
     ret
 
-; Materialize lazy Z/N into nes_p. Output A = complete 6502 P.
+; Materialize lazy C/Z/N into nes_p. Output A = complete 6502 P.
 nes_materialize_p:
     ld a, [nes_p]
-    and $7D
+    and $7C
     ld e, a
 
+    ld a, [nes_c_shadow]
+    and a
+    jr z, .no_c
+    ld a, e
+    or $01
+    ld e, a
+.no_c:
     ld a, [nes_z_shadow]
     and a
     jr nz, .no_z
@@ -46,13 +54,17 @@ nes_materialize_p:
     ld [nes_p], a
     ret
 
-; Input A = popped/restored P. Normalize B/U and refresh lazy Z/N.
+; Input A = popped/restored P. Normalize B/U and refresh lazy C/Z/N.
 ; Output A = normalized P.
 nes_set_p_from_a:
     or $20
     and $EF
     ld e, a
     ld [nes_p], a
+
+    ld a, e
+    and $01
+    ld [nes_c_shadow], a
 
     bit 1, e
     ld a, $01
@@ -66,27 +78,20 @@ nes_set_p_from_a:
     ret
 
 ; Compare canonical accumulator-like value in A against E.
-; Updates C in nes_p and lazy Z/N from the subtraction result.
+; Updates lazy C/Z/N shadows from the subtraction.
 nes_compare_a_e:
     PROFILE_INC nes_profile_compare
     ld d, a
     sub e
     ld c, a
 
-    ld a, [nes_p]
-    and $FE
-    ld b, a
-
-    ; 6502 carry means no borrow, i.e. original >= rhs.
     ld a, d
     cp e
-    jr c, .carry_done
-    ld a, b
-    or $01
-    ld b, a
-.carry_done:
-    ld a, b
-    ld [nes_p], a
+    ld a, $00
+    jr c, .carry_ready
+    inc a
+.carry_ready:
+    ld [nes_c_shadow], a
 
     ld a, c
     ld [nes_z_shadow], a
@@ -552,14 +557,14 @@ ENDC
     ret
 
 
-; Input: A = lhs, E = rhs. Uses 6502 carry-in from nes_p.
-; Output: A = result, updates C/V in nes_p and lazy Z/N shadows.
+; Input: A = lhs, E = rhs. Uses lazy 6502 carry-in.
+; Output: A = result, updates lazy C/Z/N and V in nes_p.
 nes_adc_a_e:
     PROFILE_INC nes_profile_adc
 nes_adc_core:
     ld d, a
-    ld a, [nes_p]
-    and $01
+    ld a, [nes_c_shadow]
+    and a
     jr z, .adc_clear_c
     scf
     jr .adc_go
@@ -569,22 +574,16 @@ nes_adc_core:
     ld a, d
     adc e
     ld c, a
-    ld l, $00
+    ld a, $00
     jr nc, .adc_captured
-    inc l
+    inc a
 .adc_captured:
+    ld [nes_c_shadow], a
 
-    ; Preserve all status bits except C/V; Z/N are represented lazily.
+    ; Only overflow remains material in nes_p; C/Z/N are lazy shadows.
     ld a, [nes_p]
-    and $BE
+    and $BF
     ld b, a
-    ld a, l
-    and a
-    jr z, .adc_no_carry
-    ld a, b
-    or $01
-    ld b, a
-.adc_no_carry:
 
     ; overflow = ~(lhs ^ rhs) & (lhs ^ result) & $80
     ld a, d
@@ -640,46 +639,42 @@ nes_bit_a_e:
     ld [nes_p], a
     ret
 
-; Shift/rotate helpers. Input/output A, update 6502 C/N/Z.
+; Shift/rotate helpers. Input/output A, update lazy 6502 C/N/Z.
 nes_asl_a:
     ld e, a
-    ld a, [nes_p]
-    and $FE
     bit 7, e
-    jr z, .asl_c_done
-    or $01
-.asl_c_done:
-    ld [nes_p], a
+    ld a, $00
+    jr z, .asl_c_ready
+    inc a
+.asl_c_ready:
+    ld [nes_c_shadow], a
     ld a, e
     add a
     jp nes_set_nz_from_a
 
 nes_lsr_a:
     ld e, a
-    ld a, [nes_p]
-    and $FE
     bit 0, e
-    jr z, .lsr_c_done
-    or $01
-.lsr_c_done:
-    ld [nes_p], a
+    ld a, $00
+    jr z, .lsr_c_ready
+    inc a
+.lsr_c_ready:
+    ld [nes_c_shadow], a
     ld a, e
     srl a
     jp nes_set_nz_from_a
 
 nes_rol_a:
     ld d, a
-    ld a, [nes_p]
-    and $01
+    ld a, [nes_c_shadow]
     ld c, a
 
-    ld a, [nes_p]
-    and $FE
     bit 7, d
-    jr z, .rol_new_c_done
-    or $01
-.rol_new_c_done:
-    ld [nes_p], a
+    ld a, $00
+    jr z, .rol_c_ready
+    inc a
+.rol_c_ready:
+    ld [nes_c_shadow], a
 
     ld a, d
     add a
@@ -691,17 +686,15 @@ nes_rol_a:
 
 nes_ror_a:
     ld d, a
-    ld a, [nes_p]
-    and $01
+    ld a, [nes_c_shadow]
     ld c, a
 
-    ld a, [nes_p]
-    and $FE
     bit 0, d
-    jr z, .ror_new_c_done
-    or $01
-.ror_new_c_done:
-    ld [nes_p], a
+    ld a, $00
+    jr z, .ror_c_ready
+    inc a
+.ror_c_ready:
+    ld [nes_c_shadow], a
 
     ld a, d
     srl a
