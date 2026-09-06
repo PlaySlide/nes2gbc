@@ -31,13 +31,13 @@ nes_gbc_vblank_isr:
     ; $2004 writers fall back to building it here.
     ld a, [nes_oam_dirty]
     and a
-    jr z, .oam_done
+    jp z, .oam_done
     xor a
     ld [nes_oam_dirty], a
 
     ldh a, [nes_oam_shadow_ready]
     and a
-    jr nz, .oam_shadow_ready
+    jp nz, .oam_shadow_ready
     call nes_video_build_oam_shadow
 .oam_shadow_ready:
     call nes_video_sync_oam
@@ -45,7 +45,7 @@ nes_gbc_vblank_isr:
 
     ldh a, [nes_palette_dirty]
     and a
-    jr z, .palette_done
+    jp z, .palette_done
     xor a
     ldh [nes_palette_dirty], a
     call nes_video_sync_palette_shadow
@@ -56,7 +56,7 @@ nes_gbc_vblank_isr:
     ; the entire GBC viewport.
     ldh a, [nes_ctrl_dirty]
     and a
-    jr z, .ctrl_done
+    jp z, .ctrl_done
     xor a
     ldh [nes_ctrl_dirty], a
     call nes_video_update_ctrl
@@ -64,7 +64,7 @@ nes_gbc_vblank_isr:
 
     ldh a, [nes_scroll_dirty]
     and a
-    jr z, .scroll_done
+    jp z, .scroll_done
     xor a
     ldh [nes_scroll_dirty], a
 
@@ -73,7 +73,7 @@ nes_gbc_vblank_isr:
     ; one-shot GBC LYC interrupt. Otherwise use the normal single scroll.
     ldh a, [nes_split_active]
     and a
-    jr z, .scroll_single
+    jp z, .scroll_single
 
     ldh a, [nes_split_top_x]
     ld b, a
@@ -91,7 +91,7 @@ nes_gbc_vblank_isr:
     ldh a, [rSTAT]
     or $40
     ldh [rSTAT], a
-    jr .scroll_done
+    jp .scroll_done
 
 .scroll_single:
     ; Disable any stale one-shot raster source and apply one coherent pair.
