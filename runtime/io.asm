@@ -84,6 +84,8 @@ nes_split_top_y:          ds 1   ; $FFDD
 nes_split_bottom_x:       ds 1   ; $FFDE
 nes_split_bottom_y:       ds 1   ; $FFDF
 nes_split_line:           ds 1   ; $FFE0, host scanline for one raster split
+nes_split_top_ctrl:       ds 1   ; $FFE1, PPUCTRL paired with top/HUD scroll
+nes_split_bottom_ctrl:    ds 1   ; $FFE2, PPUCTRL paired with lower/playfield scroll
 
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
