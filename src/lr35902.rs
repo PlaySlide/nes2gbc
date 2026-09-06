@@ -552,6 +552,19 @@ mod tests {
     }
 
     #[test]
+    fn hot_cpu_state_uses_ldh_accesses() {
+        let asm = emit_ops(&[
+            IrOp::Load { dst: Register::A, src: Operand::Immediate(0x12) },
+            IrOp::Transfer { src: Register::A, dst: Register::X, update_nz: true },
+            IrOp::Branch { flag: Flag::Carry, when: true, target: 0x9000 },
+        ]);
+        assert!(asm.contains("ldh [nes_a], a"));
+        assert!(asm.contains("ldh a, [nes_a]"));
+        assert!(asm.contains("ldh [nes_x], a"));
+        assert!(asm.contains("ldh a, [nes_c_shadow]"));
+    }
+
+    #[test]
     fn ignored_fixed_apu_writes_emit_nothing() {
         let asm = emit_ops(&[
             IrOp::WriteIo { addr: 0x4000, src: Register::A },
