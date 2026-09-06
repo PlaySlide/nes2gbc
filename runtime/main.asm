@@ -22,7 +22,7 @@ nes_gbc_vblank_isr:
 
 Start:
     di
-    ld sp, $FFFE
+    ld sp, $D000
 
     ; Request CGB double-speed mode.
     ld a, $01
