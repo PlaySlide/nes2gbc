@@ -3,7 +3,7 @@
 
 DEF NES_RAM_BASE EQU $C000
 
-SECTION "NES CPU hot state", HRAM[$FF80]
+SECTION "NES CPU state", WRAM0[$C800]
 nes_a:  ds 1
 nes_x:  ds 1
 nes_y:  ds 1
@@ -19,31 +19,31 @@ SECTION "NES CPU helpers", ROM0
 ; Input: A = result value. Output: A preserved.
 ; Z/N are lazy: Z iff shadow == 0, N from shadow bit 7.
 nes_set_nz_from_a:
-    ldh [nes_z_shadow], a
-    ldh [nes_n_shadow], a
+    ld [nes_z_shadow], a
+    ld [nes_n_shadow], a
     ret
 
 ; Materialize lazy C/Z/N into nes_p. Output A = complete 6502 P.
 nes_materialize_p:
-    ldh a, [nes_p]
+    ld a, [nes_p]
     and $7C
     ld e, a
 
-    ldh a, [nes_c_shadow]
+    ld a, [nes_c_shadow]
     and a
     jr z, .no_c
     ld a, e
     or $01
     ld e, a
 .no_c:
-    ldh a, [nes_z_shadow]
+    ld a, [nes_z_shadow]
     and a
     jr nz, .no_z
     ld a, e
     or $02
     ld e, a
 .no_z:
-    ldh a, [nes_n_shadow]
+    ld a, [nes_n_shadow]
     bit 7, a
     jr z, .no_n
     ld a, e
@@ -51,7 +51,7 @@ nes_materialize_p:
     ld e, a
 .no_n:
     ld a, e
-    ldh [nes_p], a
+    ld [nes_p], a
     ret
 
 ; Input A = popped/restored P. Normalize B/U and refresh lazy C/Z/N.
@@ -60,21 +60,21 @@ nes_set_p_from_a:
     or $20
     and $EF
     ld e, a
-    ldh [nes_p], a
+    ld [nes_p], a
 
     ld a, e
     and $01
-    ldh [nes_c_shadow], a
+    ld [nes_c_shadow], a
 
     bit 1, e
     ld a, $01
     jr z, .z_ready
     xor a
 .z_ready:
-    ldh [nes_z_shadow], a
+    ld [nes_z_shadow], a
 
     ld a, e
-    ldh [nes_n_shadow], a
+    ld [nes_n_shadow], a
     ret
 
 ; Compare canonical accumulator-like value in A against E.
@@ -91,32 +91,32 @@ nes_compare_a_e:
     jr c, .carry_ready
     inc a
 .carry_ready:
-    ldh [nes_c_shadow], a
+    ld [nes_c_shadow], a
 
     ld a, c
-    ldh [nes_z_shadow], a
-    ldh [nes_n_shadow], a
+    ld [nes_z_shadow], a
+    ld [nes_n_shadow], a
     ret
 
 ; Virtual 6502 stack lives in mirrored RAM page $0100 at $C100.
 ; Push stores then decrements SP.
 nes_stack_push_a:
     ld e, a
-    ldh a, [nes_sp]
+    ld a, [nes_sp]
     ld l, a
     ld h, $C1
     ld a, e
     ld [hl], a
-    ldh a, [nes_sp]
+    ld a, [nes_sp]
     dec a
-    ldh [nes_sp], a
+    ld [nes_sp], a
     ret
 
 ; Pop increments SP then reads.
 nes_stack_pop_a:
-    ldh a, [nes_sp]
+    ld a, [nes_sp]
     inc a
-    ldh [nes_sp], a
+    ld [nes_sp], a
     ld l, a
     ld h, $C1
     ld a, [hl]
@@ -563,7 +563,7 @@ nes_adc_a_e:
     PROFILE_INC nes_profile_adc
 nes_adc_core:
     ld d, a
-    ldh a, [nes_c_shadow]
+    ld a, [nes_c_shadow]
     and a
     jr z, .adc_clear_c
     scf
@@ -578,10 +578,10 @@ nes_adc_core:
     jr nc, .adc_captured
     inc a
 .adc_captured:
-    ldh [nes_c_shadow], a
+    ld [nes_c_shadow], a
 
     ; Only overflow remains material in nes_p; C/Z/N are lazy shadows.
-    ldh a, [nes_p]
+    ld a, [nes_p]
     and $BF
     ld b, a
 
@@ -600,11 +600,11 @@ nes_adc_core:
     ld b, a
 .adc_no_overflow:
     ld a, b
-    ldh [nes_p], a
+    ld [nes_p], a
 
     ld a, c
-    ldh [nes_z_shadow], a
-    ldh [nes_n_shadow], a
+    ld [nes_z_shadow], a
+    ld [nes_n_shadow], a
     ret
 
 ; SBC on the 6502 is lhs + (~rhs) + C.
@@ -626,17 +626,17 @@ nes_bit_a_e:
 
     ld a, d
     and e
-    ldh [nes_z_shadow], a
+    ld [nes_z_shadow], a
     ld a, e
-    ldh [nes_n_shadow], a
+    ld [nes_n_shadow], a
 
-    ldh a, [nes_p]
+    ld a, [nes_p]
     and $BF
     bit 6, e
     jr z, .bit_no_v
     or $40
 .bit_no_v:
-    ldh [nes_p], a
+    ld [nes_p], a
     ret
 
 ; Shift/rotate helpers. Input/output A, update lazy 6502 C/N/Z.
@@ -647,7 +647,7 @@ nes_asl_a:
     jr z, .asl_c_ready
     inc a
 .asl_c_ready:
-    ldh [nes_c_shadow], a
+    ld [nes_c_shadow], a
     ld a, e
     add a
     jp nes_set_nz_from_a
@@ -659,14 +659,14 @@ nes_lsr_a:
     jr z, .lsr_c_ready
     inc a
 .lsr_c_ready:
-    ldh [nes_c_shadow], a
+    ld [nes_c_shadow], a
     ld a, e
     srl a
     jp nes_set_nz_from_a
 
 nes_rol_a:
     ld d, a
-    ldh a, [nes_c_shadow]
+    ld a, [nes_c_shadow]
     ld c, a
 
     bit 7, d
@@ -674,7 +674,7 @@ nes_rol_a:
     jr z, .rol_c_ready
     inc a
 .rol_c_ready:
-    ldh [nes_c_shadow], a
+    ld [nes_c_shadow], a
 
     ld a, d
     add a
@@ -686,7 +686,7 @@ nes_rol_a:
 
 nes_ror_a:
     ld d, a
-    ldh a, [nes_c_shadow]
+    ld a, [nes_c_shadow]
     ld c, a
 
     bit 0, d
@@ -694,7 +694,7 @@ nes_ror_a:
     jr z, .ror_c_ready
     inc a
 .ror_c_ready:
-    ldh [nes_c_shadow], a
+    ld [nes_c_shadow], a
 
     ld a, d
     srl a
@@ -738,17 +738,17 @@ nes_brk_hl:
     or $30
     call nes_stack_push_a
 
-    ldh a, [nes_p]
+    ld a, [nes_p]
     or $04
     and $EF
     or $20
-    ldh [nes_p], a
+    ld [nes_p], a
     ret
 
 ; RTI pops P then PC low/high. Output HL = exact restored PC.
 nes_rti_pop_hl:
     xor a
-    ldh [nes_nmi_active], a
+    ld [nes_nmi_active], a
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -763,25 +763,25 @@ nes_rti_pop_hl:
 ; safe points. Input HL = NES PC to resume if interrupted.
 ; Output A = 1 when caller should jump to the translated NMI handler.
 nes_poll_nmi_hl:
-    ldh a, [nes_host_vblank_pending]
+    ld a, [nes_host_vblank_pending]
     and a
     ret z
 
     ; Consume the host event. If NES NMI is disabled or already active, this
     ; frame is intentionally dropped instead of creating back-to-back NMIs.
     xor a
-    ldh [nes_host_vblank_pending], a
+    ld [nes_host_vblank_pending], a
 
-    ldh a, [nes_ppuctrl]
+    ld a, [nes_ppuctrl]
     bit 7, a
     jr z, .no_nmi
 
-    ldh a, [nes_nmi_active]
+    ld a, [nes_nmi_active]
     and a
     jr nz, .no_nmi
 
     ld a, $01
-    ldh [nes_nmi_active], a
+    ld [nes_nmi_active], a
     PROFILE_INC nes_profile_nmi
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
@@ -797,11 +797,11 @@ nes_poll_nmi_hl:
     or $20
     call nes_stack_push_a
 
-    ldh a, [nes_p]
+    ld a, [nes_p]
     or $04
     and $EF
     or $20
-    ldh [nes_p], a
+    ld [nes_p], a
 
     ld a, $01
     ret
