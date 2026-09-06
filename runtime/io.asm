@@ -77,6 +77,13 @@ nes_gbc_palette_shadow:   ds $40 ; $FF97-$FFD6, 32 BG bytes + 32 OBJ bytes
 nes_palette_dirty:        ds 1   ; $FFD7
 nes_scroll_dirty:         ds 1   ; $FFD8, commit SCX/SCY at host VBlank
 nes_ctrl_dirty:           ds 1   ; $FFD9, commit LCDC scroll/sprite mode at VBlank
+nes_scroll_pair_count:    ds 1   ; $FFDA, complete $2005 pairs seen in current NES NMI
+nes_split_active:         ds 1   ; $FFDB, two distinct raster scroll states captured
+nes_split_top_x:          ds 1   ; $FFDC
+nes_split_top_y:          ds 1   ; $FFDD
+nes_split_bottom_x:       ds 1   ; $FFDE
+nes_split_bottom_y:       ds 1   ; $FFDF
+nes_split_line:           ds 1   ; $FFE0, host scanline for one raster split
 
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
