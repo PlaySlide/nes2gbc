@@ -18,6 +18,14 @@ nes_gbc_vblank_isr:
     push de
     push hl
 
+    ; A translated NES NMI may take more than one host GBC frame. Never publish
+    ; partially updated NES video state while it is still running; staged OAM,
+    ; palette, control, and scroll state are committed atomically on the first
+    ; host VBlank after translated RTI clears nes_nmi_active.
+    ld a, [nes_nmi_active]
+    and a
+    jp nz, .done
+
     ; Flush virtual NES OAM exactly once at the start of host VBlank.
     ; Normal $4014 DMA has already built the 160-byte GBC OAM shadow; direct
     ; $2004 writers fall back to building it here.
@@ -93,9 +101,8 @@ nes_gbc_vblank_isr:
     call nes_view_apply_scroll
 .scroll_done:
 
-    ld a, [nes_nmi_active]
-    and a
-    jr nz, .done
+    ; This host frame was presented from a completed NES state, so it may
+    ; also become the next translated NES NMI event.
     ld a, $01
     ld [nes_host_vblank_pending], a
 .done:
