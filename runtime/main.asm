@@ -70,8 +70,8 @@ Start:
     ld [nes_current_code_bank], a
     ld [nes_dispatch_cache_valid], a
     ld [nes_view_mode], a
-    ld [nes_view_x], a
-    ld [nes_view_y], a
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
     ld [nes_view_select_prev], a
 
     ld a, $FD
