@@ -32,6 +32,14 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
+    ldh a, [nes_palette_dirty]
+    and a
+    jr z, .palette_done
+    xor a
+    ldh [nes_palette_dirty], a
+    call nes_video_sync_palette_shadow
+.palette_done:
+
     ld a, [nes_nmi_active]
     and a
     jr nz, .done
@@ -90,6 +98,14 @@ Start:
     ldh [nes_last_indirect_lo], a
     ldh [nes_last_indirect_hi], a
     ldh [nes_oam_shadow_ready], a
+    ldh [nes_palette_dirty], a
+
+    ld hl, nes_gbc_palette_shadow
+    ld b, $40
+.clear_palette_shadow:
+    ld [hli], a
+    dec b
+    jr nz, .clear_palette_shadow
 
     ld a, $FD
     ldh [nes_sp], a
