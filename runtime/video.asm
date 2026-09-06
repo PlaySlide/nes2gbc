@@ -458,9 +458,7 @@ nes_rgb555_table:
     dw $7FFF, $7F94, $7AD6, $7ADA, $7ADE, $5E9E, $573D, $537F
     dw $3F5E, $3FDA, $5BD6, $6BD6, $7FE0, $7B5E, $0000, $0000
 
-; Project up to 40 visible NES sprites into CGB OAM.
-; Scan all 64 source entries so composite objects are not chopped merely
-; because one of their pieces lives beyond NES OAM entry 39.
+; Project virtual NES OAM into the first 40 CGB sprites.
 nes_video_sync_oam:
     PROFILE_INC nes_profile_oam_sync
     ; This routine is only called from the host VBlank ISR now, so no extra
@@ -469,51 +467,52 @@ nes_video_sync_oam:
     ldh [nes_oam_ppuctrl_tmp], a
     ld hl, nes_oam_ram
     ld de, $FE00
-    ld b, 64
-    xor a
-    ldh [nes_oam_emit_count], a
+    ld b, 40
 
-.scan:
-    ; Source Y. NES Y is top minus one.
+.loop:
+    ; Crop NES screen-space Y into the selected 144-line debug viewport.
+    ; $EF-$FF are always offscreen/hidden on the source NES.
     ld a, [hli]
     cp $EF
-    jp nc, .skip_three_source_bytes
+    jr nc, .hide_y
     inc a
     ldh [nes_view_coord_tmp], a
     ldh a, [nes_view_y]
     ld c, a
     ldh a, [nes_view_coord_tmp]
     sub c
-    jp c, .skip_three_source_bytes
+    jr c, .hide_y
     cp $90
-    jp nc, .skip_three_source_bytes
+    jr nc, .hide_y
     add $10
-    ldh [nes_oam_proj_y_tmp], a
+    jr .write_y
+.hide_y:
+    xor a
+.write_y:
+    ld [de], a
+    inc de
 
-    ; Save source tile and attributes.
+    ; Keep the tile number in scratch RAM while C is free for crop arithmetic.
     ld a, [hli]
     ldh [nes_view_sprite_tile_tmp], a
     ld a, [hli]
     ldh [nes_sprite_attr_tmp], a
 
-    ; Source X and viewport crop.
+    ; Crop NES screen-space X into the selected 160-pixel debug viewport.
     ld a, [hli]
     ldh [nes_view_coord_tmp], a
     ldh a, [nes_view_x]
     ld c, a
     ldh a, [nes_view_coord_tmp]
     sub c
-    jp c, .next_source
+    jr c, .hide_x
     cp $A0
-    jp nc, .next_source
+    jr nc, .hide_x
     add $08
-    ldh [nes_oam_proj_x_tmp], a
-
-    ; Visible sprite: pack it into the next CGB OAM slot.
-    ldh a, [nes_oam_proj_y_tmp]
-    ld [de], a
-    inc de
-    ldh a, [nes_oam_proj_x_tmp]
+    jr .write_x
+.hide_x:
+    xor a
+.write_x:
     ld [de], a
     inc de
 
@@ -577,45 +576,8 @@ nes_video_sync_oam:
     ld [de], a
     inc de
 
-    ldh a, [nes_oam_emit_count]
-    inc a
-    ldh [nes_oam_emit_count], a
-    cp 40
-    ret z
-
-.next_source:
     dec b
-    jp nz, .scan
-    jr .clear_unused
-
-.skip_three_source_bytes:
-    inc hl
-    inc hl
-    inc hl
-    dec b
-    jp nz, .scan
-
-.clear_unused:
-    ; Hide any CGB OAM slots that were populated on an earlier frame but were
-    ; not filled this frame. Y=0 is offscreen; clear the full record for sanity.
-    ldh a, [nes_oam_emit_count]
-    ld c, a
-    ld a, 40
-    sub c
-    ret z
-    ld b, a
-    xor a
-.clear_loop:
-    ld [de], a
-    inc de
-    ld [de], a
-    inc de
-    ld [de], a
-    inc de
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .clear_loop
+    jp nz, .loop
     ret
 
 ; Reflect PPUMASK BG/sprite visibility into LCDC bits 0/1.
