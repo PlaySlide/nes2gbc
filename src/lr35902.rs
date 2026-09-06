@@ -489,9 +489,9 @@ mod tests {
             IrOp::Load { dst: Register::A, src: Operand::ZeroPage(0x10) },
             IrOp::Store { src: Register::A, dst: Operand::ZeroPage(0x11) },
         ]);
-        assert!(asm.contains("ld h, $C0"));
-        assert!(asm.contains("ld l, $10"));
-        assert!(asm.contains("ld [hl], a"));
+        assert!(asm.contains("ld a, [$C010]"));
+        assert!(asm.contains("ld [$C011], a"));
+        assert!(!asm.contains("ld h, $C0"));
     }
 
     #[test]
