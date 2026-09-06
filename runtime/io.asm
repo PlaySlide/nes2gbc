@@ -10,7 +10,7 @@ nes_chr_gbc_bank_base: ds 1
 
 SECTION "NES virtual IO state", WRAM0[$C818]
 nes_ppu_status:       ds 1
-nes_ppuctrl_wram_pad: ds 1
+nes_ppuctrl:          ds 1
 nes_ppumask:          ds 1
 nes_oamaddr:          ds 1
 nes_ppu_scroll_x:     ds 1
@@ -26,7 +26,7 @@ nes_sprite_attr_tmp:  ds 1
 nes_sprite_bank_tmp:  ds 1
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
-nes_host_vblank_pending_wram_pad: ds 1
+nes_host_vblank_pending: ds 1
 nes_current_code_bank: ds 1
 
 ; Debug breadcrumbs. These live in the gap before palette RAM so they do not
@@ -34,12 +34,7 @@ nes_current_code_bank: ds 1
 nes_debug_pc_hi:       ds 1 ; $C82B - last requested NES dispatch PC, high byte
 nes_debug_pc_lo:       ds 1 ; $C82C - last requested NES dispatch PC, low byte
 nes_debug_fault:       ds 1 ; $C82D - $FF if nes_unimplemented was reached
-nes_nmi_active_wram_pad: ds 1 ; preserves legacy WRAM layout
-
-SECTION "NES hot IO state", HRAM[$FF88]
-nes_ppuctrl:             ds 1
-nes_host_vblank_pending: ds 1
-nes_nmi_active:          ds 1
+nes_nmi_active:        ds 1 ; $C82E - nonzero while translated NMI handler is active
 
 SECTION "NES dispatch cache", WRAM0[$C850]
 nes_dispatch_cache_valid:   ds 1
