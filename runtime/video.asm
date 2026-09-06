@@ -199,7 +199,7 @@ nes_video_sync_nametable_write:
     ; CGB attribute: palette 0, VRAM bank follows NES BG pattern-table select.
     ld a, $01
     ldh [rVBK], a
-    ldh a, [nes_oam_ppuctrl_tmp]
+    ld a, [nes_ppuctrl]
     and $10
     srl a
     ld [de], a
@@ -251,7 +251,7 @@ nes_video_sync_attribute_write:
 .dest_ready:
 
     ; Attribute bit 3 selects converted NES pattern table 1 in CGB VRAM bank 1.
-    ldh a, [nes_oam_ppuctrl_tmp]
+    ld a, [nes_ppuctrl]
     and $10
     srl a
     ld c, a
@@ -610,7 +610,7 @@ nes_video_update_ctrl:
     and $F3
     ld b, a
 
-    ldh a, [nes_oam_ppuctrl_tmp]
+    ld a, [nes_ppuctrl]
     bit 5, a
     jr z, .size_done
     ld a, b
@@ -623,7 +623,7 @@ nes_video_update_ctrl:
     jr z, .vertical
 
     ; Horizontal mirroring: physical table comes from PPUCTRL bit 1.
-    ldh a, [nes_oam_ppuctrl_tmp]
+    ld a, [nes_ppuctrl]
     and $02
     jr z, .store
     ld a, b
@@ -632,7 +632,7 @@ nes_video_update_ctrl:
 
 .vertical:
     ; Vertical mirroring: physical table comes from PPUCTRL bit 0.
-    ldh a, [nes_oam_ppuctrl_tmp]
+    ld a, [nes_ppuctrl]
     and $01
     jr z, .store
     ld a, b
