@@ -147,6 +147,39 @@ nes_ppu_cpu_write:
     xor a
     ld [nes_ppu_latch], a
 
+    ; A complete X/Y pair is ready. During translated NMI, capture the first
+    ; pair as the top/HUD scroll and later pairs as the playfield scroll. This
+    ; recognizes the common NES raster-split pattern used by Balloon Fight B.
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .scroll_normal
+
+    ldh a, [nes_scroll_pair_count]
+    and a
+    jr nz, .scroll_capture_bottom
+
+    ld a, [nes_ppu_scroll_x]
+    ldh [nes_split_top_x], a
+    ld a, [nes_ppu_scroll_y]
+    ldh [nes_split_top_y], a
+    ld a, $01
+    ldh [nes_scroll_pair_count], a
+    ldh [nes_scroll_dirty], a
+    ret
+
+.scroll_capture_bottom:
+    ld a, [nes_ppu_scroll_x]
+    ldh [nes_split_bottom_x], a
+    ld a, [nes_ppu_scroll_y]
+    ldh [nes_split_bottom_y], a
+    ld a, $02
+    ldh [nes_scroll_pair_count], a
+    ld a, $01
+    ldh [nes_split_active], a
+    ldh [nes_scroll_dirty], a
+    ret
+
+.scroll_normal:
     ; A complete X/Y pair is ready. Commit it once at host VBlank.
     ld a, $01
     ldh [nes_scroll_dirty], a
