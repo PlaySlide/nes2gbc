@@ -50,14 +50,14 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             true
         }
         Operand::ZeroPageX(zp) => {
-            writeln!(out, "    ldh a, [nes_x]").unwrap();
+            writeln!(out, "    ld a, [nes_x]").unwrap();
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
             true
         }
         Operand::ZeroPageY(zp) => {
-            writeln!(out, "    ldh a, [nes_y]").unwrap();
+            writeln!(out, "    ld a, [nes_y]").unwrap();
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
@@ -75,7 +75,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
-                writeln!(out, "    ldh a, [nes_x]").unwrap();
+                writeln!(out, "    ld a, [nes_x]").unwrap();
                 emit_add_a_to_hl(out);
                 true
             } else {
@@ -86,7 +86,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
                 writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
-                writeln!(out, "    ldh a, [nes_y]").unwrap();
+                writeln!(out, "    ld a, [nes_y]").unwrap();
                 emit_add_a_to_hl(out);
                 true
             } else {
@@ -137,7 +137,7 @@ fn emit_dynamic_cpu_write_hl(out: &mut String) {
 fn emit_indirect_addr(out: &mut String, src: Operand) {
     match src {
         Operand::IndexedIndirect(zp) => {
-            writeln!(out, "    ldh a, [nes_x]").unwrap();
+            writeln!(out, "    ld a, [nes_x]").unwrap();
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld e, a").unwrap();
             writeln!(out, "    ld d, $C0").unwrap();
@@ -155,7 +155,7 @@ fn emit_indirect_addr(out: &mut String, src: Operand) {
             writeln!(out, "    inc e").unwrap();
             writeln!(out, "    ld a, [de]").unwrap();
             writeln!(out, "    ld h, a").unwrap();
-            writeln!(out, "    ldh a, [nes_y]").unwrap();
+            writeln!(out, "    ld a, [nes_y]").unwrap();
             emit_add_a_to_hl(out);
         }
         _ => unreachable!(),
@@ -181,13 +181,13 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                     }
                     Operand::AbsoluteX(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ldh a, [nes_x]").unwrap();
+                        writeln!(out, "    ld a, [nes_x]").unwrap();
                         emit_add_a_to_hl(out);
                         emit_dynamic_cpu_read_hl(out);
                     }
                     Operand::AbsoluteY(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ldh a, [nes_y]").unwrap();
+                        writeln!(out, "    ld a, [nes_y]").unwrap();
                         emit_add_a_to_hl(out);
                         emit_dynamic_cpu_read_hl(out);
                     }
@@ -230,13 +230,13 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
         }
         Operand::AbsoluteX(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-            writeln!(out, "    ldh a, [nes_x]").unwrap();
+            writeln!(out, "    ld a, [nes_x]").unwrap();
             emit_add_a_to_hl(out);
             true
         }
         Operand::AbsoluteY(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-            writeln!(out, "    ldh a, [nes_y]").unwrap();
+            writeln!(out, "    ld a, [nes_y]").unwrap();
             emit_add_a_to_hl(out);
             true
         }
@@ -259,8 +259,8 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
     }
 }
 fn emit_update_nz(out: &mut String) {
-    writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
-    writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+    writeln!(out, "    ld [nes_z_shadow], a").unwrap();
+    writeln!(out, "    ld [nes_n_shadow], a").unwrap();
 }
 
 pub fn emit_ops(ops: &[IrOp]) -> String {
@@ -272,87 +272,87 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 match flag {
                     Flag::Carry => {
                         writeln!(out, "    ld a, ${:02X}", if value { 0x01 } else { 0x00 }).unwrap();
-                        writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                        writeln!(out, "    ld [nes_c_shadow], a").unwrap();
                     }
                     Flag::Zero => {
                         writeln!(out, "    ld a, ${:02X}", if value { 0x00 } else { 0x01 }).unwrap();
-                        writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
+                        writeln!(out, "    ld [nes_z_shadow], a").unwrap();
                     }
                     Flag::Negative => {
                         writeln!(out, "    ld a, ${:02X}", if value { 0x80 } else { 0x00 }).unwrap();
-                        writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+                        writeln!(out, "    ld [nes_n_shadow], a").unwrap();
                     }
                     _ => {
-                        writeln!(out, "    ldh a, [nes_p]").unwrap();
+                        writeln!(out, "    ld a, [nes_p]").unwrap();
                         if value {
                             writeln!(out, "    or ${:02X}", flag_mask(flag)).unwrap();
                         } else {
                             writeln!(out, "    and ${:02X}", !flag_mask(flag)).unwrap();
                         }
-                        writeln!(out, "    ldh [nes_p], a").unwrap();
+                        writeln!(out, "    ld [nes_p], a").unwrap();
                     }
                 }
             }
 
             IrOp::Load { dst, src } => {
                 emit_load_operand_to_a(&mut out, src);
-                writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::Store { src, dst } => {
-                writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                 emit_store_a_to_operand(&mut out, dst);
             }
 
             IrOp::Transfer { src, dst, update_nz } => {
-                writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
-                writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
+                writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
                 if update_nz { emit_update_nz(&mut out); }
             }
 
             IrOp::Inc(reg) => {
-                writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
+                writeln!(out, "    ld a, [{}]", state_label(reg)).unwrap();
                 writeln!(out, "    inc a").unwrap();
-                writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
+                writeln!(out, "    ld [{}], a", state_label(reg)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::Dec(reg) => {
-                writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
+                writeln!(out, "    ld a, [{}]", state_label(reg)).unwrap();
                 writeln!(out, "    dec a").unwrap();
-                writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
+                writeln!(out, "    ld [{}], a", state_label(reg)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::Logic { op, rhs } => {
                 emit_load_operand_to_a(&mut out, rhs);
                 writeln!(out, "    ld e, a").unwrap();
-                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                writeln!(out, "    ld a, [nes_a]").unwrap();
                 match op {
                     LogicOp::And => writeln!(out, "    and e").unwrap(),
                     LogicOp::Ora => writeln!(out, "    or e").unwrap(),
                     LogicOp::Eor => writeln!(out, "    xor e").unwrap(),
                 }
-                writeln!(out, "    ldh [nes_a], a").unwrap();
+                writeln!(out, "    ld [nes_a], a").unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::Arithmetic { op, rhs } => {
                 emit_load_operand_to_a(&mut out, rhs);
                 writeln!(out, "    ld e, a").unwrap();
-                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                writeln!(out, "    ld a, [nes_a]").unwrap();
                 match op {
                     ArithmeticOp::Adc => writeln!(out, "    call nes_adc_a_e").unwrap(),
                     ArithmeticOp::Sbc => writeln!(out, "    call nes_sbc_a_e").unwrap(),
                 }
-                writeln!(out, "    ldh [nes_a], a").unwrap();
+                writeln!(out, "    ld [nes_a], a").unwrap();
             }
 
             IrOp::Modify { op, target } => {
                 let memory_target = match target {
                     ModifyTarget::Accumulator => {
-                        writeln!(out, "    ldh a, [nes_a]").unwrap();
+                        writeln!(out, "    ld a, [nes_a]").unwrap();
                         None
                     }
                     ModifyTarget::Memory(mem) => {
@@ -379,25 +379,25 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 if let Some(mem) = memory_target {
                     emit_store_a_to_operand(&mut out, mem);
                 } else {
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                    writeln!(out, "    ld [nes_a], a").unwrap();
                 }
             }
 
             IrOp::Bit { rhs } => {
                 emit_load_operand_to_a(&mut out, rhs);
                 writeln!(out, "    ld e, a").unwrap();
-                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                writeln!(out, "    ld a, [nes_a]").unwrap();
                 writeln!(out, "    call nes_bit_a_e").unwrap();
             }
             IrOp::Compare { reg, rhs } => {
                 emit_load_operand_to_a(&mut out, rhs);
                 writeln!(out, "    ld e, a").unwrap();
-                writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
+                writeln!(out, "    ld a, [{}]", state_label(reg)).unwrap();
                 writeln!(out, "    call nes_compare_a_e").unwrap();
             }
 
             IrOp::StackPush(StackValue::A) => {
-                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                writeln!(out, "    ld a, [nes_a]").unwrap();
                 writeln!(out, "    call nes_stack_push_a").unwrap();
             }
             IrOp::StackPush(StackValue::Status) => {
@@ -407,7 +407,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             }
             IrOp::StackPop(StackValue::A) => {
                 writeln!(out, "    call nes_stack_pop_a").unwrap();
-                writeln!(out, "    ldh [nes_a], a").unwrap();
+                writeln!(out, "    ld [nes_a], a").unwrap();
                 emit_update_nz(&mut out);
             }
             IrOp::StackPop(StackValue::Status) => {
@@ -418,22 +418,22 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Branch { flag, when, target } => {
                 match flag {
                     Flag::Carry => {
-                        writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
+                        writeln!(out, "    ld a, [nes_c_shadow]").unwrap();
                         writeln!(out, "    and a").unwrap();
                         writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                     }
                     Flag::Zero => {
-                        writeln!(out, "    ldh a, [nes_z_shadow]").unwrap();
+                        writeln!(out, "    ld a, [nes_z_shadow]").unwrap();
                         writeln!(out, "    and a").unwrap();
                         writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
                     }
                     Flag::Negative => {
-                        writeln!(out, "    ldh a, [nes_n_shadow]").unwrap();
+                        writeln!(out, "    ld a, [nes_n_shadow]").unwrap();
                         writeln!(out, "    bit 7, a").unwrap();
                         writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                     }
                     _ => {
-                        writeln!(out, "    ldh a, [nes_p]").unwrap();
+                        writeln!(out, "    ld a, [nes_p]").unwrap();
                         writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
                         writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                     }
@@ -498,28 +498,28 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         writeln!(out, "    xor a").unwrap();
                     }
                 }
-                writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::WriteIo { addr, src } => {
                 match addr {
                     0x2000..=0x3FFF => {
-                        writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    ld e, a").unwrap();
                         writeln!(out, "    ld l, ${:02X}", addr as u8 & 0x07).unwrap();
                         writeln!(out, "    call nes_ppu_cpu_write").unwrap();
                     }
                     0x4011 => {
-                        writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    ld [nes_dac], a").unwrap();
                     }
                     0x4014 => {
-                        writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    call nes_oam_dma").unwrap();
                     }
                     0x4016 => {
-                        writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                        writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    call nes_controller_write").unwrap();
                     }
                     _ => {
@@ -549,19 +549,6 @@ mod tests {
         assert!(asm.contains("ld a, [$C010]"));
         assert!(asm.contains("ld [$C011], a"));
         assert!(!asm.contains("ld h, $C0"));
-    }
-
-    #[test]
-    fn hot_cpu_state_uses_ldh_accesses() {
-        let asm = emit_ops(&[
-            IrOp::Load { dst: Register::A, src: Operand::Immediate(0x12) },
-            IrOp::Transfer { src: Register::A, dst: Register::X, update_nz: true },
-            IrOp::Branch { flag: Flag::Carry, when: true, target: 0x9000 },
-        ]);
-        assert!(asm.contains("ldh [nes_a], a"));
-        assert!(asm.contains("ldh a, [nes_a]"));
-        assert!(asm.contains("ldh [nes_x], a"));
-        assert!(asm.contains("ldh a, [nes_c_shadow]"));
     }
 
     #[test]
@@ -656,8 +643,8 @@ mod tests {
             IrOp::SetFlag { flag: Flag::Carry, value: false },
             IrOp::Branch { flag: Flag::Carry, when: true, target: 0x9000 },
         ]);
-        assert!(asm.contains("ldh [nes_c_shadow], a"));
-        assert!(asm.contains("ldh a, [nes_c_shadow]"));
+        assert!(asm.contains("ld [nes_c_shadow], a"));
+        assert!(asm.contains("ld a, [nes_c_shadow]"));
         assert!(!asm.contains("and $01"));
     }
 
@@ -667,9 +654,9 @@ mod tests {
             IrOp::Branch { flag: Flag::Negative, when: false, target: 0x9000 },
             IrOp::Branch { flag: Flag::Zero, when: true, target: 0x9010 },
         ]);
-        assert!(asm.contains("ldh a, [nes_n_shadow]"));
+        assert!(asm.contains("ld a, [nes_n_shadow]"));
         assert!(asm.contains("bit 7, a"));
-        assert!(asm.contains("ldh a, [nes_z_shadow]"));
+        assert!(asm.contains("ld a, [nes_z_shadow]"));
         assert!(asm.contains("and a"));
         assert!(asm.contains("ld hl, $9000"));
         assert!(asm.contains("ld hl, $9010"));
@@ -678,8 +665,8 @@ mod tests {
     #[test]
     fn nz_updates_are_inlined_without_helper_call() {
         let asm = emit_ops(&[IrOp::Load { dst: Register::A, src: Operand::Immediate(0) }]);
-        assert!(asm.contains("ldh [nes_z_shadow], a"));
-        assert!(asm.contains("ldh [nes_n_shadow], a"));
+        assert!(asm.contains("ld [nes_z_shadow], a"));
+        assert!(asm.contains("ld [nes_n_shadow], a"));
         assert!(!asm.contains("call nes_set_nz_from_a"));
     }
 }
