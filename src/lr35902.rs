@@ -258,12 +258,20 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
         writeln!(out, "    call nes_cpu_write").unwrap();
     }
 }
-fn emit_update_nz(out: &mut String) {
-    writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
-    writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+fn emit_update_nz(out: &mut String, emit_z: bool, emit_n: bool) {
+    if emit_z {
+        writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
+    }
+    if emit_n {
+        writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+    }
 }
 
 pub fn emit_ops(ops: &[IrOp]) -> String {
+    emit_ops_with_nz(ops, true, true)
+}
+
+pub fn emit_ops_with_nz(ops: &[IrOp], emit_z: bool, emit_n: bool) -> String {
     let mut out = String::new();
 
     for op in ops {
@@ -297,7 +305,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Load { dst, src } => {
                 emit_load_operand_to_a(&mut out, src);
                 writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
-                emit_update_nz(&mut out);
+                emit_update_nz(&mut out, emit_z, emit_n);
             }
 
             IrOp::Store { src, dst } => {
@@ -308,21 +316,21 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Transfer { src, dst, update_nz } => {
                 writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
                 writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
-                if update_nz { emit_update_nz(&mut out); }
+                if update_nz { emit_update_nz(&mut out, emit_z, emit_n); }
             }
 
             IrOp::Inc(reg) => {
                 writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
                 writeln!(out, "    inc a").unwrap();
                 writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
-                emit_update_nz(&mut out);
+                emit_update_nz(&mut out, emit_z, emit_n);
             }
 
             IrOp::Dec(reg) => {
                 writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
                 writeln!(out, "    dec a").unwrap();
                 writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
-                emit_update_nz(&mut out);
+                emit_update_nz(&mut out, emit_z, emit_n);
             }
 
             IrOp::Logic { op, rhs } => {
@@ -335,7 +343,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     LogicOp::Eor => writeln!(out, "    xor e").unwrap(),
                 }
                 writeln!(out, "    ldh [nes_a], a").unwrap();
-                emit_update_nz(&mut out);
+                emit_update_nz(&mut out, emit_z, emit_n);
             }
 
             IrOp::Arithmetic { op, rhs } => {
@@ -364,11 +372,11 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 match op {
                     ModifyOp::Inc => {
                         writeln!(out, "    inc a").unwrap();
-                        emit_update_nz(&mut out);
+                        emit_update_nz(&mut out, emit_z, emit_n);
                     }
                     ModifyOp::Dec => {
                         writeln!(out, "    dec a").unwrap();
-                        emit_update_nz(&mut out);
+                        emit_update_nz(&mut out, emit_z, emit_n);
                     }
                     ModifyOp::Asl => { writeln!(out, "    call nes_asl_a").unwrap(); }
                     ModifyOp::Lsr => { writeln!(out, "    call nes_lsr_a").unwrap(); }
@@ -408,7 +416,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::StackPop(StackValue::A) => {
                 writeln!(out, "    call nes_stack_pop_a").unwrap();
                 writeln!(out, "    ldh [nes_a], a").unwrap();
-                emit_update_nz(&mut out);
+                emit_update_nz(&mut out, emit_z, emit_n);
             }
             IrOp::StackPop(StackValue::Status) => {
                 writeln!(out, "    call nes_stack_pop_a").unwrap();
@@ -499,7 +507,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     }
                 }
                 writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
-                emit_update_nz(&mut out);
+                emit_update_nz(&mut out, emit_z, emit_n);
             }
 
             IrOp::WriteIo { addr, src } => {
@@ -660,6 +668,17 @@ mod tests {
         assert!(asm.contains("and a"));
         assert!(asm.contains("ld hl, $9000"));
         assert!(asm.contains("ld hl, $9010"));
+    }
+
+    #[test]
+    fn dead_nz_shadow_writes_can_be_suppressed() {
+        let asm = emit_ops_with_nz(
+            &[IrOp::Load { dst: Register::A, src: Operand::Immediate(0x12) }],
+            false,
+            true,
+        );
+        assert!(!asm.contains("ldh [nes_z_shadow], a"));
+        assert!(asm.contains("ldh [nes_n_shadow], a"));
     }
 
     #[test]
