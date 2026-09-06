@@ -72,11 +72,15 @@ nes_reset_count:           ds 1 ; $FF92
 nes_fault_hram:            ds 1 ; $FF93, $FF if nes_unimplemented is reached
 nes_last_indirect_lo:      ds 1 ; $FF94
 nes_last_indirect_hi:      ds 1 ; $FF95
+nes_oam_shadow_ready:      ds 1 ; $FF96, projected GBC OAM matches virtual NES OAM
 
-SECTION "Host native stack reserve", WRAM0[$CB00]
+SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
+nes_gbc_oam_shadow: ds $00A0
+
+SECTION "Host native stack reserve", WRAM0[$CBA0]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; Keep this disjoint from NES RAM/runtime state so HRAM can hold hot CPU bytes.
-nes_host_stack_reserve: ds $0500
+; $CBA0-$CFFF leaves 1120 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $0460
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
