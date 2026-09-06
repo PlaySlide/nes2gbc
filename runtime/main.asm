@@ -75,6 +75,9 @@ nes_gbc_vblank_isr:
     and a
     jp z, .scroll_single
 
+    ldh a, [nes_split_top_ctrl]
+    call nes_video_apply_map_select_a
+
     ldh a, [nes_split_top_x]
     ld b, a
     ldh a, [nes_view_x]
@@ -117,6 +120,9 @@ nes_gbc_stat_isr:
     push bc
 
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
+    ldh a, [nes_split_bottom_ctrl]
+    call nes_video_apply_map_select_a
+
     ldh a, [nes_split_bottom_x]
     ld b, a
     ldh a, [nes_view_x]
@@ -193,6 +199,8 @@ Start:
     ldh [nes_split_top_y], a
     ldh [nes_split_bottom_x], a
     ldh [nes_split_bottom_y], a
+    ldh [nes_split_top_ctrl], a
+    ldh [nes_split_bottom_ctrl], a
     ld a, $20
     ldh [nes_split_line], a
     xor a
