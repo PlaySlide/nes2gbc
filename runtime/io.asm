@@ -22,8 +22,8 @@ nes_ppu_read_buffer:  ds 1
 nes_dac:              ds 1
 nes_saved_lcdc:       ds 1
 nes_palette_sync_color: ds 1
-nes_sprite_attr_tmp:  ds 1
-nes_sprite_bank_tmp:  ds 1
+nes_sprite_attr_tmp_wram_pad: ds 1
+nes_sprite_bank_tmp_wram_pad: ds 1
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
 nes_host_vblank_pending: ds 1
@@ -50,11 +50,20 @@ nes_debug_bus_value:        ds 1 ; last PRG byte returned by generic CPU read
 
 SECTION "NES debug viewport", WRAM0[$C860]
 nes_view_mode:              ds 1 ; 0 TL, 1 TR, 2 BL, 3 BR, 4 center
-nes_view_x:                 ds 1
-nes_view_y:                 ds 1
+nes_view_x_wram_pad:        ds 1
+nes_view_y_wram_pad:        ds 1
 nes_view_select_prev:       ds 1
-nes_view_coord_tmp:         ds 1
-nes_view_sprite_tile_tmp:   ds 1
+nes_view_coord_tmp_wram_pad: ds 1
+nes_view_sprite_tile_tmp_wram_pad: ds 1
+
+SECTION "NES hot sprite state", HRAM[$FF88]
+nes_view_x:                ds 1
+nes_view_y:                ds 1
+nes_view_coord_tmp:        ds 1
+nes_view_sprite_tile_tmp:  ds 1
+nes_sprite_attr_tmp:       ds 1
+nes_sprite_bank_tmp:       ds 1
+nes_oam_ppuctrl_tmp:       ds 1
 
 SECTION "Host native stack reserve", WRAM0[$CB00]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
