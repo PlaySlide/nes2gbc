@@ -75,6 +75,15 @@ nes_gbc_vblank_isr:
     and a
     jp z, .scroll_single
 
+    ; Freeze the lower/playfield state for this host frame before the next
+    ; translated NES NMI is allowed to start and overwrite the capture buffer.
+    ldh a, [nes_split_bottom_x]
+    ldh [nes_split_armed_x], a
+    ldh a, [nes_split_bottom_y]
+    ldh [nes_split_armed_y], a
+    ldh a, [nes_split_bottom_ctrl]
+    ldh [nes_split_armed_ctrl], a
+
     ldh a, [nes_split_top_ctrl]
     call nes_video_apply_map_select_a
 
@@ -120,16 +129,16 @@ nes_gbc_stat_isr:
     push bc
 
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
-    ldh a, [nes_split_bottom_ctrl]
+    ldh a, [nes_split_armed_ctrl]
     call nes_video_apply_map_select_a
 
-    ldh a, [nes_split_bottom_x]
+    ldh a, [nes_split_armed_x]
     ld b, a
     ldh a, [nes_view_x]
     add b
     ldh [rSCX], a
 
-    ldh a, [nes_split_bottom_y]
+    ldh a, [nes_split_armed_y]
     ld b, a
     ldh a, [nes_view_y]
     add b
@@ -201,6 +210,9 @@ Start:
     ldh [nes_split_bottom_y], a
     ldh [nes_split_top_ctrl], a
     ldh [nes_split_bottom_ctrl], a
+    ldh [nes_split_armed_x], a
+    ldh [nes_split_armed_y], a
+    ldh [nes_split_armed_ctrl], a
     ld a, $20
     ldh [nes_split_line], a
     xor a
