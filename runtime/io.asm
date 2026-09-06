@@ -55,7 +55,7 @@ nes_view_y_wram_pad:        ds 1
 nes_view_select_prev:       ds 1
 nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
-nes_reset_count:             ds 1 ; $C866 - increments on translated NES reset entry
+nes_reset_count_wram_pad:    ds 1 ; preserves legacy WRAM layout
 
 SECTION "NES hot sprite state", HRAM[$FF88]
 nes_view_x:                ds 1
@@ -68,6 +68,10 @@ nes_oam_ppuctrl_tmp:       ds 1
 nes_oam_emit_count:        ds 1
 nes_oam_proj_y_tmp:        ds 1
 nes_oam_proj_x_tmp:        ds 1
+nes_reset_count:           ds 1 ; $FF92
+nes_fault_hram:            ds 1 ; $FF93, $FF if nes_unimplemented is reached
+nes_last_indirect_lo:      ds 1 ; $FF94
+nes_last_indirect_hi:      ds 1 ; $FF95
 
 SECTION "Host native stack reserve", WRAM0[$CB00]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
