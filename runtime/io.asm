@@ -73,6 +73,8 @@ nes_fault_hram:            ds 1 ; $FF93, $FF if nes_unimplemented is reached
 nes_last_indirect_lo:      ds 1 ; $FF94
 nes_last_indirect_hi:      ds 1 ; $FF95
 nes_oam_shadow_ready:      ds 1 ; $FF96, projected GBC OAM matches virtual NES OAM
+nes_gbc_palette_shadow:   ds $40 ; $FF97-$FFD6, 32 BG bytes + 32 OBJ bytes
+nes_palette_dirty:        ds 1   ; $FFD7
 
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
