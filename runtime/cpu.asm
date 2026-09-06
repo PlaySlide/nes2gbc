@@ -284,8 +284,9 @@ nes_restore_code_bank:
     ret
 
 nes_unimplemented:
-IF DEF(NES2GBC_DEBUG_TRACE)
     ld a, $FF
+    ldh [nes_fault_hram], a
+IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_debug_fault], a
 ENDC
     di
@@ -720,7 +721,10 @@ nes_jmp_indirect_hl:
     ; Increment only the low byte; $xxFF wraps to $xx00.
     inc l
     call nes_cpu_read
+    ldh [nes_last_indirect_hi], a
     ld h, a
+    ld a, b
+    ldh [nes_last_indirect_lo], a
     ld l, b
     ret
 
