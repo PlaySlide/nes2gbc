@@ -737,6 +737,42 @@ nes_video_update_mask:
     ldh [rLCDC], a
     ret
 
+; Apply only the NES base-nametable selection from PPUCTRL in A.
+; This is used by raster splits so the HUD and playfield may select different
+; mirrored NES nametables without disturbing global sprite-size state.
+nes_video_apply_map_select_a:
+    ld c, a
+    ldh a, [rLCDC]
+    and $F7
+    ld b, a
+
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .map_vertical
+
+    ; Horizontal mirroring: physical table comes from PPUCTRL bit 1.
+    ld a, c
+    and $02
+    jr z, .map_store
+    ld a, b
+    or $08
+    jr .map_write
+
+.map_vertical:
+    ; Vertical mirroring: physical table comes from PPUCTRL bit 0.
+    ld a, c
+    and $01
+    jr z, .map_store
+    ld a, b
+    or $08
+    jr .map_write
+
+.map_store:
+    ld a, b
+.map_write:
+    ldh [rLCDC], a
+    ret
+
 ; Reflect NES base-nametable selection and sprite size into GBC LCDC.
 nes_video_update_ctrl:
     ldh a, [rLCDC]
