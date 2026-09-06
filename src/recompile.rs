@@ -26,6 +26,67 @@ fn terminal_mnemonic(m: crate::cpu6502::Mnemonic) -> bool {
     matches!(m, Bcc|Bcs|Beq|Bmi|Bne|Bpl|Bvc|Bvs|Jmp|Jsr|Rts|Rti|Brk)
 }
 
+fn mnemonic_defines_nz(m: crate::cpu6502::Mnemonic) -> (bool, bool) {
+    use crate::cpu6502::Mnemonic::*;
+    let both = matches!(
+        m,
+        Lda|Ldx|Ldy|Tax|Tay|Txa|Tya|Tsx|
+        Inx|Iny|Dex|Dey|Inc|Dec|
+        And|Ora|Eor|Adc|Sbc|
+        Asl|Lsr|Rol|Ror|
+        Cmp|Cpx|Cpy|Bit|Pla|Plp|Rti
+    );
+    (both, both)
+}
+
+fn mnemonic_reads_nz(m: crate::cpu6502::Mnemonic) -> (bool, bool) {
+    use crate::cpu6502::Mnemonic::*;
+    match m {
+        Beq|Bne => (true, false),
+        Bmi|Bpl => (false, true),
+        // Pushed status and callees may observe either flag.
+        Php|Brk|Jsr => (true, true),
+        _ => (false, false),
+    }
+}
+
+fn local_nz_liveness(
+    instructions: &[crate::cpu6502::DecodedInstruction],
+) -> Vec<(bool, bool)> {
+    // Block exits are conservative: both flags must be correct for successor
+    // blocks, dynamic control transfers, and interrupt-safe boundaries.
+    let mut live_z = true;
+    let mut live_n = true;
+    let mut emit = vec![(true, true); instructions.len()];
+
+    for (idx, instruction) in instructions.iter().enumerate().rev() {
+        let (def_z, def_n) = mnemonic_defines_nz(instruction.def.mnemonic);
+        if def_z || def_n {
+            emit[idx] = (
+                if def_z { live_z } else { true },
+                if def_n { live_n } else { true },
+            );
+        }
+
+        if def_z {
+            live_z = false;
+        }
+        if def_n {
+            live_n = false;
+        }
+
+        let (read_z, read_n) = mnemonic_reads_nz(instruction.def.mnemonic);
+        if read_z {
+            live_z = true;
+        }
+        if read_n {
+            live_n = true;
+        }
+    }
+
+    emit
+}
+
 fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTreeSet<u16> {
     let mut selected = BTreeSet::new();
     let mut queue = VecDeque::from([reset]);
@@ -302,7 +363,8 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             writeln!(out, ":").unwrap();
         }
 
-        for instruction in &block.instructions {
+        let nz_emit = local_nz_liveness(&block.instructions);
+        for (instruction_index, instruction) in block.instructions.iter().enumerate() {
             writeln!(
                 out,
                 "    ; ${:04X}: ${:02X} {:?} {:?}",
@@ -316,7 +378,8 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             match ir::lower_instruction(*instruction) {
                 Ok(ops) => {
                     if !emit_static_control(&mut out, &ops, bank, &banks) {
-                        out.push_str(&lr35902::emit_ops(&ops));
+                        let (emit_z, emit_n) = nz_emit[instruction_index];
+                        out.push_str(&lr35902::emit_ops_with_nz(&ops, emit_z, emit_n));
                     }
                 }
                 Err(err) => {
@@ -481,6 +544,23 @@ mod tests {
         assert!(asm.contains("ld hl, $9000"));
         assert!(asm.contains("jp nes_dispatch_hl"));
         assert!(asm.contains("SECTION \"NES block 9000\", ROMX, BANK[40]"));
+    }
+
+    #[test]
+    fn dead_local_nz_writes_are_elided_before_overwrite() {
+        let mut prg = vec![0xEA; 0x8000];
+        // LDA #1 ; LDX #2 ; RTS. LDA's N/Z are overwritten by LDX before use.
+        prg[0..5].copy_from_slice(&[0xA9, 0x01, 0xA2, 0x02, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg(
+            &graph,
+            EmitOptions { reset: 0x8000, max_blocks: Some(1), debug_trace: false },
+        );
+        let lda_start = asm.find("; $8000:").unwrap();
+        let ldx_start = asm.find("; $8002:").unwrap();
+        let lda_asm = &asm[lda_start..ldx_start];
+        assert!(!lda_asm.contains("nes_z_shadow"));
+        assert!(!lda_asm.contains("nes_n_shadow"));
     }
 
     #[test]
