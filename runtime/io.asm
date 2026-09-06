@@ -64,6 +64,9 @@ nes_view_sprite_tile_tmp:  ds 1
 nes_sprite_attr_tmp:       ds 1
 nes_sprite_bank_tmp:       ds 1
 nes_oam_ppuctrl_tmp:       ds 1
+nes_oam_emit_count:        ds 1
+nes_oam_proj_y_tmp:        ds 1
+nes_oam_proj_x_tmp:        ds 1
 
 SECTION "Host native stack reserve", WRAM0[$CB00]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
