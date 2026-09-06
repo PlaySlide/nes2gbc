@@ -270,6 +270,11 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         .unwrap();
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
+        writeln!(out, "IF DEF(NES2GBC_PROFILE)").unwrap();
+        writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
+        writeln!(out, "    call nes_profile_trace_pc").unwrap();
+        writeln!(out, "ENDC").unwrap();
+
         if options.debug_trace {
             // Keep an exact current NES-PC breadcrumb even when optimized direct
             // jumps bypass the dynamic dispatcher.
