@@ -275,7 +275,7 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         .unwrap();
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
-        writeln!(out, "IF DEF(NES2GBC_PROFILE)").unwrap();
+        writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
         writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
         writeln!(out, "    call nes_profile_trace_pc").unwrap();
         writeln!(out, "ENDC").unwrap();
