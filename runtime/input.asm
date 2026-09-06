@@ -6,13 +6,13 @@ SECTION "NES input helpers", ROM0
 nes_view_apply_scroll:
     ld a, [nes_ppu_scroll_x]
     ld b, a
-    ld a, [nes_view_x]
+    ldh a, [nes_view_x]
     add b
     ldh [rSCX], a
 
     ld a, [nes_ppu_scroll_y]
     ld b, a
-    ld a, [nes_view_y]
+    ldh a, [nes_view_y]
     add b
     ldh [rSCY], a
     ret
@@ -38,34 +38,34 @@ nes_view_cycle:
 
     ; center: (256-160)/2, (240-144)/2 = 48,48
     ld a, $30
-    ld [nes_view_x], a
-    ld [nes_view_y], a
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
     jp nes_view_apply_scroll
 
 .top_right:
     ld a, $60
-    ld [nes_view_x], a
+    ldh [nes_view_x], a
     xor a
-    ld [nes_view_y], a
+    ldh [nes_view_y], a
     jp nes_view_apply_scroll
 
 .bottom_left:
     xor a
-    ld [nes_view_x], a
+    ldh [nes_view_x], a
     ld a, $60
-    ld [nes_view_y], a
+    ldh [nes_view_y], a
     jp nes_view_apply_scroll
 
 .bottom_right:
     ld a, $60
-    ld [nes_view_x], a
-    ld [nes_view_y], a
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
     jp nes_view_apply_scroll
 
 .top_left:
     xor a
-    ld [nes_view_x], a
-    ld [nes_view_y], a
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
     jp nes_view_apply_scroll
 
 
