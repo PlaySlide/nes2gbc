@@ -69,7 +69,7 @@ nes_ppu_cpu_write:
 
 .ctrl:
     ld a, e
-    ldh [nes_ppuctrl], a
+    ld [nes_ppuctrl], a
     call nes_video_update_ctrl
     ret
 .mask:
@@ -285,7 +285,7 @@ nes_ppu_map_palette_hl:
     ret
 
 nes_ppu_increment_addr:
-    ldh a, [nes_ppuctrl]
+    ld a, [nes_ppuctrl]
     bit 2, a
     jr nz, .by_32
 
