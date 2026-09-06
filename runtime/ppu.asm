@@ -325,7 +325,29 @@ nes_oam_dma:
     ld a, [nes_oamaddr]
     ld e, a
 
-.loop:
+    ; The common case is DMA from NES internal RAM (usually page $02).
+    ; Map the mirrored source once and copy all 256 bytes directly instead of
+    ; calling the generic CPU bus reader 256 times every frame.
+    ld a, h
+    cp $20
+    jr nc, .generic
+
+    and $07
+    or $C0
+    ld h, a
+    ld b, $00
+.fast_loop:
+    ld a, [hli]
+    ld [de], a
+    inc e
+    inc b
+    jr nz, .fast_loop
+    jr .dirty
+
+.generic:
+    ; Unusual DMA sources may touch PPU/APU/PRG space, so retain full bus
+    ; semantics for them.
+.generic_loop:
     push hl
     push de
     call nes_cpu_read
@@ -335,8 +357,9 @@ nes_oam_dma:
     ld [de], a
     inc e
     inc l
-    jr nz, .loop
+    jr nz, .generic_loop
 
+.dirty:
     ld a, $01
     ld [nes_oam_dirty], a
     ret
