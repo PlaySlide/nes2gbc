@@ -261,6 +261,9 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
     writeln!(out, "nes_reset:").unwrap();
+    writeln!(out, "    ld a, [nes_reset_count]").unwrap();
+    writeln!(out, "    inc a").unwrap();
+    writeln!(out, "    ld [nes_reset_count], a").unwrap();
     emit_pc_dispatch(&mut out, options.reset);
     writeln!(out).unwrap();
 
