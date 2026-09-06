@@ -115,6 +115,25 @@ fn emit_dynamic_cpu_read_hl(out: &mut String) {
     writeln!(out, ":").unwrap();
 }
 
+fn emit_dynamic_cpu_write_hl(out: &mut String) {
+    // A = value, HL = dynamic NES CPU address. Most indexed writes land in
+    // internal RAM too, so bypass the generic bus ladder for $0000-$1FFF.
+    writeln!(out, "    ld c, a").unwrap();
+    writeln!(out, "    ld a, h").unwrap();
+    writeln!(out, "    cp $20").unwrap();
+    writeln!(out, "    jr nc, :+").unwrap();
+    writeln!(out, "    and $07").unwrap();
+    writeln!(out, "    or $C0").unwrap();
+    writeln!(out, "    ld h, a").unwrap();
+    writeln!(out, "    ld a, c").unwrap();
+    writeln!(out, "    ld [hl], a").unwrap();
+    writeln!(out, "    jr :++").unwrap();
+    writeln!(out, ":").unwrap();
+    writeln!(out, "    ld a, c").unwrap();
+    writeln!(out, "    call nes_cpu_write").unwrap();
+    writeln!(out, ":").unwrap();
+}
+
 fn emit_indirect_addr(out: &mut String, src: Operand) {
     match src {
         Operand::IndexedIndirect(zp) => {
@@ -186,32 +205,40 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
         return;
     }
 
-    match dst {
+    let dynamic = match dst {
         Operand::Absolute(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+            false
         }
         Operand::AbsoluteX(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
             writeln!(out, "    ld a, [nes_x]").unwrap();
             emit_add_a_to_hl(out);
+            true
         }
         Operand::AbsoluteY(addr) => {
             writeln!(out, "    ld hl, ${addr:04X}").unwrap();
             writeln!(out, "    ld a, [nes_y]").unwrap();
             emit_add_a_to_hl(out);
+            true
         }
         Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
             emit_indirect_addr(out, dst);
+            true
         }
         _ => {
             writeln!(out, "    pop af").unwrap();
             writeln!(out, "    call nes_unimplemented_operand_write").unwrap();
             return;
         }
-    }
+    };
 
     writeln!(out, "    pop af").unwrap();
-    writeln!(out, "    call nes_cpu_write").unwrap();
+    if dynamic {
+        emit_dynamic_cpu_write_hl(out);
+    } else {
+        writeln!(out, "    call nes_cpu_write").unwrap();
+    }
 }
 fn emit_update_nz(out: &mut String) {
     writeln!(out, "    ld [nes_z_shadow], a").unwrap();
@@ -457,6 +484,19 @@ mod tests {
         assert!(asm.contains("ld h, $C0"));
         assert!(asm.contains("ld l, $10"));
         assert!(asm.contains("ld [hl], a"));
+    }
+
+    #[test]
+    fn dynamic_indexed_writes_fast_path_internal_ram() {
+        let asm = emit_ops(&[
+            IrOp::Store { src: Register::A, dst: Operand::IndirectIndexed(0x10) },
+        ]);
+        assert!(asm.contains("ld c, a"));
+        assert!(asm.contains("cp $20"));
+        assert!(asm.contains("and $07"));
+        assert!(asm.contains("or $C0"));
+        assert!(asm.contains("ld [hl], a"));
+        assert!(asm.contains("call nes_cpu_write"));
     }
 
     #[test]
