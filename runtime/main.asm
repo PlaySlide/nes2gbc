@@ -4,6 +4,9 @@ INCLUDE "hardware.inc"
 SECTION "VBlank Vector", ROM0[$0040]
     jp nes_gbc_vblank_isr
 
+SECTION "STAT Vector", ROM0[$0048]
+    jp nes_gbc_stat_isr
+
 SECTION "Header Entry", ROM0[$0100]
     nop
     jp Start
@@ -56,6 +59,37 @@ nes_gbc_vblank_isr:
     jr z, .scroll_done
     xor a
     ldh [nes_scroll_dirty], a
+
+    ; If the translated NES NMI produced two complete scroll pairs, preserve
+    ; the first for the fixed top/HUD region and switch to the second with a
+    ; one-shot GBC LYC interrupt. Otherwise use the normal single scroll.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .scroll_single
+
+    ldh a, [nes_split_top_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    ldh [rSCX], a
+    ldh a, [nes_split_top_y]
+    ld b, a
+    ldh a, [nes_view_y]
+    add b
+    ldh [rSCY], a
+
+    ldh a, [nes_split_line]
+    ldh [rLYC], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
+    jr .scroll_done
+
+.scroll_single:
+    ; Disable any stale one-shot raster source and apply one coherent pair.
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
     call nes_view_apply_scroll
 .scroll_done:
 
@@ -67,6 +101,32 @@ nes_gbc_vblank_isr:
 .done:
     pop hl
     pop de
+    pop bc
+    pop af
+    reti
+
+nes_gbc_stat_isr:
+    push af
+    push bc
+
+    ; One-shot lower/playfield scroll for a captured two-state NES raster split.
+    ldh a, [nes_split_bottom_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    ldh [rSCX], a
+
+    ldh a, [nes_split_bottom_y]
+    ld b, a
+    ldh a, [nes_view_y]
+    add b
+    ldh [rSCY], a
+
+    ; Disable the LYC source until the next VBlank arms another split.
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+
     pop bc
     pop af
     reti
@@ -120,6 +180,15 @@ Start:
     ldh [nes_palette_dirty], a
     ldh [nes_scroll_dirty], a
     ldh [nes_ctrl_dirty], a
+    ldh [nes_scroll_pair_count], a
+    ldh [nes_split_active], a
+    ldh [nes_split_top_x], a
+    ldh [nes_split_top_y], a
+    ldh [nes_split_bottom_x], a
+    ldh [nes_split_bottom_y], a
+    ld a, $20
+    ldh [nes_split_line], a
+    xor a
 
     ld hl, nes_gbc_palette_shadow
     ld b, $40
@@ -148,7 +217,10 @@ Start:
     ; translated NES interrupt is still delivered at compiler-selected safe points.
     xor a
     ldh [rIF], a
-    ld a, $01
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    ld a, $03
     ld [rIE], a
     ei
     jp nes_reset
