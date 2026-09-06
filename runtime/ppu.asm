@@ -332,6 +332,7 @@ nes_oam_dma:
     cp $20
     jr nc, .generic
 
+    PROFILE_INC nes_profile_oam_dma_fast
     and $07
     or $C0
     ld h, a
@@ -345,6 +346,7 @@ nes_oam_dma:
     jr .dirty
 
 .generic:
+    PROFILE_INC nes_profile_oam_dma_generic
     ; Unusual DMA sources may touch PPU/APU/PRG space, so retain full bus
     ; semantics for them.
 .generic_loop:
