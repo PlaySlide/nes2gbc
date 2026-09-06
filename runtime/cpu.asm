@@ -348,17 +348,20 @@ ENDC
     jr .unsupported
 
 .ram:
+    PROFILE_INC nes_profile_read_ram
     call nes_map_cpu_addr_hl
     ld a, [hl]
     ret
 
 .ppu:
+    PROFILE_INC nes_profile_read_ppu
     ld a, l
     and $07
     ld l, a
     jp nes_ppu_cpu_read
 
 .prg:
+    PROFILE_INC nes_profile_read_prg
     ; Mirrored 16 KiB PRG is cached in WRAMX banks 2-5 at startup.
     ld a, [nes_prg_16k_mirror]
     and a
@@ -406,18 +409,22 @@ ENDC
     ret
 
 .read_4011:
+    PROFILE_INC nes_profile_read_io
     ld a, [nes_dac]
     ret
 
 .read_4016:
+    PROFILE_INC nes_profile_read_io
     jp nes_controller_read
 
 .read_4017:
+    PROFILE_INC nes_profile_read_io
     ; No second controller yet.
     ld a, $01
     ret
 
 .unsupported:
+    PROFILE_INC nes_profile_read_other
     xor a
     ret
 
@@ -445,18 +452,21 @@ nes_cpu_write:
     jr .unsupported
 
 .ram:
+    PROFILE_INC nes_profile_write_ram
     call nes_map_cpu_addr_hl
     ld a, e
     ld [hl], a
     ret
 
 .ppu:
+    PROFILE_INC nes_profile_write_ppu
     ld a, l
     and $07
     ld l, a
     jp nes_ppu_cpu_write
 
 .mapper:
+    PROFILE_INC nes_profile_write_mapper
     ; CNROM writes anywhere in $8000-$FFFF select the 8 KiB CHR bank.
     ld a, [nes_mapper]
     cp $03
@@ -473,19 +483,23 @@ nes_cpu_write:
     ret
 
 .write_4011:
+    PROFILE_INC nes_profile_write_io
     ld a, e
     ld [nes_dac], a
     ret
 
 .write_4014:
+    PROFILE_INC nes_profile_write_io
     ld a, e
     jp nes_oam_dma
 
 .write_4016:
+    PROFILE_INC nes_profile_write_io
     ld a, e
     jp nes_controller_write
 
 .unsupported:
+    PROFILE_INC nes_profile_write_other
     ret
 
 
