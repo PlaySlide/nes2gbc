@@ -60,11 +60,12 @@ Start:
     ld [nes_sp], a
     ld a, $24
     ld [nes_p], a
-    ; Initial P=$24 has Z=0 and N=0.
+    ; Initial P=$24 has C=0, Z=0, N=0.
     ld a, $01
     ld [nes_z_shadow], a
     xor a
     ld [nes_n_shadow], a
+    ld [nes_c_shadow], a
 
     call nes_generated_init
     call nes_video_init
