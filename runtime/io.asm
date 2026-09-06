@@ -55,6 +55,7 @@ nes_view_y_wram_pad:        ds 1
 nes_view_select_prev:       ds 1
 nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
+nes_reset_count:             ds 1 ; $C866 - increments on translated NES reset entry
 
 SECTION "NES hot sprite state", HRAM[$FF88]
 nes_view_x:                ds 1
