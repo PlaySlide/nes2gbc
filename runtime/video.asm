@@ -503,9 +503,9 @@ nes_video_sync_oam:
     ld c, a
     ldh a, [nes_view_coord_tmp]
     sub c
-    jr c, .next_source
+    jp c, .next_source
     cp $A0
-    jr nc, .next_source
+    jp nc, .next_source
     add $08
     ldh [nes_oam_proj_x_tmp], a
 
