@@ -164,6 +164,9 @@ fn emit_indirect_addr(out: &mut String, src: Operand) {
 fn emit_load_operand_to_a(out: &mut String, src: Operand) {
     match src {
         Operand::Immediate(v) => { writeln!(out, "    ld a, ${v:02X}").unwrap(); }
+        Operand::ZeroPage(zp) => {
+            writeln!(out, "    ld a, [${:04X}]", NES_RAM_BASE + zp as u16).unwrap();
+        }
         _ => {
             if emit_effective_addr(out, src) {
                 writeln!(out, "    ld a, [hl]").unwrap();
@@ -197,6 +200,11 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
 }
 
 fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
+    if let Operand::ZeroPage(zp) = dst {
+        writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
+        return;
+    }
+
     writeln!(out, "    push af").unwrap();
 
     if emit_effective_addr(out, dst) {
@@ -484,6 +492,17 @@ mod tests {
         assert!(asm.contains("ld h, $C0"));
         assert!(asm.contains("ld l, $10"));
         assert!(asm.contains("ld [hl], a"));
+    }
+
+    #[test]
+    fn zero_page_load_store_use_direct_wram_without_hl_setup() {
+        let asm = emit_ops(&[
+            IrOp::Load { dst: Register::A, src: Operand::ZeroPage(0x12) },
+            IrOp::Store { src: Register::A, dst: Operand::ZeroPage(0x34) },
+        ]);
+        assert!(asm.contains("ld a, [$C012]"));
+        assert!(asm.contains("ld [$C034], a"));
+        assert!(!asm.contains("ld h, $C0"));
     }
 
     #[test]
