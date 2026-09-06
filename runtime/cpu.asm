@@ -786,6 +786,9 @@ nes_poll_nmi_hl:
 
     ld a, $01
     ld [nes_nmi_active], a
+    xor a
+    ldh [nes_scroll_pair_count], a
+    ldh [nes_split_active], a
     PROFILE_INC nes_profile_nmi
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
