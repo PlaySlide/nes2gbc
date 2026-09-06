@@ -40,6 +40,25 @@ nes_gbc_vblank_isr:
     call nes_video_sync_palette_shadow
 .palette_done:
 
+    ; Commit display-control and scroll state only on a host frame boundary.
+    ; This prevents partial $2005 pairs / mid-scan PPUCTRL writes from tearing
+    ; the entire GBC viewport.
+    ldh a, [nes_ctrl_dirty]
+    and a
+    jr z, .ctrl_done
+    xor a
+    ldh [nes_ctrl_dirty], a
+    call nes_video_update_ctrl
+.ctrl_done:
+
+    ldh a, [nes_scroll_dirty]
+    and a
+    jr z, .scroll_done
+    xor a
+    ldh [nes_scroll_dirty], a
+    call nes_view_apply_scroll
+.scroll_done:
+
     ld a, [nes_nmi_active]
     and a
     jr nz, .done
@@ -99,6 +118,8 @@ Start:
     ldh [nes_last_indirect_hi], a
     ldh [nes_oam_shadow_ready], a
     ldh [nes_palette_dirty], a
+    ldh [nes_scroll_dirty], a
+    ldh [nes_ctrl_dirty], a
 
     ld hl, nes_gbc_palette_shadow
     ld b, $40
