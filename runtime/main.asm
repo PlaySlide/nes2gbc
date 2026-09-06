@@ -46,6 +46,11 @@ Start:
     ldh [rKEY1], a
     stop
 
+    ; Match NES overlap ordering: in CGB mode, OPRI=0 gives priority by
+    ; OAM index rather than DMG-style X-coordinate priority.
+    xor a
+    ldh [rOPRI], a
+
     ; Canonical power-on state used by the recompiled 6502.
     xor a
     ldh [nes_a], a
