@@ -68,6 +68,21 @@ nes_ppu_cpu_write:
     ret
 
 .ctrl:
+    ; NES background pattern-table select (PPUCTRL bit 4) is global. CGB
+    ; represents that selection per tile using attribute bit 3, so when the
+    ; NES global bit changes every existing tile attribute must flip with it.
+    ld a, [nes_ppuctrl]
+    xor e
+    and $10
+    jr z, .ctrl_store
+
+    ld a, e
+    ld [nes_ppuctrl], a
+    call nes_video_toggle_bg_pattern_bank
+    call nes_video_update_ctrl
+    ret
+
+.ctrl_store:
     ld a, e
     ld [nes_ppuctrl], a
     call nes_video_update_ctrl
