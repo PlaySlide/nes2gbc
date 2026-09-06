@@ -196,12 +196,18 @@ nes_video_sync_nametable_write:
     ld a, c
     ld [de], a
 
-    ; CGB attribute: palette 0, VRAM bank follows NES BG pattern-table select.
+    ; Preserve the palette selected by the NES attribute table. A nametable
+    ; tile write changes the tile ID, not its 2-bit background palette.
+    ; Only refresh CGB attribute bit 3, which mirrors global PPUCTRL.4.
     ld a, $01
     ldh [rVBK], a
+    ld a, [de]
+    and $07
+    ld b, a
     ld a, [nes_ppuctrl]
     and $10
     srl a
+    or b
     ld [de], a
 
     xor a
