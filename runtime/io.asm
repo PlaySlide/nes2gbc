@@ -55,6 +55,11 @@ nes_view_select_prev:       ds 1
 nes_view_coord_tmp:         ds 1
 nes_view_sprite_tile_tmp:   ds 1
 
+SECTION "Host native stack reserve", WRAM0[$CB00]
+; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
+; Keep this disjoint from NES RAM/runtime state so HRAM can hold hot CPU bytes.
+nes_host_stack_reserve: ds $0500
+
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
 
