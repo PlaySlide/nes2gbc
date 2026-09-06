@@ -18,6 +18,16 @@ nes_profile_palette_sync:    ds 4 ; C8A0
 nes_profile_oam_sync:        ds 4 ; C8A4
 nes_profile_nmi:             ds 4 ; C8A8
 nes_profile_chr_upload:      ds 4 ; C8AC
+nes_profile_read_ram:        ds 4 ; C8B0
+nes_profile_read_ppu:        ds 4 ; C8B4
+nes_profile_read_io:         ds 4 ; C8B8
+nes_profile_read_prg:        ds 4 ; C8BC
+nes_profile_read_other:      ds 4 ; C8C0
+nes_profile_write_ram:       ds 4 ; C8C4
+nes_profile_write_ppu:       ds 4 ; C8C8
+nes_profile_write_io:        ds 4 ; C8CC
+nes_profile_write_mapper:    ds 4 ; C8D0
+nes_profile_write_other:     ds 4 ; C8D4
 nes_profile_end:
 
 ; Inline counter increment. Preserves AF and HL; leaves BC/DE untouched.
@@ -50,6 +60,7 @@ IF DEF(NES2GBC_PROFILE)
     ld hl, nes_profile_dispatch
     ld bc, nes_profile_end - nes_profile_dispatch
 .clear:
+    xor a
     ld [hli], a
     dec bc
     ld a, b
