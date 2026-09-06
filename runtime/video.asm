@@ -461,14 +461,13 @@ nes_rgb555_table:
 ; Project up to 40 visible NES sprites into CGB OAM.
 ; Scan all 64 source entries so composite objects are not chopped merely
 ; because one of their pieces lives beyond NES OAM entry 39.
-nes_video_sync_oam:
-    PROFILE_INC nes_profile_oam_sync
+nes_video_build_oam_shadow:
     ; This routine is only called from the host VBlank ISR now, so no extra
     ; wait/poll is necessary.
     ld a, [nes_ppuctrl]
     ldh [nes_oam_ppuctrl_tmp], a
     ld hl, nes_oam_ram
-    ld de, $FE00
+    ld de, nes_gbc_oam_shadow
     ld b, 64
     xor a
     ldh [nes_oam_emit_count], a
@@ -581,7 +580,7 @@ nes_video_sync_oam:
     inc a
     ldh [nes_oam_emit_count], a
     cp 40
-    ret z
+    jp z, .ready
 
 .next_source:
     dec b
@@ -602,7 +601,7 @@ nes_video_sync_oam:
     ld c, a
     ld a, 40
     sub c
-    ret z
+    jr z, .ready
     ld b, a
     xor a
 .clear_loop:
@@ -616,6 +615,25 @@ nes_video_sync_oam:
     inc de
     dec b
     jr nz, .clear_loop
+
+.ready:
+    ld a, $01
+    ldh [nes_oam_shadow_ready], a
+    ret
+
+; Copy a fully projected 160-byte shadow into hardware OAM. This routine is
+; intentionally tiny so it comfortably completes during host VBlank.
+nes_video_sync_oam:
+    PROFILE_INC nes_profile_oam_sync
+    ld hl, nes_gbc_oam_shadow
+    ld de, $FE00
+    ld b, $A0
+.copy_shadow:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .copy_shadow
     ret
 
 ; Reflect PPUMASK BG/sprite visibility into LCDC bits 0/1.
