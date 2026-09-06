@@ -748,7 +748,7 @@ nes_brk_hl:
 ; RTI pops P then PC low/high. Output HL = exact restored PC.
 nes_rti_pop_hl:
     xor a
-    ld [nes_nmi_active], a
+    ldh [nes_nmi_active], a
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -763,25 +763,25 @@ nes_rti_pop_hl:
 ; safe points. Input HL = NES PC to resume if interrupted.
 ; Output A = 1 when caller should jump to the translated NMI handler.
 nes_poll_nmi_hl:
-    ld a, [nes_host_vblank_pending]
+    ldh a, [nes_host_vblank_pending]
     and a
     ret z
 
     ; Consume the host event. If NES NMI is disabled or already active, this
     ; frame is intentionally dropped instead of creating back-to-back NMIs.
     xor a
-    ld [nes_host_vblank_pending], a
+    ldh [nes_host_vblank_pending], a
 
-    ld a, [nes_ppuctrl]
+    ldh a, [nes_ppuctrl]
     bit 7, a
     jr z, .no_nmi
 
-    ld a, [nes_nmi_active]
+    ldh a, [nes_nmi_active]
     and a
     jr nz, .no_nmi
 
     ld a, $01
-    ld [nes_nmi_active], a
+    ldh [nes_nmi_active], a
     PROFILE_INC nes_profile_nmi
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
