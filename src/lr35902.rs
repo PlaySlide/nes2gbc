@@ -470,16 +470,50 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             }
 
             IrOp::ReadIo { addr, dst } => {
-                writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                writeln!(out, "    call nes_cpu_read").unwrap();
+                match addr {
+                    0x2000..=0x3FFF => {
+                        writeln!(out, "    ld l, ${:02X}", addr as u8 & 0x07).unwrap();
+                        writeln!(out, "    call nes_ppu_cpu_read").unwrap();
+                    }
+                    0x4011 => {
+                        writeln!(out, "    ld a, [nes_dac]").unwrap();
+                    }
+                    0x4016 => {
+                        writeln!(out, "    call nes_controller_read").unwrap();
+                    }
+                    0x4017 => {
+                        writeln!(out, "    ld a, $01").unwrap();
+                    }
+                    _ => {
+                        // Unsupported APU/status reads currently return zero.
+                        writeln!(out, "    xor a").unwrap();
+                    }
+                }
                 writeln!(out, "    ld [{}], a", state_label(dst)).unwrap();
                 emit_update_nz(&mut out);
             }
 
             IrOp::WriteIo { addr, src } => {
-                writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                 writeln!(out, "    ld a, [{}]", state_label(src)).unwrap();
-                writeln!(out, "    call nes_cpu_write").unwrap();
+                match addr {
+                    0x2000..=0x3FFF => {
+                        writeln!(out, "    ld e, a").unwrap();
+                        writeln!(out, "    ld l, ${:02X}", addr as u8 & 0x07).unwrap();
+                        writeln!(out, "    call nes_ppu_cpu_write").unwrap();
+                    }
+                    0x4011 => {
+                        writeln!(out, "    ld [nes_dac], a").unwrap();
+                    }
+                    0x4014 => {
+                        writeln!(out, "    call nes_oam_dma").unwrap();
+                    }
+                    0x4016 => {
+                        writeln!(out, "    call nes_controller_write").unwrap();
+                    }
+                    _ => {
+                        // Other fixed APU writes are currently no-ops.
+                    }
+                }
             }
 
             IrOp::Nop => {}
@@ -502,6 +536,22 @@ mod tests {
         assert!(asm.contains("ld a, [$C010]"));
         assert!(asm.contains("ld [$C011], a"));
         assert!(!asm.contains("ld h, $C0"));
+    }
+
+    #[test]
+    fn fixed_io_accesses_bypass_generic_cpu_bus() {
+        let asm = emit_ops(&[
+            IrOp::ReadIo { addr: 0x2002, dst: Register::A },
+            IrOp::WriteIo { addr: 0x2007, src: Register::A },
+            IrOp::ReadIo { addr: 0x4016, dst: Register::A },
+            IrOp::WriteIo { addr: 0x4014, src: Register::A },
+        ]);
+        assert!(asm.contains("call nes_ppu_cpu_read"));
+        assert!(asm.contains("call nes_ppu_cpu_write"));
+        assert!(asm.contains("call nes_controller_read"));
+        assert!(asm.contains("call nes_oam_dma"));
+        assert!(!asm.contains("call nes_cpu_read"));
+        assert!(!asm.contains("call nes_cpu_write"));
     }
 
     #[test]
