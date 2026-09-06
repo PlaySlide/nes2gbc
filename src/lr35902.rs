@@ -270,6 +270,10 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
         match *op {
             IrOp::SetFlag { flag, value } => {
                 match flag {
+                    Flag::Carry => {
+                        writeln!(out, "    ld a, ${:02X}", if value { 0x01 } else { 0x00 }).unwrap();
+                        writeln!(out, "    ld [nes_c_shadow], a").unwrap();
+                    }
                     Flag::Zero => {
                         writeln!(out, "    ld a, ${:02X}", if value { 0x00 } else { 0x01 }).unwrap();
                         writeln!(out, "    ld [nes_z_shadow], a").unwrap();
@@ -413,6 +417,11 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
 
             IrOp::Branch { flag, when, target } => {
                 match flag {
+                    Flag::Carry => {
+                        writeln!(out, "    ld a, [nes_c_shadow]").unwrap();
+                        writeln!(out, "    and a").unwrap();
+                        writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    }
                     Flag::Zero => {
                         writeln!(out, "    ld a, [nes_z_shadow]").unwrap();
                         writeln!(out, "    and a").unwrap();
@@ -625,6 +634,18 @@ mod tests {
         assert!(asm.contains("add l"));
         assert!(asm.contains("ld l, a"));
         assert!(!asm.contains("call nes_add_a_to_hl"));
+    }
+
+    #[test]
+    fn carry_set_clear_and_branches_use_lazy_shadow() {
+        let asm = emit_ops(&[
+            IrOp::SetFlag { flag: Flag::Carry, value: true },
+            IrOp::SetFlag { flag: Flag::Carry, value: false },
+            IrOp::Branch { flag: Flag::Carry, when: true, target: 0x9000 },
+        ]);
+        assert!(asm.contains("ld [nes_c_shadow], a"));
+        assert!(asm.contains("ld a, [nes_c_shadow]"));
+        assert!(!asm.contains("and $01"));
     }
 
     #[test]
