@@ -224,9 +224,25 @@ Start:
     ld [nes_oam_dirty], a
     ld [nes_current_code_bank], a
     ld [nes_dispatch_cache_valid], a
+    ; Follow camera is the default. Start centered until the first OAM
+    ; projection acquires a plausible player sprite.
+    ld a, $04
     ld [nes_view_mode], a
+    ld a, $30
     ldh [nes_view_x], a
     ldh [nes_view_y], a
+    ld a, $01
+    ld [nes_view_follow_enabled], a
+    xor a
+    ld [nes_view_follow_valid], a
+    ld [nes_view_follow_was_valid], a
+    ld [nes_view_follow_x], a
+    ld [nes_view_follow_y], a
+    ld [nes_view_follow_ref_x], a
+    ld [nes_view_follow_ref_y], a
+    ld [nes_view_follow_best_dist], a
+    ld [nes_view_follow_candidate_x], a
+    ld [nes_view_follow_candidate_y], a
     ld [nes_view_select_prev], a
     ldh [nes_reset_count], a
     ldh [nes_fault_hram], a
