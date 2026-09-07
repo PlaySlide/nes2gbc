@@ -56,6 +56,16 @@ nes_view_select_prev:       ds 1
 nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
 nes_reset_count_wram_pad:    ds 1 ; preserves legacy WRAM layout
+nes_view_follow_enabled:     ds 1 ; 1=automatic player-follow camera, 0=manual
+nes_view_follow_valid:       ds 1
+nes_view_follow_was_valid:   ds 1
+nes_view_follow_x:           ds 1 ; tracked NES sprite anchor
+nes_view_follow_y:           ds 1
+nes_view_follow_ref_x:       ds 1
+nes_view_follow_ref_y:       ds 1
+nes_view_follow_best_dist:   ds 1
+nes_view_follow_candidate_x: ds 1
+nes_view_follow_candidate_y: ds 1
 
 SECTION "NES hot sprite state", HRAM[$FF88]
 nes_view_x:                ds 1
