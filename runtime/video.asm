@@ -171,13 +171,12 @@ nes_video_flush_nametable_queue_atomic:
 .diag_display_store:
     ld [nes_ntdiag_display_map], a
 
-    ; This routine is called from host VBlank. Save the exact display control,
-    ; turn LCD off while it is legal, and make all queued VRAM writes invisible.
-    ldh a, [rLCDC]
-    ld [nes_saved_lcdc], a
-    and $7F
-    ldh [rLCDC], a
-
+    ; This routine is called from host VBlank, but a completed NES update may
+    ; still take longer than the GBC VBlank window. Keep LCD timing running:
+    ; nes_video_sync_nametable_write waits out mode 3 before each VRAM access.
+    ; Disabling/re-enabling LCD here resets LY and can make the SMB sprite-0
+    ; HUD/playfield STAT split miss an entire frame, producing the repeating
+    ; full-screen flash/fixed-background pattern.
     ld a, $01
     ldh [rSVBK], a
     ld de, nes_nametable_queue
@@ -308,8 +307,6 @@ nes_video_flush_nametable_queue_atomic:
 
     xor a
     ldh [rVBK], a
-    ld a, [nes_saved_lcdc]
-    ldh [rLCDC], a
     ret
 
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
