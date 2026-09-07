@@ -243,6 +243,7 @@ Start:
     ld [nes_view_follow_best_dist], a
     ld [nes_view_follow_candidate_x], a
     ld [nes_view_follow_candidate_y], a
+    ld [nes_view_follow_slot], a
     ld [nes_view_select_prev], a
     ldh [nes_reset_count], a
     ldh [nes_fault_hram], a
