@@ -451,8 +451,11 @@ ENDC
 
 .read_4017:
     PROFILE_INC nes_profile_read_io
-    ; No second controller yet.
-    ld a, $01
+    ; No second controller is connected yet. During the first eight serial
+    ; joypad reads an unpressed controller must contribute zero button bits.
+    ; Returning $01 here made games such as SMB see controller 2 as $FF
+    ; (every button held), which masks Start/Select from controller 1.
+    xor a
     ret
 
 .unsupported:
