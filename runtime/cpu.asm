@@ -786,14 +786,6 @@ nes_poll_nmi_hl:
 
     ld a, $01
     ld [nes_nmi_active], a
-
-    ; Start a fresh atomic nametable transaction for this translated NMI.
-    xor a
-    ld [nes_nametable_queue_ptr_lo], a
-    ld [nes_nametable_queue_overflow], a
-    ld a, $D8
-    ld [nes_nametable_queue_ptr_hi], a
-
     xor a
     ldh [nes_scroll_pair_count], a
     ; Once a two-state raster split has been proven, keep it latched. Some
