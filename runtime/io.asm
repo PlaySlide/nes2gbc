@@ -117,6 +117,8 @@ nes_seam_top_ctrl:         ds 1   ; $FFEE, logical nametable above seam
 nes_seam_bottom_ctrl:      ds 1   ; $FFEF, logical nametable below seam
 nes_seam_top_y:            ds 1   ; $FFF0, GBC SCY before seam
 nes_seam_bottom_y:         ds 1   ; $FFF1, GBC SCY after seam (+16 compensation)
+nes_fault_pc_lo:           ds 1   ; $FFF2, exact 6502 PC for generated unimplemented block
+nes_fault_pc_hi:           ds 1   ; $FFF3
 
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
