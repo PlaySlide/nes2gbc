@@ -10,10 +10,32 @@ nes_view_apply_scroll:
     add b
     ldh [rSCX], a
 
+    ; The GBC crop is an offset inside the 256x240 NES viewport, not inside a
+    ; 256x256 CGB map. If NES scroll Y + crop Y reaches 240, the crop begins in
+    ; the vertically adjacent logical NES nametable. Select that table and
+    ; subtract 240 instead of wrapping through CGB rows 30-31 back into the
+    ; top of the same map.
     ld a, [nes_ppu_scroll_y]
     ld b, a
     ldh a, [nes_view_y]
     add b
+    ld d, a
+    jr c, .vertical_wrap
+    cp $F0
+    jr nc, .vertical_wrap
+
+    ld a, [nes_ppuctrl]
+    call nes_video_apply_map_select_a
+    ld a, d
+    ldh [rSCY], a
+    ret
+
+.vertical_wrap:
+    ld a, [nes_ppuctrl]
+    xor $02
+    call nes_video_apply_map_select_a
+    ld a, d
+    add $10
     ldh [rSCY], a
     ret
 
