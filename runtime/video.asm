@@ -680,8 +680,9 @@ nes_video_sync_oam:
 
 ; NES PPUCTRL bit 4 globally selects BG pattern table $0000/$1000.
 ; Our CGB representation stores that selection in each tile attribute's VRAM
-; bank bit. Flip bit 3 across both 32x32 maps whenever the NES global select
-; changes so old nametable cells cannot retain a stale pattern-table bank.
+; bank bit. Synchronize bit 3 deterministically across both maps whenever the
+; NES global select changes. Do not XOR: a single stale/mismatched attribute
+; would otherwise remain permanently opposite to the rest of the map.
 nes_video_toggle_bg_pattern_bank:
     ldh a, [rLCDC]
     bit 7, a
@@ -697,18 +698,25 @@ nes_video_toggle_bg_pattern_bank:
     and $7F
     ldh [rLCDC], a
 
+    ; Desired CGB VRAM-bank attribute: NES PPUCTRL.4 -> CGB attr.3.
+    ld a, [nes_ppuctrl]
+    and $10
+    srl a
+    ld e, a
+
     ld a, $01
     ldh [rVBK], a
     ld hl, $9800
     ld bc, $0800
-.toggle_loop:
+.sync_loop:
     ld a, [hl]
-    xor $08
+    and $F7
+    or e
     ld [hli], a
     dec bc
     ld a, b
     or c
-    jr nz, .toggle_loop
+    jr nz, .sync_loop
 
     xor a
     ldh [rVBK], a
