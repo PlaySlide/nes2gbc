@@ -144,6 +144,19 @@ nes_video_flush_nametable_queue_atomic:
     ret z
 
 .has_entries:
+    ; Start a fresh diagnostic summary for exactly the transaction that is
+    ; about to become visible.
+    xor a
+    ld [nes_ntdiag_tile_count], a
+    ld [nes_ntdiag_phys_mask], a
+    ld [nes_ntdiag_max_col], a
+    ld [nes_ntdiag_first_hi], a
+    ld [nes_ntdiag_first_lo], a
+    ld [nes_ntdiag_last_hi], a
+    ld [nes_ntdiag_last_lo], a
+    ld a, $FF
+    ld [nes_ntdiag_min_col], a
+
     ; This routine is called from host VBlank. Save the exact display control,
     ; turn LCD off while it is legal, and make all queued VRAM writes invisible.
     ldh a, [rLCDC]
@@ -172,6 +185,65 @@ nes_video_flush_nametable_queue_atomic:
     inc de
     ld h, a
 
+    ; Record only tile-cell destinations; attribute writes use a different
+    ; address geometry and would muddy the column range.
+    ld a, h
+    and $03
+    cp $03
+    jr c, .diag_tile
+    ld a, l
+    cp $C0
+    jr nc, .diag_done
+
+.diag_tile:
+    ld a, [nes_ntdiag_tile_count]
+    and a
+    jr nz, .diag_not_first
+    ld a, h
+    ld [nes_ntdiag_first_hi], a
+    ld a, l
+    ld [nes_ntdiag_first_lo], a
+.diag_not_first:
+    ld a, [nes_ntdiag_tile_count]
+    inc a
+    ld [nes_ntdiag_tile_count], a
+
+    ld a, h
+    ld [nes_ntdiag_last_hi], a
+    ld a, l
+    ld [nes_ntdiag_last_lo], a
+
+    ; Which physical nametable(s) received tile writes?
+    ld a, h
+    and $04
+    jr z, .diag_phys0
+    ld a, [nes_ntdiag_phys_mask]
+    or $02
+    ld [nes_ntdiag_phys_mask], a
+    jr .diag_col
+.diag_phys0:
+    ld a, [nes_ntdiag_phys_mask]
+    or $01
+    ld [nes_ntdiag_phys_mask], a
+
+.diag_col:
+    ld a, l
+    and $1F
+    ld b, a
+    ld a, [nes_ntdiag_min_col]
+    cp b
+    jr c, .diag_min_done
+    jr z, .diag_min_done
+    ld a, b
+    ld [nes_ntdiag_min_col], a
+.diag_min_done:
+    ld a, [nes_ntdiag_max_col]
+    cp b
+    jr nc, .diag_done
+    ld a, b
+    ld [nes_ntdiag_max_col], a
+
+.diag_done:
     push de
     ld a, [hl]
     call nes_video_sync_nametable_write
@@ -179,6 +251,10 @@ nes_video_flush_nametable_queue_atomic:
     jr .loop
 
 .done:
+    ld a, [nes_ntdiag_commit_serial]
+    inc a
+    ld [nes_ntdiag_commit_serial], a
+
     ; Reset transaction before re-enabling scanout.
     xor a
     ld [nes_nametable_queue_ptr_lo], a
