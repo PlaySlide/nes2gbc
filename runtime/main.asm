@@ -293,6 +293,7 @@ Start:
     ldh [nes_c_shadow], a
 
     call nes_generated_init
+    call nes_generated_follow_init
     call nes_video_init
     ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
     call nes_profile_reset
