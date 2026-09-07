@@ -54,6 +54,7 @@ nes_debug_bus_value:        ds 1 ; last PRG byte returned by generic CPU read
 nes_nametable_queue_ptr_lo: ds 1 ; next byte in $D800-$DFFF staging queue
 nes_nametable_queue_ptr_hi: ds 1
 nes_nametable_queue_overflow: ds 1
+nes_mask_dirty:             ds 1 ; $C85C defer PPUMASK hardware publication
 
 SECTION "NES debug viewport", WRAM0[$C860]
 nes_view_mode:              ds 1 ; 0 TL, 1 TR, 2 BL, 3 BR, 4 center
