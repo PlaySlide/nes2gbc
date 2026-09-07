@@ -1,5 +1,20 @@
 ; NES mapper / PPU / APU virtual state.
 
+; Four-frame renderer diagnostics.  The 16-byte ring at C800 keeps four
+; 4-byte snapshots, oldest/newest determined by nes_diag_ring_index.
+; Event bits describe work that occurred during the host frame just completed.
+DEF NES_DIAG_EVENT_COMMIT          EQU $01
+DEF NES_DIAG_EVENT_QUEUE_FLUSH     EQU $02
+DEF NES_DIAG_EVENT_FULL_REBUILD    EQU $04
+DEF NES_DIAG_EVENT_CATCHUP         EQU $08
+DEF NES_DIAG_EVENT_STAT_SPLIT      EQU $10
+DEF NES_DIAG_EVENT_BG_BANK_REWRITE EQU $20
+DEF NES_DIAG_EVENT_PALETTE_COMMIT  EQU $40
+DEF NES_DIAG_EVENT_CTRL_COMMIT     EQU $80
+
+SECTION "NES renderer diagnostic ring", WRAM0[$C800]
+nes_diag_ring: ds $10
+
 SECTION "NES cartridge state", WRAM0[$C810]
 nes_mapper:           ds 1
 nes_mirroring:        ds 1
@@ -110,6 +125,9 @@ nes_hstitch_copy_skip:      ds 1
 nes_hstitch_target_key:     ds 1 ; C8FA target key for small multi-tile catch-up
 nes_hstitch_full_rebuilds:  ds 1 ; C8FB diagnostic counter
 nes_hstitch_catchups:       ds 1 ; C8FC diagnostic counter
+nes_diag_frame_serial:      ds 1 ; C8FD, increments every host VBlank
+nes_diag_ring_index:        ds 1 ; C8FE, next 4-byte ring slot (0-3)
+nes_diag_event_flags:       ds 1 ; C8FF, events accumulated for current host frame
 
 SECTION "NES hot sprite state", HRAM[$FF88]
 nes_view_x:                ds 1
