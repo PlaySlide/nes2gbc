@@ -173,8 +173,41 @@ nes_ppu_cpu_write:
     ret
 
 .scroll_capture_bottom:
-    ; Second pair confirms a real raster split. Commit the pending first pair
-    ; atomically as the stable HUD/top state, and this pair as playfield/bottom.
+    ; Two $2005 pairs in one NMI do NOT automatically imply a raster split.
+    ; Ice Climber writes its ordinary scroll pair twice: once when its PPU
+    ; update buffer closes and again explicitly before leaving NMI. Treat an
+    ; identical X/Y/PPUCTRL tuple as a duplicate, not as a HUD/playfield split.
+    ldh a, [nes_split_pending_x]
+    ld b, a
+    ld a, [nes_ppu_scroll_x]
+    cp b
+    jr nz, .scroll_confirm_split
+
+    ldh a, [nes_split_pending_y]
+    ld b, a
+    ld a, [nes_ppu_scroll_y]
+    cp b
+    jr nz, .scroll_confirm_split
+
+    ldh a, [nes_split_pending_ctrl]
+    ld b, a
+    ld a, [nes_ppuctrl]
+    cp b
+    jr nz, .scroll_confirm_split
+
+    ; Duplicate pair: current display is ordinary single-scroll. Also clear a
+    ; stale split latched by an earlier screen/transition.
+    xor a
+    ldh [nes_split_active], a
+    ld a, $01
+    ldh [nes_scroll_pair_count], a
+    ldh [nes_scroll_dirty], a
+    ret
+
+.scroll_confirm_split:
+    ; Distinct second pair confirms a real raster split. Commit the pending
+    ; first pair atomically as the stable HUD/top state, and this pair as the
+    ; playfield/bottom state.
     ldh a, [nes_split_pending_x]
     ldh [nes_split_top_x], a
     ldh a, [nes_split_pending_y]
