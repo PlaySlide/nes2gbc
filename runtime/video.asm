@@ -501,8 +501,11 @@ nes_rgb555_table:
 ; Scan all 64 source entries so composite objects are not chopped merely
 ; because one of their pieces lives beyond NES OAM entry 39.
 nes_video_build_oam_shadow:
-    ; This routine is only called from the host VBlank ISR now, so no extra
-    ; wait/poll is necessary.
+    ; Follow-camera tracking consumes raw NES OAM coordinates before viewport
+    ; cropping so it can move the crop toward the player rather than merely
+    ; following whichever sprites are already visible.
+    call nes_view_follow_update
+
     ld a, [nes_ppuctrl]
     ldh [nes_oam_ppuctrl_tmp], a
     ld hl, nes_oam_ram
