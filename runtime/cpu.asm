@@ -788,7 +788,8 @@ nes_poll_nmi_hl:
     ld [nes_nmi_active], a
     xor a
     ldh [nes_scroll_pair_count], a
-    ldh [nes_split_active], a
+    ; Once a two-state raster split has been proven, keep it latched. Some
+    ; games do not rewrite both scroll states on every NMI.
     PROFILE_INC nes_profile_nmi
 
     ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
