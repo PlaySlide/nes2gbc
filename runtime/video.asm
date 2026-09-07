@@ -208,14 +208,7 @@ nes_video_sync_nametable_write:
     and $10
     srl a
     or b
-    ld b, a
     ld [de], a
-
-    ; A NES nametable has only 30 tile rows, while a GBC BG map has 32.
-    ; Keep GBC rows 30-31 as a live copy of rows 0-1 from the vertically
-    ; adjacent NES nametable so SCY can cross the 240-pixel NES seam without
-    ; exposing two bogus tile-0 rows.
-    call nes_video_mirror_vertical_seam_tile
 
     xor a
     ldh [rVBK], a
@@ -283,10 +276,6 @@ nes_video_sync_attribute_write:
 
     xor a
     ldh [rVBK], a
-
-    ; Attribute row 0 supplies palettes for NES tile rows 0-3. Mirror its
-    ; first two CGB rows into the synthetic 30-31 seam as well.
-    call nes_video_mirror_vertical_seam_attr
     ret
 
 nes_video_attr_top_row:
@@ -337,151 +326,6 @@ nes_video_attr_next_row:
     ld e, a
     ret nc
     inc d
-    ret
-
-; Mirror a write to NES tile row 0/1 into the synthetic GBC seam row 30/31.
-; Input: HL = physical NES nametable tile address, C = tile ID, B = CGB attr.
-nes_video_mirror_vertical_seam_tile:
-    ld a, h
-    and $03
-    ret nz
-    ld a, l
-    cp $40
-    ret nc
-
-    ; Horizontal mirroring uses the other physical table vertically.
-    ; Vertical mirroring repeats the same physical table vertically.
-    ld a, [nes_mirroring]
-    cp $01
-    jr z, .same_table
-
-    ld a, h
-    and $04
-    ld d, $9F
-    jr z, .dest_ready
-    ld d, $9B
-    jr .dest_ready
-
-.same_table:
-    ld a, h
-    and $04
-    ld d, $9B
-    jr z, .dest_ready
-    ld d, $9F
-
-.dest_ready:
-    ld a, l
-    add $C0
-    ld e, a
-
-    xor a
-    ldh [rVBK], a
-    ld a, c
-    ld [de], a
-
-    ld a, $01
-    ldh [rVBK], a
-    ld a, b
-    ld [de], a
-    ret
-
-; Mirror palette attributes for source NES tile rows 0-1 into seam rows 30-31.
-; Input after attribute expansion: H = $D3/$D7, L = attribute index $00-$3F.
-nes_video_mirror_vertical_seam_attr:
-    ld a, l
-    cp $08
-    ret nc
-
-    ; Source CGB map.
-    ld a, h
-    and $04
-    ld b, $98
-    jr z, .source_ready
-    ld b, $9C
-.source_ready:
-
-    ; Destination seam map follows the same vertical adjacency rule as tiles.
-    ld a, [nes_mirroring]
-    cp $01
-    jr z, .attr_same_table
-
-    ld a, h
-    and $04
-    ld c, $9F
-    jr z, .attr_dest_ready
-    ld c, $9B
-    jr .attr_dest_ready
-
-.attr_same_table:
-    ld a, h
-    and $04
-    ld c, $9B
-    jr z, .attr_dest_ready
-    ld c, $9F
-
-.attr_dest_ready:
-    ld a, l
-    and $07
-    add a
-    add a
-    ld l, a
-    ld e, a
-    ld h, b
-    ld d, c
-    ld a, e
-    add $C0
-    ld e, a
-
-    call nes_video_wait_vram
-    ld a, $01
-    ldh [rVBK], a
-
-    ; Source row 0 -> seam row 30.
-    ld a, [hli]
-    ld [de], a
-    inc de
-    ld a, [hli]
-    ld [de], a
-    inc de
-    ld a, [hli]
-    ld [de], a
-    inc de
-    ld a, [hli]
-    ld [de], a
-
-    ; Advance both pointers by the remainder of one 32-byte map row.
-    ld a, l
-    add $1C
-    ld l, a
-    jr nc, .src_row1_ready
-    inc h
-.src_row1_ready:
-    ld a, e
-    add $1D
-    ld e, a
-    jr nc, .dst_row1_ready
-    inc d
-.dst_row1_ready:
-
-    call nes_video_wait_vram
-    ld a, $01
-    ldh [rVBK], a
-
-    ; Source row 1 -> seam row 31.
-    ld a, [hli]
-    ld [de], a
-    inc de
-    ld a, [hli]
-    ld [de], a
-    inc de
-    ld a, [hli]
-    ld [de], a
-    inc de
-    ld a, [hl]
-    ld [de], a
-
-    xor a
-    ldh [rVBK], a
     ret
 
 ; Synchronize NES background palette RAM into CGB palettes 0-3.
@@ -930,6 +774,105 @@ nes_video_apply_map_select_a:
     ld a, b
 .map_write:
     ldh [rLCDC], a
+    ret
+
+; Present one ordinary NES scroll pair through a 160x144 GBC crop.
+; NES vertical nametables are 240 pixels high, while a CGB BG map wraps at
+; 256 pixels. If the visible crop crosses NES Y=240, arm a one-shot STAT split
+; that toggles the vertical nametable and adds 16 to SCY at the exact seam.
+nes_video_apply_single_scroll:
+    ; Horizontal crop remains a simple 256-pixel wrap.
+    ld a, [nes_ppu_scroll_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    ldh [rSCX], a
+
+    ; Compute 9-bit y_total = NES scroll Y + crop Y.
+    ld a, [nes_ppu_scroll_y]
+    ld b, a
+    ldh a, [nes_view_y]
+    add b
+    ld d, a
+    ld e, $00
+    jr nc, .sum_ready
+    inc e
+.sum_ready:
+
+    ; y_total >= 240 means the crop already starts in the vertically adjacent
+    ; nametable. GBC SCY must be y_total + 16 so its 256-pixel wrap lines up
+    ; with the NES 240-pixel wrap.
+    ld a, e
+    and a
+    jr nz, .top_wrapped
+    ld a, d
+    cp $F0
+    jr nc, .top_wrapped
+
+    ; Top of crop is still in the base nametable.
+    ld a, [nes_ppuctrl]
+    ldh [nes_seam_top_ctrl], a
+    call nes_video_apply_map_select_a
+    ld a, d
+    ldh [nes_seam_top_y], a
+    ldh [rSCY], a
+
+    ; A 144-line crop crosses Y=240 iff y_total >= 97.
+    cp $61
+    jr c, .no_seam
+
+    ; Split line = 240 - y_total.
+    ld a, $F0
+    sub d
+    ldh [nes_seam_line], a
+    ldh [rLYC], a
+
+    ; Below the split use the vertically adjacent logical nametable and
+    ; compensate the CGB's extra 16 map pixels.
+    ldh a, [nes_seam_top_ctrl]
+    xor $02
+    ldh [nes_seam_bottom_ctrl], a
+    ld a, d
+    add $10
+    ldh [nes_seam_bottom_y], a
+
+    ld a, $01
+    ldh [nes_seam_active], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
+    ret
+
+.top_wrapped:
+    ld a, [nes_ppuctrl]
+    xor $02
+    ldh [nes_seam_top_ctrl], a
+    call nes_video_apply_map_select_a
+    ld a, d
+    add $10
+    ldh [nes_seam_top_y], a
+    ldh [rSCY], a
+
+.no_seam:
+    xor a
+    ldh [nes_seam_active], a
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    ret
+
+; Re-arm a vertical seam for another host frame using the last completed NES
+; display state. Needed because the STAT source is deliberately one-shot.
+nes_video_rearm_vertical_seam:
+    ldh a, [nes_seam_top_ctrl]
+    call nes_video_apply_map_select_a
+    ldh a, [nes_seam_top_y]
+    ldh [rSCY], a
+    ldh a, [nes_seam_line]
+    ldh [rLYC], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
     ret
 
 ; Reflect NES base-nametable selection and sprite size into GBC LCDC.
