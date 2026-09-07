@@ -195,13 +195,33 @@ nes_gbc_stat_isr:
     jr z, .check_vertical_seam
 
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
-    ldh a, [nes_split_armed_ctrl]
-    call nes_video_apply_map_select_a
-
+    ; The viewport crop can push the 8-bit NES scroll across X=256. Preserve
+    ; that carry and, for vertical mirroring, toggle PPUCTRL bit 0 so the whole
+    ; crop starts in the horizontally adjacent physical nametable.
     ldh a, [nes_split_armed_x]
     ld b, a
     ldh a, [nes_view_x]
     add b
+    ld d, a
+    ld e, $00
+    jr nc, .split_x_ctrl_ready
+    inc e
+.split_x_ctrl_ready:
+    ldh a, [nes_split_armed_ctrl]
+    ld b, a
+    ld a, e
+    and a
+    jr z, .split_x_apply
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .split_x_apply
+    ld a, b
+    xor $01
+    ld b, a
+.split_x_apply:
+    ld a, b
+    call nes_video_apply_map_select_a
+    ld a, d
     ldh [rSCX], a
 
     ldh a, [nes_split_armed_y]
