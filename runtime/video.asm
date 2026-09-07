@@ -189,7 +189,7 @@ nes_video_flush_nametable_queue_atomic:
     jr nz, .read_entry
     ld a, [nes_nametable_queue_ptr_lo]
     cp e
-    jr z, .done
+    jp z, .done
 
 .read_entry:
     ld a, [de]
