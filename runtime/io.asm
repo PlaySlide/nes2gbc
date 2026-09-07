@@ -57,6 +57,20 @@ nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
 nes_reset_count_wram_pad:    ds 1 ; preserves legacy WRAM layout
 
+; Horizontal 512->256 nametable stitching scratch. Vertical-mirroring NES games
+; (notably SMB) place two physical nametables side-by-side, while a GBC BG map
+; wraps after 256 pixels. These bytes describe the lower/playfield slice that
+; must borrow wrapped columns from the adjacent NES nametable.
+nes_hstitch_ctrl:           ds 1 ; $C867 effective logical PPUCTRL for playfield
+nes_hstitch_x:              ds 1 ; $C868 effective SCX within selected nametable
+nes_hstitch_y:              ds 1 ; $C869 effective SCY for playfield
+nes_hstitch_screen_y:       ds 1 ; $C86A first screen scanline using this state
+nes_hstitch_cols:           ds 1 ; $C86B wrapped tile columns to compose (1-20)
+nes_hstitch_col:            ds 1 ; $C86C compositor scratch
+nes_hstitch_row_start:      ds 1 ; $C86D compositor scratch
+nes_hstitch_row_cur:        ds 1 ; $C86E compositor scratch
+nes_hstitch_dst_base:       ds 1 ; $C86F $98 or $9C
+
 ; Follow-camera bookkeeping lives in the gap immediately after the optional
 ; runtime profile counters ($C870-$C8E8) and before virtual NES OAM at $C900.
 ; Keep the legacy $C860 debug-view block fixed so profiler builds do not overlap.
