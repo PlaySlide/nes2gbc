@@ -326,6 +326,19 @@ nes_ppu_write_data:
     call nes_ppu_map_nametable_hl
     ld a, e
     ld [hl], a
+
+    ; SMB and other games deliberately build the next columns while their NMI
+    ; is running. One translated NMI can span several host GBC frames, so
+    ; exposing each $2007 write immediately lets the host display a half-built
+    ; future screen. Stage the physical nametable address until translated RTI.
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .nametable_sync_now
+    call nes_ppu_stage_nametable_hl
+    jp nes_ppu_increment_addr
+
+.nametable_sync_now:
+    ld a, e
     call nes_video_sync_nametable_write
     jp nes_ppu_increment_addr
 
@@ -340,6 +353,42 @@ nes_ppu_write_data:
     ld [hl], a
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
+
+; Append physical virtual nametable address HL ($D000-$D7FF) to the
+; current translated-NMI transaction. The tile/attribute value itself is already
+; stored in authoritative WRAM, so duplicate addresses are harmless.
+nes_ppu_stage_nametable_hl:
+    ld a, [nes_nametable_queue_overflow]
+    and a
+    ret nz
+
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $E0
+    jr nc, .overflow
+
+    push hl
+    ld d, a
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld e, a
+    pop hl
+
+    ld a, l
+    ld [de], a
+    inc de
+    ld a, h
+    ld [de], a
+    inc de
+
+    ld a, e
+    ld [nes_nametable_queue_ptr_lo], a
+    ld a, d
+    ld [nes_nametable_queue_ptr_hi], a
+    ret
+
+.overflow:
+    ld a, $01
+    ld [nes_nametable_queue_overflow], a
+    ret
 
 nes_ppu_get_addr_hl:
     ld a, [nes_ppu_addr_hi]
