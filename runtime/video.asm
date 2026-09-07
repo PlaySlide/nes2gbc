@@ -981,9 +981,13 @@ nes_video_update_horizontal_stitch:
     ld a, [nes_hstitch_valid]
     and a
     jr z, .rebuild
-    ld a, [nes_hstitch_dirty]
-    and a
-    jr nz, .rebuild
+
+    ; Ordinary SMB area-parser VRAM writes are usually construction work for
+    ; columns well offscreen (the breadcrumbs show columns $1A-$1C at the first
+    ; scroll transition). Do not rebuild the entire stitched map merely because
+    ; such data changed; that used to disable/restart LCD timing repeatedly and
+    ; made the fixed HUD map leak across whole frames. Rebuild only when the
+    ; coarse horizontal presentation key actually changes.
     ld a, [nes_hstitch_key]
     cp c
     ret z
