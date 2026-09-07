@@ -297,6 +297,15 @@ Start:
     ld [nes_view_follow_candidate_y], a
     ld [nes_view_follow_slot], a
     ld [nes_view_select_prev], a
+    ld [nes_ntdiag_tile_count], a
+    ld [nes_ntdiag_phys_mask], a
+    ld [nes_ntdiag_min_col], a
+    ld [nes_ntdiag_max_col], a
+    ld [nes_ntdiag_first_hi], a
+    ld [nes_ntdiag_first_lo], a
+    ld [nes_ntdiag_last_hi], a
+    ld [nes_ntdiag_last_lo], a
+    ld [nes_ntdiag_commit_serial], a
     ldh [nes_reset_count], a
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
