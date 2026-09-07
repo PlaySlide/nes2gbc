@@ -292,7 +292,7 @@ nes_video_flush_nametable_queue_atomic:
     ld a, [hl]
     call nes_video_sync_nametable_write
     pop de
-    jr .loop
+    jp .loop
 
 .done:
     ld a, [nes_ntdiag_commit_serial]
