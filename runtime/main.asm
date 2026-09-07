@@ -145,44 +145,6 @@ nes_gbc_vblank_isr:
     ldh a, [nes_split_bottom_ctrl]
     ldh [nes_split_armed_ctrl], a
 
-    ; Build the lower/playfield's true 9-bit horizontal crop. A GBC map wraps
-    ; at 256 pixels, but vertical-mirroring NES games continue into the other
-    ; physical nametable. Preserve the carry in the effective map selection and
-    ; compose any right-edge columns that straddle the 256-pixel seam.
-    ldh a, [nes_split_armed_x]
-    ld b, a
-    ldh a, [nes_view_x]
-    add b
-    ld [nes_hstitch_x], a
-    ld c, $00
-    jr nc, .split_x_carry_ready
-    inc c
-.split_x_carry_ready:
-    ldh a, [nes_split_armed_ctrl]
-    ld b, a
-    ld a, c
-    and a
-    jr z, .split_ctrl_ready
-    ld a, [nes_mirroring]
-    cp $01
-    jr nz, .split_ctrl_ready
-    ld a, b
-    xor $01
-    ld b, a
-.split_ctrl_ready:
-    ld a, b
-    ld [nes_hstitch_ctrl], a
-
-    ldh a, [nes_split_armed_y]
-    ld b, a
-    ldh a, [nes_view_y]
-    add b
-    ld [nes_hstitch_y], a
-    ldh a, [nes_split_line]
-    ld [nes_hstitch_screen_y], a
-
-    call nes_video_stitch_horizontal_wrap
-
     ldh a, [nes_split_armed_top_ctrl]
     call nes_video_apply_map_select_a
 
@@ -220,15 +182,19 @@ nes_gbc_stat_isr:
     jr z, .check_vertical_seam
 
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
-    ; VBlank already resolved the 9-bit horizontal carry and stitched any
-    ; wrapped columns, so the STAT handler only publishes the frozen result.
-    ld a, [nes_hstitch_ctrl]
+    ldh a, [nes_split_armed_ctrl]
     call nes_video_apply_map_select_a
 
-    ld a, [nes_hstitch_x]
+    ldh a, [nes_split_armed_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
     ldh [rSCX], a
 
-    ld a, [nes_hstitch_y]
+    ldh a, [nes_split_armed_y]
+    ld b, a
+    ldh a, [nes_view_y]
+    add b
     ldh [rSCY], a
     jr .disable_stat
 
@@ -312,15 +278,6 @@ Start:
     ld [nes_view_follow_candidate_y], a
     ld [nes_view_follow_slot], a
     ld [nes_view_select_prev], a
-    ld [nes_hstitch_ctrl], a
-    ld [nes_hstitch_x], a
-    ld [nes_hstitch_y], a
-    ld [nes_hstitch_screen_y], a
-    ld [nes_hstitch_cols], a
-    ld [nes_hstitch_col], a
-    ld [nes_hstitch_row_start], a
-    ld [nes_hstitch_row_cur], a
-    ld [nes_hstitch_dst_base], a
     ldh [nes_reset_count], a
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
