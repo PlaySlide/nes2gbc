@@ -89,6 +89,8 @@ fn pocketnes_follow_slot(crc: u32) -> Option<u8> {
         0x6F97_C721 | 0x703E_1948 => Some(0),
         // PocketNES database: Donkey Kong Jr. (JU).
         0x4864_C304 => Some(8),
+        // PocketNES database: Ice Climber (U).
+        0xFB98_D46E => Some(0),
         _ => None,
     }
 }
@@ -297,6 +299,7 @@ mod follow_hint_tests {
         assert_eq!(pocketnes_follow_slot(0x4013_49A8), Some(8));
         assert_eq!(pocketnes_follow_slot(0x703E_1948), Some(0));
         assert_eq!(pocketnes_follow_slot(0x4864_C304), Some(8));
+        assert_eq!(pocketnes_follow_slot(0xFB98_D46E), Some(0));
         assert_eq!(pocketnes_follow_slot(0), None);
     }
 }
