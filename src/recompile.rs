@@ -324,6 +324,10 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 }
                 Err(err) => {
                     writeln!(out, "    ; TODO {err}").unwrap();
+                    writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
+                    writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
+                    writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
+                    writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
                     writeln!(out, "    jp nes_unimplemented").unwrap();
                     break;
                 }
