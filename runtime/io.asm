@@ -89,6 +89,9 @@ nes_split_bottom_ctrl:    ds 1   ; $FFE2, captured lower/playfield PPUCTRL
 nes_split_armed_x:        ds 1   ; $FFE3, immutable lower X for current host frame
 nes_split_armed_y:        ds 1   ; $FFE4, immutable lower Y for current host frame
 nes_split_armed_ctrl:     ds 1   ; $FFE5, immutable lower PPUCTRL for current host frame
+nes_split_pending_x:      ds 1   ; $FFE6, uncommitted first scroll pair
+nes_split_pending_y:      ds 1   ; $FFE7
+nes_split_pending_ctrl:   ds 1   ; $FFE8
 
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
