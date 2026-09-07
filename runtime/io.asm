@@ -55,6 +55,9 @@ nes_nametable_queue_ptr_lo: ds 1 ; next byte in $D800-$DFFF staging queue
 nes_nametable_queue_ptr_hi: ds 1
 nes_nametable_queue_overflow: ds 1
 nes_mask_dirty:             ds 1 ; $C85C defer PPUMASK hardware publication
+nes_native_scroll_x_last:  ds 1 ; $C85D last completed NES playfield X scroll
+nes_native_scroll_x_changes: ds 1 ; $C85E observed X-scroll changes (saturates at 2)
+nes_native_scroll_x_active: ds 1 ; $C85F game owns horizontal camera once nonzero
 
 SECTION "NES debug viewport", WRAM0[$C860]
 nes_view_mode:              ds 1 ; 0 TL, 1 TR, 2 BL, 3 BR, 4 center
