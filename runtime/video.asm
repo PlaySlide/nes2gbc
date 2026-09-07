@@ -591,6 +591,8 @@ nes_video_sync_attribute_write_stitched:
     call nes_video_sync_attribute_write_physical
     pop bc
     pop hl
+    xor a
+    ld d, a
     jr .source_ready
 
 .source_page1:
