@@ -53,7 +53,7 @@ nes_view_follow_update:
     inc hl
     ld a, [hl]
     ld [nes_view_follow_x], a
-    jr .camera
+    jp .camera
 
 .acquire:
     ld a, $80
