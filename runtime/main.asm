@@ -87,15 +87,12 @@ nes_gbc_vblank_isr:
     ldh a, [nes_split_top_ctrl]
     call nes_video_apply_map_select_a
 
+    ; The top raster region is a fixed NES HUD. Our debug/player viewport
+    ; crops the world, not the HUD, so do not add nes_view_x/nes_view_y here.
+    ; This effectively counter-scrolls the HUD against viewport movement.
     ldh a, [nes_split_top_x]
-    ld b, a
-    ldh a, [nes_view_x]
-    add b
     ldh [rSCX], a
     ldh a, [nes_split_top_y]
-    ld b, a
-    ldh a, [nes_view_y]
-    add b
     ldh [rSCY], a
 
     ldh a, [nes_split_line]
