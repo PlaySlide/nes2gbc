@@ -297,6 +297,9 @@ Start:
     ld [nes_view_follow_candidate_y], a
     ld [nes_view_follow_slot], a
     ld [nes_view_select_prev], a
+    ld [nes_ntdiag_min_row], a
+    ld [nes_ntdiag_max_row], a
+    ld [nes_ntdiag_display_map], a
     ld [nes_ntdiag_tile_count], a
     ld [nes_ntdiag_phys_mask], a
     ld [nes_ntdiag_min_col], a
