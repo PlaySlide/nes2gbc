@@ -118,7 +118,9 @@ nes_ppu_cpu_write:
     ld a, b
     and $28
     jr z, .ctrl_bg_check
+    push bc
     call nes_video_build_oam_shadow
+    pop bc
     ld a, $01
     ld [nes_oam_dirty], a
 
