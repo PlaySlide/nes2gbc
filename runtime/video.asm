@@ -364,6 +364,36 @@ nes_video_sync_nametable_write:
     jr nc, .attribute
 
 .tile:
+    ; While horizontal stitching is active, $9C00 is no longer a pristine
+    ; physical NT1 map: it is the synthesized visible playfield.  SMB builds
+    ; future columns in the offscreen physical nametable.  Never let an NT1
+    ; write touch a stitched column that currently belongs to NT0, even
+    ; momentarily; the old write-then-repair path let those future objects
+    ; flash for a scanline/frame before repair.
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .tile_write
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .tile_write
+    ldh a, [nes_split_active]
+    and a
+    jr z, .tile_write
+
+    ; Physical page 0 always updates its $9800 backing map.  Physical page 1
+    ; may write $9C00 only when this destination column is actually NT1-owned.
+    ld a, h
+    and $04
+    jr z, .tile_write
+    ld a, l
+    and $1F
+    push bc
+    call nes_video_hstitch_source_for_column
+    pop bc
+    and a
+    ret z
+
+.tile_write:
     call nes_video_wait_vram
 
     ; GBC map high byte is $98 + physical-table/inner-page index.
@@ -444,7 +474,17 @@ nes_video_stitch_repair_tile_from_page0:
     call nes_video_wait_vram
     ld a, $01
     ldh [rVBK], a
+
+    ; Palette bits come from the authoritative NT0 backing cell, but the
+    ; stitched lower playfield's pattern-table bank belongs to bottom_ctrl,
+    ; not to whatever transient PPUCTRL value happened to perform the write.
     ld a, [hl]
+    and $07
+    ld b, a
+    ldh a, [nes_split_bottom_ctrl]
+    and $10
+    srl a
+    or b
     ld [de], a
 
     xor a
@@ -455,6 +495,26 @@ nes_video_stitch_repair_tile_from_page0:
 ; Input: HL = physical attribute address ($D3C0-$D3FF or $D7C0-$D7FF), A = attribute byte.
 nes_video_sync_attribute_write:
     ld b, a
+
+    ; With an active horizontal stitch, map $9C00 is a presentation surface,
+    ; not physical NT1 storage.  Route attribute changes through a selective
+    ; stitch-aware path so offscreen parser attributes cannot color/bank-swap
+    ; currently visible NT0-owned columns.
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .physical
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .physical
+    ldh a, [nes_split_active]
+    and a
+    jp nz, nes_video_sync_attribute_write_stitched
+
+.physical:
+    jp nes_video_sync_attribute_write_physical
+
+; Normal physical-map attribute expansion. Input HL address, B = NES byte.
+nes_video_sync_attribute_write_physical:
     ld a, l
     sub $C0
     ld l, a
@@ -506,6 +566,136 @@ nes_video_sync_attribute_write:
     call nes_video_attr_bottom_row
     call nes_video_wait_vram
     call nes_video_attr_bottom_row
+
+    xor a
+    ldh [rVBK], a
+    ret
+
+; Stitch-aware attribute publication.
+; Physical NT0 still updates $9800 because that is the fixed HUD/backing map.
+; Physical NT1 remains authoritative in virtual WRAM only while $9C00 is being
+; used as the stitched surface.  For the stitched map, update only columns
+; whose current owner matches the physical nametable that received the write.
+nes_video_sync_attribute_write_stitched:
+    ; D = physical source page 0/1.
+    ld a, h
+    and $04
+    jr nz, .source_page1
+
+    xor a
+    ld d, a
+
+    ; Keep the real NT0/$9800 attributes current for the fixed HUD.
+    push hl
+    push bc
+    call nes_video_sync_attribute_write_physical
+    pop bc
+    pop hl
+    jr .source_ready
+
+.source_page1:
+    ld d, $01
+
+.source_ready:
+    ; H = first tile row of this 4x4 attribute cell.
+    ; L = first tile column. E = one-past-last column.
+    ld a, l
+    sub $C0
+    ld c, a
+    and $07
+    add a
+    add a
+    ld l, a
+    add $04
+    ld e, a
+
+    ld a, c
+    srl a
+    srl a
+    srl a
+    add a
+    add a
+    ld h, a
+
+.column_loop:
+    ; Does this stitched destination column currently come from the physical
+    ; nametable that was just changed?
+    ld a, l
+    push bc
+    call nes_video_hstitch_source_for_column
+    pop bc
+    cp d
+    jr nz, .next_column
+
+    ; Preserve source-page/end-column while DE becomes the CGB destination.
+    push de
+
+    ; DE = $9C00 + tile_row*32 + tile_column.
+    ld a, h
+    srl a
+    srl a
+    srl a
+    add $9C
+    ld d, a
+    ld a, h
+    and $07
+    swap a
+    add a
+    or l
+    ld e, a
+
+    ; Top two rows: left/right quadrant selected by tile-column bit 1.
+    ld a, l
+    and $02
+    jr z, .top_left
+    ld a, b
+    srl a
+    srl a
+    jr .top_mask
+.top_left:
+    ld a, b
+.top_mask:
+    and $03
+    ld c, a
+    ldh a, [nes_split_bottom_ctrl]
+    and $10
+    srl a
+    or c
+    ld c, a
+    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row
+
+    ; Bottom two rows.
+    ld a, b
+    swap a
+    ld c, a
+    ld a, l
+    and $02
+    jr z, .bottom_left
+    ld a, c
+    srl a
+    srl a
+    jr .bottom_mask
+.bottom_left:
+    ld a, c
+.bottom_mask:
+    and $03
+    ld c, a
+    ldh a, [nes_split_bottom_ctrl]
+    and $10
+    srl a
+    or c
+    ld c, a
+    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row
+
+    pop de
+
+.next_column:
+    inc l
+    ld a, l
+    cp e
+    jr c, .column_loop
 
     xor a
     ldh [rVBK], a
