@@ -352,6 +352,9 @@ nes_video_wait_oam:
 nes_video_sync_nametable_write:
     PROFILE_INC nes_profile_nametable_sync
     ld c, a
+    ld a, $01
+    ld [nes_hstitch_dirty], a
+    ld a, c
 
     ; Attribute bytes start at offset $3C0 within each physical 1 KiB table.
     ld a, h
@@ -929,6 +932,228 @@ nes_video_update_mask:
     ld a, b
     ldh [rLCDC], a
     ret
+
+; For vertical mirroring the two physical NES nametables are horizontal
+; neighbours. A 256px GBC BG map cannot represent their seamless 512px scroll
+; space by simple map selection: when SCX wraps, it would wrap into the same
+; NES page. SMB exposes this immediately when gameplay starts scrolling.
+;
+; During an SMB-style HUD/playfield split, keep $9800 as the fixed HUD/page-0
+; surface and synthesize the lower playfield into $9C00. Rebuild only when the
+; coarse horizontal key changes or virtual nametable data changed.
+nes_video_update_horizontal_stitch:
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .vertical
+.disable:
+    xor a
+    ld [nes_hstitch_valid], a
+    ret
+
+.vertical:
+    ldh a, [nes_split_active]
+    and a
+    jr z, .disable
+
+    ; effective X = lower NES scroll + our crop offset.
+    ldh a, [nes_split_bottom_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    ld c, a
+    ld b, $00
+    jr nc, .no_page_carry
+    inc b
+.no_page_carry:
+
+    ; key = ((PPUCTRL.bit0 XOR carry) << 5) | (effective_x >> 3)
+    ldh a, [nes_split_bottom_ctrl]
+    and $01
+    xor b
+    and $01
+    swap a
+    add a
+    ld b, a
+    ld a, c
+    srl a
+    srl a
+    srl a
+    or b
+    ld c, a
+
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .rebuild
+    ld a, [nes_hstitch_dirty]
+    and a
+    jr nz, .rebuild
+    ld a, [nes_hstitch_key]
+    cp c
+    ret z
+
+.rebuild:
+    ld a, c
+    ld [nes_hstitch_key], a
+
+    ; Determine which destination columns must come from physical page 0.
+    and $1F
+    ld b, a
+    ld a, c
+    and $20
+    jr nz, .base_page_1
+
+    ; Base page 0: q..31 = page 0, 0..q-1 = page 1.
+    ld a, b
+    ld [nes_hstitch_copy_start], a
+    ld a, $20
+    sub b
+    ld [nes_hstitch_copy_len], a
+    jr .range_ready
+
+.base_page_1:
+    ; Base page 1: 0..q-1 = page 0, q..31 = page 1.
+    xor a
+    ld [nes_hstitch_copy_start], a
+    ld a, b
+    ld [nes_hstitch_copy_len], a
+
+.range_ready:
+    ld a, $20
+    ld b, a
+    ld a, [nes_hstitch_copy_len]
+    ld c, a
+    ld a, b
+    sub c
+    ld [nes_hstitch_copy_skip], a
+
+    ; Rebuild while LCD is off, matching the existing atomic nametable flush.
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    and $7F
+    ldh [rLCDC], a
+
+    ld a, $01
+    ldh [rSVBK], a
+
+    ; Restore map 1 as pristine physical NES page 1 from authoritative WRAM.
+    xor a
+    ldh [rVBK], a
+    ld hl, $D400
+    ld de, $9C00
+    ld bc, $03C0
+.restore_page1_tiles:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .restore_page1_tiles
+
+    ; Restore page-1 CGB attributes from the NES attribute table.
+    ld a, [nes_ppuctrl]
+    push af
+    ldh a, [nes_split_bottom_ctrl]
+    ld [nes_ppuctrl], a
+    ld hl, $D7C0
+    ld c, $40
+.restore_page1_attrs:
+    ld a, [hl]
+    push hl
+    push bc
+    call nes_video_sync_attribute_write
+    pop bc
+    pop hl
+    inc hl
+    dec c
+    jr nz, .restore_page1_attrs
+    pop af
+    ld [nes_ppuctrl], a
+
+    ; Overlay the range that belongs to physical page 0, for both tile IDs
+    ; and already-expanded CGB attributes.
+    ld a, [nes_hstitch_copy_len]
+    and a
+    jr z, .copy_done
+
+    xor a
+    ldh [rVBK], a
+    call nes_video_copy_page0_range_to_map1
+    ld a, $01
+    ldh [rVBK], a
+    call nes_video_copy_page0_range_to_map1
+
+.copy_done:
+    xor a
+    ldh [rVBK], a
+    ld [nes_hstitch_dirty], a
+    ld a, $01
+    ld [nes_hstitch_valid], a
+
+    ld a, [nes_saved_lcdc]
+    ldh [rLCDC], a
+    ret
+
+; Copy the selected same-column range from map 0 to map 1 for the 30 NES tile
+; rows. VBK is selected by the caller, so this copies tiles or attributes.
+nes_video_copy_page0_range_to_map1:
+    ld a, [nes_hstitch_copy_start]
+    ld l, a
+    ld e, a
+    ld h, $98
+    ld d, $9C
+    ld b, $1E
+.row:
+    ld a, [nes_hstitch_copy_len]
+    ld c, a
+.col:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .col
+
+    ld a, [nes_hstitch_copy_skip]
+    add l
+    ld l, a
+    jr nc, .hl_ok
+    inc h
+.hl_ok:
+    ld a, [nes_hstitch_copy_skip]
+    add e
+    ld e, a
+    jr nc, .de_ok
+    inc d
+.de_ok:
+    dec b
+    jr nz, .row
+    ret
+
+; Split-aware map selection. In vertical-mirroring games, map 0 remains the
+; fixed HUD surface and map 1 is the stitched scrolling playfield.
+nes_video_apply_split_top_map:
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .normal
+    ldh a, [rLCDC]
+    and $F7
+    ldh [rLCDC], a
+    ret
+.normal:
+    ldh a, [nes_split_armed_top_ctrl]
+    jp nes_video_apply_map_select_a
+
+nes_video_apply_split_bottom_map:
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .normal
+    ldh a, [rLCDC]
+    or $08
+    ldh [rLCDC], a
+    ret
+.normal:
+    ldh a, [nes_split_armed_ctrl]
+    jp nes_video_apply_map_select_a
 
 ; Apply only the NES base-nametable selection from PPUCTRL in A.
 ; This is used by raster splits so the HUD and playfield may select different
