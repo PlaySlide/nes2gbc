@@ -31,24 +31,36 @@ nes_view_follow_update:
     and a
     ret z
 
+    ; Once acquired, follow the exact NES OAM slot. Do not drift to a nearby
+    ; enemy or effect sprite. If that slot is temporarily hidden, hold the
+    ; camera until it becomes visible again.
     ld a, [nes_view_follow_valid]
-    ld [nes_view_follow_was_valid], a
     and a
-    jr z, .center_ref
+    jr z, .acquire
 
-    ld a, [nes_view_follow_x]
-    ld [nes_view_follow_ref_x], a
-    ld a, [nes_view_follow_y]
-    ld [nes_view_follow_ref_y], a
-    jr .ref_ready
+    ld a, [nes_view_follow_slot]
+    add a
+    add a
+    ld l, a
+    ld h, HIGH(nes_oam_ram)
 
-.center_ref:
+    ld a, [hli]
+    cp $EF
+    ret nc
+    inc a
+    ld [nes_view_follow_y], a
+    inc hl
+    inc hl
+    ld a, [hl]
+    ld [nes_view_follow_x], a
+    jr .camera
+
+.acquire:
     ld a, $80
     ld [nes_view_follow_ref_x], a
     ld a, $78
     ld [nes_view_follow_ref_y], a
 
-.ref_ready:
     ld a, $FF
     ld [nes_view_follow_best_dist], a
     ld hl, nes_oam_ram
@@ -104,6 +116,11 @@ nes_view_follow_update:
     ld a, [nes_view_follow_candidate_y]
     ld [nes_view_follow_y], a
 
+    ; Current slot index = 64 - remaining-count B.
+    ld a, $40
+    sub b
+    ld [nes_view_follow_slot], a
+
 .next:
     dec b
     jp nz, .scan
@@ -121,22 +138,10 @@ nes_view_follow_update:
     cp $FF
     ret z
 
-    ; If an established target jumps more than 64 pixels, drop lock and
-    ; reacquire from screen center on the next OAM frame.
-    ld a, [nes_view_follow_was_valid]
-    and a
-    jr z, .accept
-    ld a, [nes_view_follow_best_dist]
-    cp $41
-    jr c, .accept
-    xor a
-    ld [nes_view_follow_valid], a
-    ret
-
-.accept:
     ld a, $01
     ld [nes_view_follow_valid], a
 
+.camera:
     ; Horizontal dead-zone: keep target within viewport-relative X 56..104.
     ldh a, [nes_view_x]
     ld c, a
