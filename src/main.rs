@@ -64,7 +64,48 @@ fn print_hot_profile(graph: &cfg::ControlFlowGraph) {
     println!();
 }
 
-fn main() -> ExitCode {
+
+// PocketNES menu-maker compatibility records key ROMs by CRC32 of the payload
+// after the 16-byte iNES header. Keep this tiny table factual and let the
+// runtime's generic acquisition heuristic handle everything else.
+fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn pocketnes_follow_slot(crc: u32) -> Option<u8> {
+    match crc {
+        // PocketNES database: Balloon Fight (E)/(JU) -> OAM slot 8.
+        // 401349A8 is the later USA payload CRC and uses the same player slot.
+        0xE541_38A9 | 0x2B46_2010 | 0x4013_49A8 => Some(8),
+        // PocketNES database: Donkey Kong (JU) / Donkey Kong Classics (U).
+        0x6F97_C721 | 0x703E_1948 => Some(0),
+        // PocketNES database: Donkey Kong Jr. (JU).
+        0x4864_C304 => Some(8),
+        _ => None,
+    }
+}
+
+fn emit_follow_hint_init(asm: &mut String, follow_slot: Option<u8>) {
+    asm.push_str("\n; PocketNES-derived initial follow-camera hint\n");
+    asm.push_str("SECTION \"Generated follow-camera metadata\", ROM0\n");
+    asm.push_str("nes_generated_follow_init:\n");
+    if let Some(slot) = follow_slot {
+        asm.push_str(&format!("    ld a, ${slot:02X}\n"));
+        asm.push_str("    ld [nes_view_follow_slot], a\n");
+        asm.push_str("    ld a, $01\n");
+        asm.push_str("    ld [nes_view_follow_valid], a\n");
+    }
+    asm.push_str("    ret\n");
+}
+\nfn main() -> ExitCode {
     let mut args = env::args_os();
     let program = args.next().unwrap_or_default();
     let Some(path) = args.next() else {
@@ -130,6 +171,9 @@ fn main() -> ExitCode {
         }
     };
 
+    let payload_crc = crc32_ieee(&bytes[16..]);
+    let follow_slot = pocketnes_follow_slot(payload_crc);
+
     println!("ROM: {}", path.display());
     println!("Header: {:?}", cart.format);
     println!("Mapper: {}", cart.mapper);
@@ -141,6 +185,12 @@ fn main() -> ExitCode {
     println!("Mirroring: {:?}", cart.mirroring);
     println!("Battery: {}", if cart.battery { "yes" } else { "no" });
     println!("Trainer: {}", if cart.trainer.is_some() { "yes" } else { "no" });
+
+    println!("PocketNES payload CRC32: {payload_crc:08X}");
+    match follow_slot {
+        Some(slot) => println!("PocketNES follow hint: OAM slot {slot}"),
+        None => println!("PocketNES follow hint: none; using generic acquisition"),
+    }
 
     let Some(vectors) = cpu6502::vectors_from_prg(cart.prg_rom) else {
         eprintln!("error: PRG ROM is too small to contain 6502 vectors");
@@ -203,6 +253,8 @@ fn main() -> ExitCode {
             chr_gbc_file: &chr_gbc_name,
         }));
 
+        emit_follow_hint_init(&mut asm, follow_slot);
+
         if let Err(err) = fs::write(&out_path, asm) {
             eprintln!("error writing {}: {err}", out_path.display());
             return ExitCode::FAILURE;
@@ -228,4 +280,22 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod follow_hint_tests {
+    use super::*;
+
+    #[test]
+    fn crc32_matches_standard_vector() {
+        assert_eq!(crc32_ieee(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn known_pocketnes_follow_slots_are_seeded() {
+        assert_eq!(pocketnes_follow_slot(0x4013_49A8), Some(8));
+        assert_eq!(pocketnes_follow_slot(0x703E_1948), Some(0));
+        assert_eq!(pocketnes_follow_slot(0x4864_C304), Some(8));
+        assert_eq!(pocketnes_follow_slot(0), None);
+    }
 }
