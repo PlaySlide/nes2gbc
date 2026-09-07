@@ -27,6 +27,83 @@ fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
  true
 }
 
+// Detect a non-returning dispatcher that treats the JSR return address as
+// the base of an inline word table. Ice Climber uses:
+//
+//   JSR dispatcher
+//   .word state0, state1, ...
+//
+// dispatcher:
+//   ... PLA / STA base / PLA / STA base+1 ...
+//   ... LDA (base),Y / STA ptr ...
+//   ... LDA (base),Y / STA ptr+1
+//   JMP (ptr)
+//
+// Return (indirect JMP PC, pointer zp) when the entry has this shape.
+fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
+ let start=off(mapper,prg.len(),entry).ok()?;
+ let end=(start+48).min(prg.len());
+ if end<=start+12{return None}
+
+ let mut pop=None;
+ let mut i=start;
+ while i+5<end{
+  if prg[i]==0x68&&prg[i+1]==0x85
+   &&prg[i+3]==0x68&&prg[i+4]==0x85
+   &&prg[i+5]==prg[i+2].wrapping_add(1)
+  {
+   pop=Some((i,prg[i+2]));break
+  }
+  i+=1;
+ }
+ let (pop_i,base)=pop?;
+
+ let mut low=None;
+ let mut j=pop_i+6;
+ while j+3<end{
+  if prg[j]==0xB1&&prg[j+1]==base&&prg[j+2]==0x85{
+   low=Some((j,prg[j+3]));break
+  }
+  j+=1;
+ }
+ let (low_i,pointer)=low?;
+
+ let mut high=None;
+ let mut k=low_i+4;
+ while k+3<end{
+  if prg[k]==0xB1&&prg[k+1]==base&&prg[k+2]==0x85
+   &&prg[k+3]==pointer.wrapping_add(1)
+  {
+   high=Some(k);break
+  }
+  k+=1;
+ }
+ let high_i=high?;
+
+ let mut m=high_i+4;
+ while m+2<end{
+  if prg[m]==0x6C&&prg[m+1]==pointer&&prg[m+2]==0x00{
+   let delta=(m-start)as u16;
+   return Some((entry.wrapping_add(delta),pointer as u16))
+  }
+  m+=1;
+ }
+ None
+}
+
+fn inline_word_table_targets(mapper:u16,prg:&[u8],base:u16)->Vec<u16>{
+ let mut out=Vec::new();
+ for i in 0..32u16{
+  let a=base.wrapping_add(i*2);
+  let Ok(o)=off(mapper,prg.len(),a)else{break};
+  if o+1>=prg.len(){break}
+  let target=u16::from_le_bytes([prg[o],prg[o+1]]);
+  if target<0x8000||!looks_like_code(mapper,prg,target){break}
+  if !out.contains(&target){out.push(target)}
+ }
+ out
+}
+
 // Recognize the common 6502 jump-table idiom:
 //   LDA table,Y / STA ptr / INY / LDA table,Y / STA ptr+1 / ... / JMP (ptr)
 // The index is often derived from a small state nibble. Conservatively inspect the
@@ -80,6 +157,23 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   let _=jmp_off;
  }
 
+ // Form 3: a non-returning JSR dispatcher indexes a word table placed
+ // immediately after each JSR, using the stacked return address as its base.
+ // Ice Climber uses this extensively.
+ let mut call_off=0usize;
+ while call_off+3<=prg.len(){
+  if prg[call_off]==0x20{
+   let entry=u16::from_le_bytes([prg[call_off+1],prg[call_off+2]]);
+   if let Some((dispatch_jmp,dispatch_ptr))=inline_jsr_dispatcher(mapper,prg,entry){
+    if dispatch_jmp==jmp_pc&&dispatch_ptr==pointer{
+     let base=0x8000u16.wrapping_add((call_off+3)as u16);
+     if !tables.contains(&base){tables.push(base)}
+    }
+   }
+  }
+  call_off+=1;
+ }
+
  let mut out=Vec::new();
  for base in tables{
   let mut found_any=false;
@@ -111,7 +205,24 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
    let next=pc.wrapping_add(i.def.len()as u16);ins.push(i);
    if branch(i.def.mnemonic){let t=rel(i);edges.push(Edge{kind:EdgeKind::BranchTaken,target:Some(t)});edges.push(Edge{kind:EdgeKind::Fallthrough,target:Some(next)});q(&mut work,&mut seen,t);q(&mut work,&mut seen,next);break}
    match i.def.mnemonic{
-    Mnemonic::Jsr=>{let t=i.operand;edges.push(Edge{kind:EdgeKind::Call,target:Some(t)});edges.push(Edge{kind:EdgeKind::CallReturn,target:Some(next)});q(&mut work,&mut seen,t);q(&mut work,&mut seen,next);break}
+    Mnemonic::Jsr=>{
+     let t=i.operand;
+     edges.push(Edge{kind:EdgeKind::Call,target:Some(t)});
+     q(&mut work,&mut seen,t);
+     if let Some((_,pointer))=inline_jsr_dispatcher(mapper,prg,t){
+      let targets=inline_word_table_targets(mapper,prg,next);
+      if !targets.is_empty(){
+       for target in targets{
+        edges.push(Edge{kind:EdgeKind::IndirectJump{pointer},target:Some(target)});
+        q(&mut work,&mut seen,target);
+       }
+       break
+      }
+     }
+     edges.push(Edge{kind:EdgeKind::CallReturn,target:Some(next)});
+     q(&mut work,&mut seen,next);
+     break
+    }
     Mnemonic::Jmp if i.def.mode==AddressingMode::Absolute=>{let t=i.operand;edges.push(Edge{kind:EdgeKind::Jump,target:Some(t)});q(&mut work,&mut seen,t);break}
     Mnemonic::Jmp if i.def.mode==AddressingMode::Indirect=>{
      let targets=indirect_table_targets(mapper,prg,i.pc,i.operand);
@@ -181,6 +292,57 @@ mod tests {
         }));
         assert!(trampoline.edges.iter().any(|edge| {
             matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0025 })
+                && edge.target == Some(0x9210)
+        }));
+    }
+
+    #[test]
+    fn discovers_inline_table_after_nonreturning_jsr_dispatcher() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0x20, 0x00, 0x91, // JSR $9100
+                0x00, 0x92,       // .word $9200
+                0x10, 0x92,       // .word $9210
+                0x00, 0x00,       // terminator / following non-code
+            ],
+        );
+        put(
+            &mut prg,
+            0x9100,
+            &[
+                0xA5, 0x55,       // LDA $55
+                0x0A,             // ASL
+                0xA8,             // TAY
+                0x68, 0x85, 0x00, // PLA / STA $00
+                0x68, 0x85, 0x01, // PLA / STA $01
+                0xC8,
+                0xB1, 0x00,       // LDA ($00),Y
+                0x85, 0x02,       // STA $02
+                0xC8,
+                0xB1, 0x00,       // LDA ($00),Y
+                0x85, 0x03,       // STA $03
+                0x6C, 0x02, 0x00, // JMP ($0002)
+            ],
+        );
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        assert!(!graph.blocks.contains_key(&0x9003));
+        let dispatcher = graph.blocks.get(&0x9100).unwrap();
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0002 })
+                && edge.target == Some(0x9200)
+        }));
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0002 })
                 && edge.target == Some(0x9210)
         }));
     }
