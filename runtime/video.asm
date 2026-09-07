@@ -980,111 +980,72 @@ nes_video_update_horizontal_stitch:
 
     ld a, [nes_hstitch_valid]
     and a
-    jr z, .rebuild
+    jp z, .full_rebuild
 
-    ; Ordinary SMB area-parser VRAM writes are usually construction work for
-    ; columns well offscreen (the breadcrumbs show columns $1A-$1C at the first
-    ; scroll transition). Do not rebuild the entire stitched map merely because
-    ; such data changed; that used to disable/restart LCD timing repeatedly and
-    ; made the fixed HUD map leak across whole frames. Rebuild only when the
-    ; coarse horizontal presentation key actually changes.
     ld a, [nes_hstitch_key]
     cp c
     ret z
+    ld b, a                    ; B = old 0..63 coarse world key
 
-.rebuild:
+    ; Normal scrolling advances one coarse tile at a time. Only the column
+    ; that just fell off the left edge changes source page in the 32-column
+    ; GBC ring, so refresh that one column instead of rebuilding 960 tiles.
+    inc a
+    and $3F
+    cp c
+    jr z, .step_forward
+
+    ; Also support one-tile backtracking.
+    ld a, b
+    dec a
+    and $3F
+    cp c
+    jr z, .step_backward
+
+    ; Teleports / area transitions may jump farther than one coarse tile.
+    jp .full_rebuild
+
+.step_forward:
+    ld a, c
+    ld [nes_hstitch_key], a
+    ld a, b
+    and $1F
+    call nes_video_refresh_stitch_column
+    xor a
+    ld [nes_hstitch_dirty], a
+    ret
+
+.step_backward:
+    ld a, c
+    ld [nes_hstitch_key], a
+    and $1F
+    call nes_video_refresh_stitch_column
+    xor a
+    ld [nes_hstitch_dirty], a
+    ret
+
+.full_rebuild:
+    ; Initial activation / discontinuous area jump. A one-time LCD-off rebuild
+    ; is acceptable here; steady scrolling never comes through this path.
     ld a, c
     ld [nes_hstitch_key], a
 
-    ; Determine which destination columns must come from physical page 0.
-    and $1F
-    ld b, a
-    ld a, c
-    and $20
-    jr nz, .base_page_1
-
-    ; Base page 0: q..31 = page 0, 0..q-1 = page 1.
-    ld a, b
-    ld [nes_hstitch_copy_start], a
-    ld a, $20
-    sub b
-    ld [nes_hstitch_copy_len], a
-    jr .range_ready
-
-.base_page_1:
-    ; Base page 1: 0..q-1 = page 0, q..31 = page 1.
-    xor a
-    ld [nes_hstitch_copy_start], a
-    ld a, b
-    ld [nes_hstitch_copy_len], a
-
-.range_ready:
-    ld a, $20
-    ld b, a
-    ld a, [nes_hstitch_copy_len]
-    ld c, a
-    ld a, b
-    sub c
-    ld [nes_hstitch_copy_skip], a
-
-    ; Rebuild while LCD is off, matching the existing atomic nametable flush.
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
     and $7F
     ldh [rLCDC], a
 
-    ld a, $01
-    ldh [rSVBK], a
-
-    ; Restore map 1 as pristine physical NES page 1 from authoritative WRAM.
     xor a
-    ldh [rVBK], a
-    ld hl, $D400
-    ld de, $9C00
-    ld bc, $03C0
-.restore_page1_tiles:
-    ld a, [hli]
-    ld [de], a
-    inc de
-    dec bc
-    ld a, b
-    or c
-    jr nz, .restore_page1_tiles
+    ld [nes_hstitch_copy_start], a
+.rebuild_columns:
+    ld a, [nes_hstitch_copy_start]
+    call nes_video_refresh_stitch_column
+    ld a, [nes_hstitch_copy_start]
+    inc a
+    ld [nes_hstitch_copy_start], a
+    cp $20
+    jr c, .rebuild_columns
 
-    ; Restore page-1 CGB attributes from the NES attribute table.
-    ld a, [nes_ppuctrl]
-    push af
-    ldh a, [nes_split_bottom_ctrl]
-    ld [nes_ppuctrl], a
-    ld hl, $D7C0
-    ld c, $40
-.restore_page1_attrs:
-    ld a, [hl]
-    push hl
-    push bc
-    call nes_video_sync_attribute_write
-    pop bc
-    pop hl
-    inc hl
-    dec c
-    jr nz, .restore_page1_attrs
-    pop af
-    ld [nes_ppuctrl], a
-
-    ; Overlay the range that belongs to physical page 0, for both tile IDs
-    ; and already-expanded CGB attributes.
-    ld a, [nes_hstitch_copy_len]
-    and a
-    jr z, .copy_done
-
-    xor a
-    ldh [rVBK], a
-    call nes_video_copy_page0_range_to_map1
-    ld a, $01
-    ldh [rVBK], a
-    call nes_video_copy_page0_range_to_map1
-
-.copy_done:
     xor a
     ldh [rVBK], a
     ld [nes_hstitch_dirty], a
@@ -1095,39 +1056,179 @@ nes_video_update_horizontal_stitch:
     ldh [rLCDC], a
     ret
 
-; Copy the selected same-column range from map 0 to map 1 for the 30 NES tile
-; rows. VBK is selected by the caller, so this copies tiles or attributes.
-nes_video_copy_page0_range_to_map1:
+; Input: A = destination GBC tile column 0..31.
+; Refresh one complete stitched column from the authoritative virtual NES
+; nametables. This is cheap enough to do while LCD timing remains enabled.
+nes_video_refresh_stitch_column:
+    and $1F
+    ld [nes_hstitch_copy_start], a
+    call nes_video_hstitch_source_for_column
+    ld [nes_hstitch_copy_len], a      ; 0=physical NT0, 1=physical NT1
+
+    ; CGB attribute bit 3 mirrors the lower/playfield NES pattern-table bit.
+    ldh a, [nes_split_bottom_ctrl]
+    and $10
+    srl a
+    ld [nes_hstitch_copy_skip], a
+
+    ld a, $01
+    ldh [rSVBK], a
+
+    ; Tile IDs: source D000/D400, destination stitched map $9C00.
+    ld a, [nes_hstitch_copy_len]
+    and a
+    jr z, .tile_source0
+    ld h, $D4
+    jr .tile_source_ready
+.tile_source0:
+    ld h, $D0
+.tile_source_ready:
     ld a, [nes_hstitch_copy_start]
     ld l, a
-    ld e, a
-    ld h, $98
     ld d, $9C
-    ld b, $1E
-.row:
-    ld a, [nes_hstitch_copy_len]
-    ld c, a
-.col:
-    ld a, [hli]
-    ld [de], a
-    inc de
-    dec c
-    jr nz, .col
-
-    ld a, [nes_hstitch_copy_skip]
-    add l
-    ld l, a
-    jr nc, .hl_ok
-    inc h
-.hl_ok:
-    ld a, [nes_hstitch_copy_skip]
-    add e
     ld e, a
-    jr nc, .de_ok
+    ld b, $1E                    ; 30 NES tile rows
+
+.tile_loop:
+    ld a, [hl]
+    ld c, a
+    call nes_video_wait_vram
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+
+    ld a, l
+    add $20
+    ld l, a
+    jr nc, .tile_h_ok
+    inc h
+.tile_h_ok:
+    ld a, e
+    add $20
+    ld e, a
+    jr nc, .tile_d_ok
     inc d
-.de_ok:
+.tile_d_ok:
     dec b
-    jr nz, .row
+    jr nz, .tile_loop
+
+    ; CGB attributes for this column. One NES attribute byte covers 4x4 tiles.
+    ld a, [nes_hstitch_copy_len]
+    and a
+    jr z, .attr_source0
+    ld h, $D7
+    jr .attr_source_ready
+.attr_source0:
+    ld h, $D3
+.attr_source_ready:
+    ld a, [nes_hstitch_copy_start]
+    srl a
+    srl a
+    add $C0
+    ld l, a
+
+    ld d, $9C
+    ld a, [nes_hstitch_copy_start]
+    ld e, a
+    ld b, $08                    ; eight 4-row attribute bands
+
+.attr_group:
+    ; Top two rows of the 4x4 attribute cell.
+    ld a, [hl]
+    ld c, a
+    ld a, [nes_hstitch_copy_start]
+    and $02
+    jr z, .attr_top_left
+    ld a, c
+    srl a
+    srl a
+    jr .attr_top_mask
+.attr_top_left:
+    ld a, c
+.attr_top_mask:
+    and $03
+    ld c, a
+    ld a, [nes_hstitch_copy_skip]
+    or c
+    ld c, a
+    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row
+
+    ; Bottom two rows.
+    ld a, [hl]
+    swap a
+    ld c, a
+    ld a, [nes_hstitch_copy_start]
+    and $02
+    jr z, .attr_bottom_left
+    ld a, c
+    srl a
+    srl a
+    jr .attr_bottom_mask
+.attr_bottom_left:
+    ld a, c
+.attr_bottom_mask:
+    and $03
+    ld c, a
+    ld a, [nes_hstitch_copy_skip]
+    or c
+    ld c, a
+    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row
+
+    ld a, l
+    add $08
+    ld l, a
+    jr nc, .attr_h_ok
+    inc h
+.attr_h_ok:
+    dec b
+    jr nz, .attr_group
+
+    xor a
+    ldh [rVBK], a
+    ret
+
+; Return A=0/1 for the physical NES nametable currently assigned to a GBC
+; destination column under nes_hstitch_key. Clobbers B/C.
+nes_video_hstitch_source_for_column:
+    and $1F
+    ld [nes_hstitch_copy_start], a
+    ld a, [nes_hstitch_key]
+    and $1F
+    ld b, a                      ; coarse seam column q
+
+    ld a, [nes_hstitch_key]
+    and $20
+    jr z, .source_base0
+    ld c, $01
+    jr .source_base_ready
+.source_base0:
+    ld c, $00
+.source_base_ready:
+    ld a, [nes_hstitch_copy_start]
+    cp b
+    jr nc, .source_same_page
+    ld a, c
+    xor $01
+    ret
+.source_same_page:
+    ld a, c
+    ret
+
+; Write C to stitched-map CGB attributes at DE and advance one tile row.
+nes_video_stitch_write_attr_row:
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, e
+    add $20
+    ld e, a
+    ret nc
+    inc d
     ret
 
 ; Split-aware map selection. In vertical-mirroring games, map 0 remains the
