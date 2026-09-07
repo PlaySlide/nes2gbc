@@ -24,7 +24,30 @@ nes_gbc_vblank_isr:
     ; host VBlank after translated RTI clears nes_nmi_active.
     ld a, [nes_nmi_active]
     and a
-    jp nz, .done
+    jp z, .commit_ready
+
+    ; Keep displaying the last fully completed raster split while the next NES
+    ; NMI is still running. Do not publish any new staged state, but do re-arm
+    ; the one-shot LYC split so the completed frame remains visually stable.
+    ldh a, [nes_split_active]
+    and a
+    jp z, .done
+
+    ldh a, [nes_split_armed_top_ctrl]
+    call nes_video_apply_map_select_a
+    ldh a, [nes_split_armed_top_x]
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_top_y]
+    ldh [rSCY], a
+
+    ldh a, [nes_split_line]
+    ldh [rLYC], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
+    jp .done
+
+.commit_ready:
 
     ; Flush virtual NES OAM exactly once at the start of host VBlank.
     ; Normal $4014 DMA has already built the 160-byte GBC OAM shadow; direct
@@ -91,8 +114,15 @@ nes_gbc_vblank_isr:
     xor a
     ldh [nes_scroll_dirty], a
 
-    ; Freeze the latest stable lower/playfield state for this host frame before
-    ; the next translated NES NMI can update the capture buffer.
+    ; Freeze the complete top/HUD and lower/playfield state for this host
+    ; frame before the next translated NES NMI can update the capture buffer.
+    ldh a, [nes_split_top_x]
+    ldh [nes_split_armed_top_x], a
+    ldh a, [nes_split_top_y]
+    ldh [nes_split_armed_top_y], a
+    ldh a, [nes_split_top_ctrl]
+    ldh [nes_split_armed_top_ctrl], a
+
     ldh a, [nes_split_bottom_x]
     ldh [nes_split_armed_x], a
     ldh a, [nes_split_bottom_y]
@@ -100,13 +130,13 @@ nes_gbc_vblank_isr:
     ldh a, [nes_split_bottom_ctrl]
     ldh [nes_split_armed_ctrl], a
 
-    ldh a, [nes_split_top_ctrl]
+    ldh a, [nes_split_armed_top_ctrl]
     call nes_video_apply_map_select_a
 
     ; Fixed HUD: never add the artificial world viewport offset here.
-    ldh a, [nes_split_top_x]
+    ldh a, [nes_split_armed_top_x]
     ldh [rSCX], a
-    ldh a, [nes_split_top_y]
+    ldh a, [nes_split_armed_top_y]
     ldh [rSCY], a
 
     ; Re-arm the one-shot lower/playfield transition every host frame.
@@ -220,6 +250,9 @@ Start:
     ldh [nes_split_pending_x], a
     ldh [nes_split_pending_y], a
     ldh [nes_split_pending_ctrl], a
+    ldh [nes_split_armed_top_x], a
+    ldh [nes_split_armed_top_y], a
+    ldh [nes_split_armed_top_ctrl], a
     ld a, $20
     ldh [nes_split_line], a
     xor a
