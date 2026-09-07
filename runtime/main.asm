@@ -31,7 +31,7 @@ nes_gbc_vblank_isr:
     ; the one-shot LYC split so the completed frame remains visually stable.
     ldh a, [nes_split_active]
     and a
-    jp z, .done
+    jr z, .nmi_check_seam
 
     ldh a, [nes_split_armed_top_ctrl]
     call nes_video_apply_map_select_a
@@ -45,6 +45,13 @@ nes_gbc_vblank_isr:
     ldh a, [rSTAT]
     or $40
     ldh [rSTAT], a
+    jp .done
+
+.nmi_check_seam:
+    ldh a, [nes_seam_active]
+    and a
+    jp z, .done
+    call nes_video_rearm_vertical_seam
     jp .done
 
 .commit_ready:
@@ -92,23 +99,31 @@ nes_gbc_vblank_isr:
     and a
     jp nz, .scroll_split
 
-    ; Ordinary single-scroll games only need a hardware update when the NES
-    ; produced a new complete $2005 pair.
+    ; Ordinary single-scroll games need a fresh calculation when the NES
+    ; writes a complete $2005 pair or the follow camera moves. A previously
+    ; armed vertical seam must also be re-armed every host frame because the
+    ; STAT source is one-shot.
     ldh a, [nes_scroll_dirty]
     and a
+    jr nz, .scroll_single
+    ldh a, [nes_seam_active]
+    and a
     jp z, .scroll_done
-    xor a
-    ldh [nes_scroll_dirty], a
+    call nes_video_rearm_vertical_seam
+    jp .scroll_done
 
 .scroll_single:
-    ; Disable any stale one-shot raster source and apply one coherent pair.
-    ldh a, [rSTAT]
-    and $BF
-    ldh [rSTAT], a
-    call nes_view_apply_scroll
+    xor a
+    ldh [nes_scroll_dirty], a
+    call nes_video_apply_single_scroll
     jp .scroll_done
 
 .scroll_split:
+    ; A true game-authored raster split takes precedence over the synthetic
+    ; single-scroll vertical nametable seam.
+    xor a
+    ldh [nes_seam_active], a
+
     ; Consume any fresh scroll notification, but keep presenting the already
     ; proven split even on frames where the NES does not rewrite $2005.
     xor a
@@ -162,6 +177,10 @@ nes_gbc_stat_isr:
     push af
     push bc
 
+    ldh a, [nes_split_active]
+    and a
+    jr z, .check_vertical_seam
+
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
     ldh a, [nes_split_armed_ctrl]
     call nes_video_apply_map_select_a
@@ -177,7 +196,21 @@ nes_gbc_stat_isr:
     ldh a, [nes_view_y]
     add b
     ldh [rSCY], a
+    jr .disable_stat
 
+.check_vertical_seam:
+    ldh a, [nes_seam_active]
+    and a
+    jr z, .disable_stat
+
+    ; Synthetic NES Y=240 seam: switch to the vertically adjacent logical
+    ; nametable and compensate for the CGB map's extra 16 pixel rows.
+    ldh a, [nes_seam_bottom_ctrl]
+    call nes_video_apply_map_select_a
+    ldh a, [nes_seam_bottom_y]
+    ldh [rSCY], a
+
+.disable_stat:
     ; Disable the LYC source until the next VBlank arms another split.
     ldh a, [rSTAT]
     and $BF
@@ -270,6 +303,12 @@ Start:
     ldh [nes_split_armed_top_x], a
     ldh [nes_split_armed_top_y], a
     ldh [nes_split_armed_top_ctrl], a
+    ldh [nes_seam_active], a
+    ldh [nes_seam_line], a
+    ldh [nes_seam_top_ctrl], a
+    ldh [nes_seam_bottom_ctrl], a
+    ldh [nes_seam_top_y], a
+    ldh [nes_seam_bottom_y], a
     ld a, $20
     ldh [nes_split_line], a
     xor a
