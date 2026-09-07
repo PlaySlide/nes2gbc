@@ -282,6 +282,8 @@ Start:
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
     ldh [nes_last_indirect_hi], a
+    ldh [nes_fault_pc_lo], a
+    ldh [nes_fault_pc_hi], a
     ldh [nes_oam_shadow_ready], a
     ldh [nes_palette_dirty], a
     ldh [nes_scroll_dirty], a
