@@ -154,8 +154,22 @@ nes_video_flush_nametable_queue_atomic:
     ld [nes_ntdiag_first_lo], a
     ld [nes_ntdiag_last_hi], a
     ld [nes_ntdiag_last_lo], a
+    ld [nes_ntdiag_max_row], a
     ld a, $FF
     ld [nes_ntdiag_min_col], a
+    ld [nes_ntdiag_min_row], a
+
+    ; Snapshot which physical GBC nametable is actually being displayed when
+    ; this completed NES transaction is published.
+    ldh a, [rLCDC]
+    and $08
+    jr z, .diag_display_map0
+    ld a, $01
+    jr .diag_display_store
+.diag_display_map0:
+    xor a
+.diag_display_store:
+    ld [nes_ntdiag_display_map], a
 
     ; This routine is called from host VBlank. Save the exact display control,
     ; turn LCD off while it is legal, and make all queued VRAM writes invisible.
@@ -239,9 +253,39 @@ nes_video_flush_nametable_queue_atomic:
 .diag_min_done:
     ld a, [nes_ntdiag_max_col]
     cp b
-    jr nc, .diag_done
+    jr nc, .diag_row
     ld a, b
     ld [nes_ntdiag_max_col], a
+
+.diag_row:
+    ; row = ((physical-high & 3) << 3) | (low >> 5)
+    ld a, h
+    and $03
+    add a
+    add a
+    add a
+    ld b, a
+    ld a, l
+    srl a
+    srl a
+    srl a
+    srl a
+    srl a
+    or b
+    ld b, a
+
+    ld a, [nes_ntdiag_min_row]
+    cp b
+    jr c, .diag_min_row_done
+    jr z, .diag_min_row_done
+    ld a, b
+    ld [nes_ntdiag_min_row], a
+.diag_min_row_done:
+    ld a, [nes_ntdiag_max_row]
+    cp b
+    jr nc, .diag_done
+    ld a, b
+    ld [nes_ntdiag_max_row], a
 
 .diag_done:
     push de
