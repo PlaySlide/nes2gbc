@@ -210,6 +210,9 @@ Start:
     ldh [nes_split_armed_x], a
     ldh [nes_split_armed_y], a
     ldh [nes_split_armed_ctrl], a
+    ldh [nes_split_pending_x], a
+    ldh [nes_split_pending_y], a
+    ldh [nes_split_pending_ctrl], a
     ld a, $20
     ldh [nes_split_line], a
     xor a
