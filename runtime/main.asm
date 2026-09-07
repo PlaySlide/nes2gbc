@@ -56,10 +56,6 @@ nes_gbc_vblank_isr:
 
 .commit_ready:
 
-    ; Nametable updates performed by the completed NES NMI are authoritative
-    ; only now. Publish them before the matching OAM/palette/scroll state.
-    call nes_video_flush_nametable_queue
-
     ; Flush virtual NES OAM exactly once at the start of host VBlank.
     ; Normal $4014 DMA has already built the 160-byte GBC OAM shadow; direct
     ; $2004 writers fall back to building it here.
@@ -261,11 +257,6 @@ Start:
     ld [nes_oam_dirty], a
     ld [nes_current_code_bank], a
     ld [nes_dispatch_cache_valid], a
-    ld [nes_nametable_queue_ptr_lo], a
-    ld [nes_nametable_queue_overflow], a
-    ld a, $D8
-    ld [nes_nametable_queue_ptr_hi], a
-    xor a
     ; Follow camera is the default. Start centered until the first OAM
     ; projection acquires a plausible player sprite.
     ld a, $04
