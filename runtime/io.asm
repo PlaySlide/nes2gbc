@@ -128,6 +128,21 @@ nes_seam_bottom_y:         ds 1   ; $FFF1, GBC SCY after seam (+16 compensation)
 nes_fault_pc_lo:           ds 1   ; $FFF2, exact 6502 PC for generated unimplemented block
 nes_fault_pc_hi:           ds 1   ; $FFF3
 
+; Crash snapshot. These are written only on nes_unimplemented, so they are free
+; in the hot path and let mGBA show enough of JumpEngine/stack state to identify
+; an out-of-range computed jump without a TRACE build.
+nes_fault_target_lo:       ds 1   ; $FFF4, last dispatch-cache NES PC low
+nes_fault_target_hi:       ds 1   ; $FFF5
+nes_fault_sp_snapshot:     ds 1   ; $FFF6
+nes_fault_a_snapshot:      ds 1   ; $FFF7
+nes_fault_x_snapshot:      ds 1   ; $FFF8
+nes_fault_y_snapshot:      ds 1   ; $FFF9
+nes_fault_zp04_snapshot:   ds 1   ; $FFFA, JumpEngine caller-return pointer low
+nes_fault_zp05_snapshot:   ds 1   ; $FFFB, caller-return pointer high
+nes_fault_zp06_snapshot:   ds 1   ; $FFFC, computed indirect target low
+nes_fault_zp07_snapshot:   ds 1   ; $FFFD, computed indirect target high
+nes_fault_kind:            ds 1   ; $FFFE, $01 = nes_unimplemented
+
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
 
