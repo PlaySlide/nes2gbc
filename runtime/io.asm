@@ -55,6 +55,9 @@ nes_nametable_queue_ptr_lo: ds 1 ; next byte in $D800-$DFFF staging queue
 nes_nametable_queue_ptr_hi: ds 1
 nes_nametable_queue_overflow: ds 1
 nes_mask_dirty:             ds 1 ; $C85C defer PPUMASK hardware publication
+nes_ntdiag_min_row:         ds 1 ; $C85D, minimum tile row touched (0-29)
+nes_ntdiag_max_row:         ds 1 ; $C85E, maximum tile row touched
+nes_ntdiag_display_map:     ds 1 ; $C85F, GBC BG map at publish: 0=$9800, 1=$9C00
 
 SECTION "NES debug viewport", WRAM0[$C860]
 nes_view_mode:              ds 1 ; 0 TL, 1 TR, 2 BL, 3 BR, 4 center
