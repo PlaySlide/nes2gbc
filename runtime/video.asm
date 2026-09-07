@@ -208,7 +208,14 @@ nes_video_sync_nametable_write:
     and $10
     srl a
     or b
+    ld b, a
     ld [de], a
+
+    ; A NES nametable has only 30 tile rows, while a GBC BG map has 32.
+    ; Keep GBC rows 30-31 as a live copy of rows 0-1 from the vertically
+    ; adjacent NES nametable so SCY can cross the 240-pixel NES seam without
+    ; exposing two bogus tile-0 rows.
+    call nes_video_mirror_vertical_seam_tile
 
     xor a
     ldh [rVBK], a
@@ -276,6 +283,10 @@ nes_video_sync_attribute_write:
 
     xor a
     ldh [rVBK], a
+
+    ; Attribute row 0 supplies palettes for NES tile rows 0-3. Mirror its
+    ; first two CGB rows into the synthetic 30-31 seam as well.
+    call nes_video_mirror_vertical_seam_attr
     ret
 
 nes_video_attr_top_row:
@@ -326,6 +337,151 @@ nes_video_attr_next_row:
     ld e, a
     ret nc
     inc d
+    ret
+
+; Mirror a write to NES tile row 0/1 into the synthetic GBC seam row 30/31.
+; Input: HL = physical NES nametable tile address, C = tile ID, B = CGB attr.
+nes_video_mirror_vertical_seam_tile:
+    ld a, h
+    and $03
+    ret nz
+    ld a, l
+    cp $40
+    ret nc
+
+    ; Horizontal mirroring uses the other physical table vertically.
+    ; Vertical mirroring repeats the same physical table vertically.
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .same_table
+
+    ld a, h
+    and $04
+    ld d, $9F
+    jr z, .dest_ready
+    ld d, $9B
+    jr .dest_ready
+
+.same_table:
+    ld a, h
+    and $04
+    ld d, $9B
+    jr z, .dest_ready
+    ld d, $9F
+
+.dest_ready:
+    ld a, l
+    add $C0
+    ld e, a
+
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+
+    ld a, $01
+    ldh [rVBK], a
+    ld a, b
+    ld [de], a
+    ret
+
+; Mirror palette attributes for source NES tile rows 0-1 into seam rows 30-31.
+; Input after attribute expansion: H = $D3/$D7, L = attribute index $00-$3F.
+nes_video_mirror_vertical_seam_attr:
+    ld a, l
+    cp $08
+    ret nc
+
+    ; Source CGB map.
+    ld a, h
+    and $04
+    ld b, $98
+    jr z, .source_ready
+    ld b, $9C
+.source_ready:
+
+    ; Destination seam map follows the same vertical adjacency rule as tiles.
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .attr_same_table
+
+    ld a, h
+    and $04
+    ld c, $9F
+    jr z, .attr_dest_ready
+    ld c, $9B
+    jr .attr_dest_ready
+
+.attr_same_table:
+    ld a, h
+    and $04
+    ld c, $9B
+    jr z, .attr_dest_ready
+    ld c, $9F
+
+.attr_dest_ready:
+    ld a, l
+    and $07
+    add a
+    add a
+    ld l, a
+    ld e, a
+    ld h, b
+    ld d, c
+    ld a, e
+    add $C0
+    ld e, a
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+
+    ; Source row 0 -> seam row 30.
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+
+    ; Advance both pointers by the remainder of one 32-byte map row.
+    ld a, l
+    add $1C
+    ld l, a
+    jr nc, .src_row1_ready
+    inc h
+.src_row1_ready:
+    ld a, e
+    add $1D
+    ld e, a
+    jr nc, .dst_row1_ready
+    inc d
+.dst_row1_ready:
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+
+    ; Source row 1 -> seam row 31.
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hl]
+    ld [de], a
+
+    xor a
+    ldh [rVBK], a
     ret
 
 ; Synchronize NES background palette RAM into CGB palettes 0-3.
