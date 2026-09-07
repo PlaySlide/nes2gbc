@@ -65,6 +65,19 @@ nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
 nes_reset_count_wram_pad:    ds 1 ; preserves legacy WRAM layout
 
+; Last completed translated-NMI nametable transaction diagnostics.
+; These are observational only: they do not alter renderer behavior.
+SECTION "NES nametable diagnostics", WRAM0[$C867]
+nes_ntdiag_tile_count:      ds 1 ; C867, tile writes (attributes excluded)
+nes_ntdiag_phys_mask:       ds 1 ; C868, bit0=$9800/phys0, bit1=$9C00/phys1
+nes_ntdiag_min_col:         ds 1 ; C869, minimum tile column touched
+nes_ntdiag_max_col:         ds 1 ; C86A, maximum tile column touched
+nes_ntdiag_first_hi:        ds 1 ; C86B, first physical NT address high ($D0-$D7)
+nes_ntdiag_first_lo:        ds 1 ; C86C
+nes_ntdiag_last_hi:         ds 1 ; C86D, last physical tile address high
+nes_ntdiag_last_lo:         ds 1 ; C86E
+nes_ntdiag_commit_serial:   ds 1 ; C86F, increments on each nonempty NT publish
+
 ; Follow-camera bookkeeping lives in the gap immediately after the optional
 ; runtime profile counters ($C870-$C8E8) and before virtual NES OAM at $C900.
 ; Keep the legacy $C860 debug-view block fixed so profiler builds do not overlap.
