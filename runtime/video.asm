@@ -349,9 +349,6 @@ nes_video_wait_oam:
 nes_video_sync_nametable_write:
     PROFILE_INC nes_profile_nametable_sync
     ld c, a
-    ld a, $01
-    ld [nes_hstitch_dirty], a
-    ld a, c
 
     ; Attribute bytes start at offset $3C0 within each physical 1 KiB table.
     ld a, h
@@ -394,11 +391,61 @@ nes_video_sync_nametable_write:
 
     xor a
     ldh [rVBK], a
+    call nes_video_stitch_repair_tile_from_page0
     ret
 
 .attribute:
     ld a, c
     jp nes_video_sync_attribute_write
+
+; Keep the synthesized map coherent after a physical nametable tile write.
+; If this destination column currently represents physical NT0, copy the
+; authoritative expanded map-0 cell into stitched map 1. This both mirrors
+; real NT0 changes and repairs any NT1 write that landed in an NT0-owned
+; stitched column.
+nes_video_stitch_repair_tile_from_page0:
+    ld a, [nes_hstitch_valid]
+    and a
+    ret z
+    ld a, [nes_mirroring]
+    cp $01
+    ret nz
+    ldh a, [nes_split_active]
+    and a
+    ret z
+
+    ld a, l
+    and $1F
+    call nes_video_hstitch_source_for_column
+    and a
+    ret nz                       ; source 1: map 1 already has the right cell
+
+    ; Convert virtual D0-D7 inner row bits to same-cell $9800/$9C00 addresses.
+    ld a, h
+    and $03
+    ld b, a
+    add $98
+    ld h, a
+    ld a, b
+    add $9C
+    ld d, a
+    ld e, l
+
+    call nes_video_wait_vram
+    xor a
+    ldh [rVBK], a
+    ld a, [hl]
+    ld [de], a
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [hl]
+    ld [de], a
+
+    xor a
+    ldh [rVBK], a
+    ret
 
 ; Expand one NES attribute byte into sixteen CGB tile attributes.
 ; Input: HL = physical attribute address ($D3C0-$D3FF or $D7C0-$D7FF), A = attribute byte.
