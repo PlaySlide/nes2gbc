@@ -107,6 +107,9 @@ nes_hstitch_key:            ds 1 ; bit5=base physical page, bits0-4=coarse X
 nes_hstitch_copy_start:     ds 1
 nes_hstitch_copy_len:       ds 1
 nes_hstitch_copy_skip:      ds 1
+nes_hstitch_target_key:     ds 1 ; C8FA target key for small multi-tile catch-up
+nes_hstitch_full_rebuilds:  ds 1 ; C8FB diagnostic counter
+nes_hstitch_catchups:       ds 1 ; C8FC diagnostic counter
 
 SECTION "NES hot sprite state", HRAM[$FF88]
 nes_view_x:                ds 1
