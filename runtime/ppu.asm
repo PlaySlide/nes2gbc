@@ -140,9 +140,14 @@ nes_ppu_cpu_write:
     ldh [nes_ctrl_dirty], a
     ret
 .mask:
+    ; PPUMASK is part of the rendered NES frame. SMB deliberately disables
+    ; rendering at the start of NMI and re-enables it after its VRAM update;
+    ; publishing those intermediate writes to the GBC creates host-frame
+    ; flashes when one translated NMI spans multiple GBC frames.
     ld a, e
     ld [nes_ppumask], a
-    call nes_video_update_mask
+    ld a, $01
+    ld [nes_mask_dirty], a
     ret
 .oamaddr:
     ld a, e
