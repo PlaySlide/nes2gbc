@@ -21,13 +21,48 @@ nes_ppu_cpu_read:
     ; Approximate NES vblank from the live GBC scanline.
     ldh a, [rLY]
     cp 144
-    jr c, .not_vblank
+    jr c, .visible_scan
+
+    ; NES clears sprite-0 hit before the next visible frame. Treat host VBlank
+    ; as the clear interval so polling loops can observe the old hit disappear.
     ld a, [nes_ppu_status]
+    and $3F
     or $80
     jr .status_ready
-.not_vblank:
+
+.visible_scan:
+    ld b, a
     ld a, [nes_ppu_status]
-    and $7F
+    and $3F
+    ld e, a
+
+    ; Semantic sprite-0 hit fallback. SMB (and many other early NES games)
+    ; waits in NMI for PPUSTATUS bit 6 before changing playfield scroll. We do
+    ; not rasterize NES pixels, so synthesize that hit once the host reaches
+    ; our matching HUD/playfield split line, provided BG + sprites are enabled
+    ; and sprite 0 is not hidden.
+    ldh a, [nes_split_line]
+    ld c, a
+    ld a, b
+    cp c
+    jr c, .status_from_base
+
+    ld a, [nes_ppumask]
+    and $18
+    cp $18
+    jr nz, .status_from_base
+
+    ld a, [nes_oam_ram]
+    cp $EF
+    jr nc, .status_from_base
+
+    ld a, e
+    or $40
+    jr .status_ready
+
+.status_from_base:
+    ld a, e
+
 .status_ready:
     ld e, a
 
