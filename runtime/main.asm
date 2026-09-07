@@ -62,21 +62,37 @@ nes_gbc_vblank_isr:
     call nes_video_update_ctrl
 .ctrl_done:
 
+    ; A proven HUD/playfield split is persistent display state, not merely a
+    ; reaction to a fresh $2005 write. The LYC source is one-shot, so once a
+    ; split has been detected it must be re-armed on every presented host frame.
+    ldh a, [nes_split_active]
+    and a
+    jp nz, .scroll_split
+
+    ; Ordinary single-scroll games only need a hardware update when the NES
+    ; produced a new complete $2005 pair.
     ldh a, [nes_scroll_dirty]
     and a
     jp z, .scroll_done
     xor a
     ldh [nes_scroll_dirty], a
 
-    ; If the translated NES NMI produced two complete scroll pairs, preserve
-    ; the first for the fixed top/HUD region and switch to the second with a
-    ; one-shot GBC LYC interrupt. Otherwise use the normal single scroll.
-    ldh a, [nes_split_active]
-    and a
-    jp z, .scroll_single
+.scroll_single:
+    ; Disable any stale one-shot raster source and apply one coherent pair.
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    call nes_view_apply_scroll
+    jp .scroll_done
 
-    ; Freeze the lower/playfield state for this host frame before the next
-    ; translated NES NMI is allowed to start and overwrite the capture buffer.
+.scroll_split:
+    ; Consume any fresh scroll notification, but keep presenting the already
+    ; proven split even on frames where the NES does not rewrite $2005.
+    xor a
+    ldh [nes_scroll_dirty], a
+
+    ; Freeze the latest stable lower/playfield state for this host frame before
+    ; the next translated NES NMI can update the capture buffer.
     ldh a, [nes_split_bottom_x]
     ldh [nes_split_armed_x], a
     ldh a, [nes_split_bottom_y]
@@ -87,27 +103,18 @@ nes_gbc_vblank_isr:
     ldh a, [nes_split_top_ctrl]
     call nes_video_apply_map_select_a
 
-    ; The top raster region is a fixed NES HUD. Our debug/player viewport
-    ; crops the world, not the HUD, so do not add nes_view_x/nes_view_y here.
-    ; This effectively counter-scrolls the HUD against viewport movement.
+    ; Fixed HUD: never add the artificial world viewport offset here.
     ldh a, [nes_split_top_x]
     ldh [rSCX], a
     ldh a, [nes_split_top_y]
     ldh [rSCY], a
 
+    ; Re-arm the one-shot lower/playfield transition every host frame.
     ldh a, [nes_split_line]
     ldh [rLYC], a
     ldh a, [rSTAT]
     or $40
     ldh [rSTAT], a
-    jp .scroll_done
-
-.scroll_single:
-    ; Disable any stale one-shot raster source and apply one coherent pair.
-    ldh a, [rSTAT]
-    and $BF
-    ldh [rSTAT], a
-    call nes_view_apply_scroll
 .scroll_done:
 
     ; This host frame was presented from a completed NES state, so it may
