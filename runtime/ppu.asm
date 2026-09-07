@@ -112,6 +112,33 @@ nes_ppu_cpu_write:
     ld a, e
     ld [nes_ppuctrl], a
 
+    ; A number of NES games, including SMB, write the final PPUCTRL *after*
+    ; the corresponding $2005 scroll pair. Keep the captured raster state tied
+    ; to the most recent scroll pair instead of freezing the nametable select
+    ; one write too early.
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .ctrl_capture_done
+
+    ldh a, [nes_scroll_pair_count]
+    and a
+    jr z, .ctrl_capture_done
+    cp $02
+    jr nc, .ctrl_capture_bottom
+
+    ; One pair captured: it is still the pending/top candidate.
+    ld a, e
+    ldh [nes_split_pending_ctrl], a
+    jr .ctrl_capture_done
+
+.ctrl_capture_bottom:
+    ; Two or more pairs captured: this PPUCTRL belongs to the lower/playfield
+    ; state unless a later scroll pair proves otherwise.
+    ld a, e
+    ldh [nes_split_bottom_ctrl], a
+
+.ctrl_capture_done:
+
     ; Sprite pattern-table select (bit 3) and sprite size (bit 5) affect every
     ; OAM entry without rewriting NES OAM. Rebuild the projected shadow now
     ; and schedule a fresh hardware OAM commit for the next host VBlank.
