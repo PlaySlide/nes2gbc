@@ -33,8 +33,7 @@ nes_gbc_vblank_isr:
     and a
     jr z, .nmi_check_seam
 
-    ldh a, [nes_split_armed_top_ctrl]
-    call nes_video_apply_map_select_a
+    call nes_video_apply_split_top_map
     ldh a, [nes_split_armed_top_x]
     ldh [rSCX], a
     ldh a, [nes_split_armed_top_y]
@@ -60,6 +59,7 @@ nes_gbc_vblank_isr:
     ; OAM/palette/control/scroll state. The flush itself keeps LCD off, so a
     ; long translated NMI can never leak half-built SMB columns to scanout.
     call nes_video_flush_nametable_queue_atomic
+    call nes_video_update_horizontal_stitch
 
     ; Flush virtual NES OAM exactly once at the start of host VBlank.
     ; Normal $4014 DMA has already built the 160-byte GBC OAM shadow; direct
@@ -158,8 +158,7 @@ nes_gbc_vblank_isr:
     ldh a, [nes_split_bottom_ctrl]
     ldh [nes_split_armed_ctrl], a
 
-    ldh a, [nes_split_armed_top_ctrl]
-    call nes_video_apply_map_select_a
+    call nes_video_apply_split_top_map
 
     ; Fixed HUD: never add the artificial world viewport offset here.
     ldh a, [nes_split_armed_top_x]
@@ -195,8 +194,7 @@ nes_gbc_stat_isr:
     jr z, .check_vertical_seam
 
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
-    ldh a, [nes_split_armed_ctrl]
-    call nes_video_apply_map_select_a
+    call nes_video_apply_split_bottom_map
 
     ldh a, [nes_split_armed_x]
     ld b, a
@@ -297,6 +295,12 @@ Start:
     ld [nes_view_follow_candidate_y], a
     ld [nes_view_follow_slot], a
     ld [nes_view_select_prev], a
+    ld [nes_hstitch_valid], a
+    ld [nes_hstitch_dirty], a
+    ld [nes_hstitch_key], a
+    ld [nes_hstitch_copy_start], a
+    ld [nes_hstitch_copy_len], a
+    ld [nes_hstitch_copy_skip], a
     ld [nes_ntdiag_min_row], a
     ld [nes_ntdiag_max_row], a
     ld [nes_ntdiag_display_map], a
