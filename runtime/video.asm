@@ -130,6 +130,53 @@ nes_video_copy:
     jr nz, .loop
     ret
 
+; Commit all nametable addresses staged by the completed translated NES NMI.
+; Called from host VBlank before scroll/control are published, so the new world
+; data and the new camera state become visible together.
+nes_video_flush_nametable_queue:
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $D8
+    jr nz, .has_entries
+    ld a, [nes_nametable_queue_ptr_lo]
+    and a
+    ret z
+
+.has_entries:
+    ld a, $01
+    ldh [rSVBK], a
+    ld de, nes_nametable_queue
+
+.loop:
+    ; DE == queue end?
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp d
+    jr nz, .read_entry
+    ld a, [nes_nametable_queue_ptr_lo]
+    cp e
+    jr z, .done
+
+.read_entry:
+    ld a, [de]
+    inc de
+    ld l, a
+    ld a, [de]
+    inc de
+    ld h, a
+
+    push de
+    ld a, [hl]
+    call nes_video_sync_nametable_write
+    pop de
+    jr .loop
+
+.done:
+    xor a
+    ld [nes_nametable_queue_ptr_lo], a
+    ld [nes_nametable_queue_overflow], a
+    ld a, $D8
+    ld [nes_nametable_queue_ptr_hi], a
+    ret
+
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
 ; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
 ; entire frame waiting for LY>=144 for every translated NES PPU write.
