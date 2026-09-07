@@ -105,7 +105,8 @@ fn emit_follow_hint_init(asm: &mut String, follow_slot: Option<u8>) {
     }
     asm.push_str("    ret\n");
 }
-\nfn main() -> ExitCode {
+
+fn main() -> ExitCode {
     let mut args = env::args_os();
     let program = args.next().unwrap_or_default();
     let Some(path) = args.next() else {
