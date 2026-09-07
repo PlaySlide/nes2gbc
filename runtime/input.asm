@@ -235,6 +235,42 @@ nes_view_toggle_follow:
     ldh [nes_view_y], a
     jp nes_view_mark_dirty
 
+; In Follow mode, Select+B advances to the next visible NES OAM slot.
+; This is a manual correction fallback for games without a compatibility hint.
+; The scan wraps and tests at most all 64 slots, starting after the current one.
+nes_view_cycle_follow_target:
+    ld a, [nes_view_follow_enabled]
+    and a
+    ret z
+
+    ld a, [nes_view_follow_slot]
+    ld c, a
+    ld b, 64
+.scan_next:
+    inc c
+    ld a, c
+    and $3F
+    ld c, a
+
+    add a
+    add a
+    ld l, a
+    ld h, HIGH(nes_oam_ram)
+    ld a, [hl]
+    cp $EF
+    jr c, .found
+
+    dec b
+    jr nz, .scan_next
+    ret
+
+.found:
+    ld a, c
+    ld [nes_view_follow_slot], a
+    ld a, $01
+    ld [nes_view_follow_valid], a
+    jp nes_view_follow_update
+
 ; Cycle TL -> TR -> BL -> BR -> center -> TL.
 nes_view_cycle:
     ld a, [nes_view_mode]
@@ -297,13 +333,13 @@ nes_controller_latch:
     ld b, a
 
     ; Camera chords are edge-triggered and consumed so the NES game never
-    ; sees them. Select+A toggles Follow/Manual. In Manual, Select+Start cycles
-    ; TL -> TR -> BL -> BR -> Center.
+    ; sees them. Select+A toggles Follow/Manual. Select+B cycles visible follow
+    ; targets. In Manual, Select+Start cycles TL -> TR -> BL -> BR -> Center.
     bit 2, b
     jr z, .view_chord_released
 
     bit 0, b
-    jr z, .check_cycle_chord
+    jr z, .check_follow_cycle_chord
     ld a, [nes_view_select_prev]
     and a
     jr nz, .follow_chord_held
@@ -314,6 +350,22 @@ nes_controller_latch:
     pop bc
 .follow_chord_held:
     res 0, b
+    res 2, b
+    jr .view_chord_done
+
+.check_follow_cycle_chord:
+    bit 1, b
+    jr z, .check_cycle_chord
+    ld a, [nes_view_select_prev]
+    and a
+    jr nz, .follow_cycle_chord_held
+    ld a, $01
+    ld [nes_view_select_prev], a
+    push bc
+    call nes_view_cycle_follow_target
+    pop bc
+.follow_cycle_chord_held:
+    res 1, b
     res 2, b
     jr .view_chord_done
 
