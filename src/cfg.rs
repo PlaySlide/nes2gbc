@@ -21,7 +21,10 @@ fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
  let mut pc=start;let mut n=0usize;
  while n<8{
   let i=match dec(mapper,prg,pc){Ok(i)=>i,Err(_)=>return false};n+=1;
-  if matches!(i.def.mnemonic,Mnemonic::Jmp|Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){return true}
+  // A valid JSR is strong code evidence too. Do not linear-sweep past it:
+  // many NES dispatch routines place raw pointer words immediately after JSR,
+  // so continuing here misclassifies legitimate entry points as data.
+  if matches!(i.def.mnemonic,Mnemonic::Jmp|Mnemonic::Jsr|Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){return true}
   pc=pc.wrapping_add(i.def.len()as u16);
  }
  true
@@ -294,6 +297,27 @@ mod tests {
             matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0025 })
                 && edge.target == Some(0x9210)
         }));
+    }
+
+    #[test]
+    fn code_probe_accepts_jsr_before_inline_pointer_data() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        // Target begins with real code and then an inline pointer table.
+        // A linear probe that walks past JSR would hit $DC and reject it.
+        put(
+            &mut prg,
+            0x8231,
+            &[
+                0xAD, 0x72, 0x07,       // LDA $0772
+                0x20, 0x04, 0x8E,       // JSR $8E04
+                0xCF, 0x8F, 0x67, 0x85, // inline .word data
+                0x61, 0x90, 0x45, 0x82,
+            ],
+        );
+        put(&mut prg, 0x8E04, &[0x60]);
+
+        assert!(looks_like_code(0, &prg, 0x8231));
     }
 
     #[test]
