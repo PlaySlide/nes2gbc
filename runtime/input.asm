@@ -17,6 +17,219 @@ nes_view_apply_scroll:
     ldh [rSCY], a
     ret
 
+; Mark viewport hardware state dirty without changing it mid-scanline.
+nes_view_mark_dirty:
+    ld a, $01
+    ldh [nes_scroll_dirty], a
+    ret
+
+; First-pass generic follow camera. Acquire the sprite nearest the NES screen
+; center, then track the nearest sprite to the previous anchor. A dead-zone
+; keeps composite-sprite animation from making the crop wobble every frame.
+nes_view_follow_update:
+    ld a, [nes_view_follow_enabled]
+    and a
+    ret z
+
+    ld a, [nes_view_follow_valid]
+    ld [nes_view_follow_was_valid], a
+    and a
+    jr z, .center_ref
+
+    ld a, [nes_view_follow_x]
+    ld [nes_view_follow_ref_x], a
+    ld a, [nes_view_follow_y]
+    ld [nes_view_follow_ref_y], a
+    jr .ref_ready
+
+.center_ref:
+    ld a, $80
+    ld [nes_view_follow_ref_x], a
+    ld a, $78
+    ld [nes_view_follow_ref_y], a
+
+.ref_ready:
+    ld a, $FF
+    ld [nes_view_follow_best_dist], a
+    ld hl, nes_oam_ram
+    ld b, 64
+
+.scan:
+    ; NES OAM Y is top-minus-one; $EF+ is conventionally hidden/offscreen.
+    ld a, [hli]
+    cp $EF
+    jp nc, .skip_three
+    inc a
+    ld [nes_view_follow_candidate_y], a
+
+    ; Skip tile + attributes, then read X.
+    inc hl
+    inc hl
+    ld a, [hli]
+    ld [nes_view_follow_candidate_x], a
+
+    ; Chebyshev distance = max(abs(dx), abs(dy)); no 8-bit sum overflow.
+    ld c, a
+    ld a, [nes_view_follow_ref_x]
+    sub c
+    jr nc, .dx_ready
+    cpl
+    inc a
+.dx_ready:
+    ld d, a
+
+    ld a, [nes_view_follow_candidate_y]
+    ld c, a
+    ld a, [nes_view_follow_ref_y]
+    sub c
+    jr nc, .dy_ready
+    cpl
+    inc a
+.dy_ready:
+    cp d
+    jr nc, .distance_ready
+    ld a, d
+.distance_ready:
+    ld c, a
+
+    ld a, [nes_view_follow_best_dist]
+    cp c
+    jr c, .next
+    jr z, .next
+
+    ld a, c
+    ld [nes_view_follow_best_dist], a
+    ld a, [nes_view_follow_candidate_x]
+    ld [nes_view_follow_x], a
+    ld a, [nes_view_follow_candidate_y]
+    ld [nes_view_follow_y], a
+
+.next:
+    dec b
+    jp nz, .scan
+    jr .finish
+
+.skip_three:
+    inc hl
+    inc hl
+    inc hl
+    dec b
+    jp nz, .scan
+
+.finish:
+    ld a, [nes_view_follow_best_dist]
+    cp $FF
+    ret z
+
+    ; If an established target jumps more than 64 pixels, drop lock and
+    ; reacquire from screen center on the next OAM frame.
+    ld a, [nes_view_follow_was_valid]
+    and a
+    jr z, .accept
+    ld a, [nes_view_follow_best_dist]
+    cp $41
+    jr c, .accept
+    xor a
+    ld [nes_view_follow_valid], a
+    ret
+
+.accept:
+    ld a, $01
+    ld [nes_view_follow_valid], a
+
+    ; Horizontal dead-zone: keep target within viewport-relative X 56..104.
+    ldh a, [nes_view_x]
+    ld c, a
+    add $38
+    ld d, a
+    ld a, [nes_view_follow_x]
+    cp d
+    jr nc, .check_right
+
+    cp $38
+    jr nc, .move_left
+    xor a
+    jr .store_x
+.move_left:
+    sub $38
+.store_x:
+    ldh [nes_view_x], a
+    jr .camera_y
+
+.check_right:
+    ld a, c
+    add $68
+    ld d, a
+    ld a, [nes_view_follow_x]
+    cp d
+    jr c, .camera_y
+    jr z, .camera_y
+    sub $68
+    cp $61
+    jr c, .store_right
+    ld a, $60
+.store_right:
+    ldh [nes_view_x], a
+
+.camera_y:
+    ; Vertical dead-zone: viewport-relative Y 48..96.
+    ldh a, [nes_view_y]
+    ld c, a
+    add $30
+    ld d, a
+    ld a, [nes_view_follow_y]
+    cp d
+    jr nc, .check_bottom
+
+    cp $30
+    jr nc, .move_up
+    xor a
+    jr .store_y
+.move_up:
+    sub $30
+.store_y:
+    ldh [nes_view_y], a
+    jp nes_view_mark_dirty
+
+.check_bottom:
+    ld a, c
+    add $60
+    ld d, a
+    ld a, [nes_view_follow_y]
+    cp d
+    jr c, .done_camera
+    jr z, .done_camera
+    sub $60
+    cp $61
+    jr c, .store_bottom
+    ld a, $60
+.store_bottom:
+    ldh [nes_view_y], a
+.done_camera:
+    jp nes_view_mark_dirty
+
+; Select+A toggles Follow <-> Manual. Manual starts centered.
+nes_view_toggle_follow:
+    ld a, [nes_view_follow_enabled]
+    xor $01
+    ld [nes_view_follow_enabled], a
+    and a
+    jr z, .manual
+
+    xor a
+    ld [nes_view_follow_valid], a
+    jp nes_view_mark_dirty
+
+.manual:
+    xor a
+    ld [nes_view_follow_valid], a
+    ld a, $04
+    ld [nes_view_mode], a
+    ld a, $30
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
+    jp nes_view_mark_dirty
+
 ; Cycle TL -> TR -> BL -> BR -> center -> TL.
 nes_view_cycle:
     ld a, [nes_view_mode]
@@ -40,33 +253,33 @@ nes_view_cycle:
     ld a, $30
     ldh [nes_view_x], a
     ldh [nes_view_y], a
-    jp nes_view_apply_scroll
+    jp nes_view_mark_dirty
 
 .top_right:
     ld a, $60
     ldh [nes_view_x], a
     xor a
     ldh [nes_view_y], a
-    jp nes_view_apply_scroll
+    jp nes_view_mark_dirty
 
 .bottom_left:
     xor a
     ldh [nes_view_x], a
     ld a, $60
     ldh [nes_view_y], a
-    jp nes_view_apply_scroll
+    jp nes_view_mark_dirty
 
 .bottom_right:
     ld a, $60
     ldh [nes_view_x], a
     ldh [nes_view_y], a
-    jp nes_view_apply_scroll
+    jp nes_view_mark_dirty
 
 .top_left:
     xor a
     ldh [nes_view_x], a
     ldh [nes_view_y], a
-    jp nes_view_apply_scroll
+    jp nes_view_mark_dirty
 
 
 nes_controller_latch:
@@ -78,23 +291,43 @@ nes_controller_latch:
     and $0F
     ld b, a
 
-    ; Ordinary Select now passes through to the NES. Start+Select is the
-    ; debug-camera chord; edge-trigger it and consume both buttons so the
-    ; emulated game does not see the diagnostic combo.
+    ; Camera chords are edge-triggered and consumed so the NES game never
+    ; sees them. Select+A toggles Follow/Manual. In Manual, Select+Start cycles
+    ; TL -> TR -> BL -> BR -> Center.
     bit 2, b
     jr z, .view_chord_released
-    bit 3, b
-    jr z, .view_chord_released
 
+    bit 0, b
+    jr z, .check_cycle_chord
     ld a, [nes_view_select_prev]
     and a
-    jr nz, .view_chord_held
+    jr nz, .follow_chord_held
     ld a, $01
     ld [nes_view_select_prev], a
     push bc
+    call nes_view_toggle_follow
+    pop bc
+.follow_chord_held:
+    res 0, b
+    res 2, b
+    jr .view_chord_done
+
+.check_cycle_chord:
+    bit 3, b
+    jr z, .view_chord_released
+    ld a, [nes_view_select_prev]
+    and a
+    jr nz, .cycle_chord_held
+    ld a, $01
+    ld [nes_view_select_prev], a
+
+    ld a, [nes_view_follow_enabled]
+    and a
+    jr nz, .cycle_chord_held
+    push bc
     call nes_view_cycle
     pop bc
-.view_chord_held:
+.cycle_chord_held:
     res 2, b
     res 3, b
     jr .view_chord_done
