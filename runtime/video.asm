@@ -784,6 +784,160 @@ nes_video_apply_map_select_a:
     ldh [rLCDC], a
     ret
 
+; Compose the wrapped right edge of a vertical-mirroring NES playfield.
+; NES vertical mirroring gives a 512-pixel-wide pair of physical nametables,
+; but one GBC BG map wraps after 256 pixels. If a 160-pixel crop starts after
+; X=96, its right edge crosses into the adjacent NES nametable. Copy just those
+; wrapped columns from the adjacent GBC map into the selected map, restricted
+; to the tile rows actually used by the lower/playfield portion of this frame.
+;
+; Inputs are staged in nes_hstitch_*:
+;   ctrl     effective logical PPUCTRL after horizontal carry
+;   x        effective SCX (0-255)
+;   y        effective lower/playfield SCY
+;   screen_y first host scanline using that lower state (0 for single scroll)
+nes_video_stitch_horizontal_wrap:
+    ; Horizontal mirroring already aliases left/right nametables, so native GBC
+    ; 256-pixel wrapping is correct there. Only vertical mirroring needs stitch.
+    ld a, [nes_mirroring]
+    cp $01
+    ret nz
+
+    ; A 160-pixel viewport crosses X=256 only when its left edge is >=97.
+    ld a, [nes_hstitch_x]
+    cp $61
+    ret c
+
+    ; wrapped columns = ceil((x - 96) / 8) = (x - 89) >> 3, range 1..20.
+    sub $59
+    srl a
+    srl a
+    srl a
+    ld [nes_hstitch_cols], a
+
+    ; Selected physical GBC map follows effective PPUCTRL bit 0.
+    ld a, [nes_hstitch_ctrl]
+    and $01
+    jr nz, .dst_map_1
+    ld a, $98
+    jr .dst_ready
+.dst_map_1:
+    ld a, $9C
+.dst_ready:
+    ld [nes_hstitch_dst_base], a
+
+    ; Determine first destination tile row used by this playfield slice.
+    ; If the start itself wraps vertically, leave that case to the existing
+    ; 240-pixel vertical-seam machinery rather than composing the wrong rows.
+    ld a, [nes_hstitch_y]
+    ld b, a
+    ld a, [nes_hstitch_screen_y]
+    add b
+    ret c
+    ld b, a
+    srl a
+    srl a
+    srl a
+    and $1F
+    ld [nes_hstitch_row_cur], a
+
+    ; Number of tile rows touched by [screen_y,143], including fine-Y edges.
+    ld a, b
+    and $07
+    ld c, a
+    ld a, $90
+    ld b, a
+    ld a, [nes_hstitch_screen_y]
+    ld d, a
+    ld a, b
+    sub d
+    add c
+    add $07
+    srl a
+    srl a
+    srl a
+    ld [nes_hstitch_row_start], a ; reused as row-count storage
+
+    xor a
+    ld [nes_hstitch_col], a
+
+.col_loop:
+    ; Recompute first row for each column.
+    ld a, [nes_hstitch_y]
+    ld b, a
+    ld a, [nes_hstitch_screen_y]
+    add b
+    srl a
+    srl a
+    srl a
+    and $1F
+    ld [nes_hstitch_row_cur], a
+
+    ld a, [nes_hstitch_row_start]
+    ld b, a
+
+.row_loop:
+    ; Offset inside a 32x32 GBC map:
+    ; low = (row&7)*32 + column, high += row>>3.
+    ld a, [nes_hstitch_row_cur]
+    ld c, a
+    and $07
+    swap a
+    add a
+    ld d, a
+    ld a, [nes_hstitch_col]
+    add d
+    ld e, a
+    ld l, a
+
+    ld a, c
+    srl a
+    srl a
+    srl a
+    ld c, a
+
+    ; Destination is the selected map; source is the horizontally adjacent map.
+    ld a, [nes_hstitch_dst_base]
+    add c
+    ld d, a
+    ld a, [nes_hstitch_dst_base]
+    xor $04
+    add c
+    ld h, a
+
+    call nes_video_wait_vram
+
+    ; Copy tile ID from adjacent map.
+    xor a
+    ldh [rVBK], a
+    ld a, [hl]
+    ld [de], a
+
+    ; Copy CGB palette/pattern-bank attribute from the same source cell.
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [hl]
+    ld [de], a
+    xor a
+    ldh [rVBK], a
+
+    ld a, [nes_hstitch_row_cur]
+    inc a
+    and $1F
+    ld [nes_hstitch_row_cur], a
+
+    dec b
+    jr nz, .row_loop
+
+    ld a, [nes_hstitch_col]
+    inc a
+    ld [nes_hstitch_col], a
+    ld c, a
+    ld a, [nes_hstitch_cols]
+    cp c
+    jr nz, .col_loop
+    ret
+
 ; Present one ordinary NES scroll pair through a 160x144 GBC crop.
 ; NES vertical nametables are 240 pixels high, while a CGB BG map wraps at
 ; 256 pixels. If the visible crop crosses NES Y=240, arm a one-shot STAT split
