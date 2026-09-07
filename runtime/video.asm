@@ -1033,45 +1033,76 @@ nes_video_update_horizontal_stitch:
     cp c
     ret z
     ld b, a                    ; B = old 0..63 coarse world key
+    ld a, c
+    ld [nes_hstitch_target_key], a
 
-    ; Normal scrolling advances one coarse tile at a time. Only the column
-    ; that just fell off the left edge changes source page in the 32-column
-    ; GBC ring, so refresh that one column instead of rebuilding 960 tiles.
-    inc a
+    ; A translated NES frame can occasionally advance by more than one coarse
+    ; tile before the next host presentation. Treat small deltas as catch-up,
+    ; not as teleports. The old +/-1-only code fell into full_rebuild for these
+    ; skips, disabled LCD, reset LY, and made SMB's split flash periodically.
+    ld a, c
+    sub b
     and $3F
-    cp c
-    jr z, .step_forward
+    cp $09                     ; forward distance 1..8
+    jr c, .catchup_forward
 
-    ; Also support one-tile backtracking.
     ld a, b
-    dec a
+    sub c
     and $3F
-    cp c
-    jr z, .step_backward
+    cp $09                     ; backward distance 1..8
+    jr c, .catchup_backward
 
-    ; Teleports / area transitions may jump farther than one coarse tile.
+    ; Genuine area transitions can jump much farther.
     jp .full_rebuild
 
-.step_forward:
-    ld a, c
+.catchup_forward:
+    ld a, [nes_hstitch_catchups]
+    inc a
+    ld [nes_hstitch_catchups], a
+.forward_loop:
+    ld a, [nes_hstitch_key]
+    ld b, a                    ; column falling off the left edge
+    inc a
+    and $3F
     ld [nes_hstitch_key], a
     ld a, b
     and $1F
     call nes_video_refresh_stitch_column
+
+    ld a, [nes_hstitch_target_key]
+    ld b, a
+    ld a, [nes_hstitch_key]
+    cp b
+    jr nz, .forward_loop
     xor a
     ld [nes_hstitch_dirty], a
     ret
 
-.step_backward:
-    ld a, c
+.catchup_backward:
+    ld a, [nes_hstitch_catchups]
+    inc a
+    ld [nes_hstitch_catchups], a
+.backward_loop:
+    ld a, [nes_hstitch_key]
+    dec a
+    and $3F
     ld [nes_hstitch_key], a
     and $1F
     call nes_video_refresh_stitch_column
+
+    ld a, [nes_hstitch_target_key]
+    ld b, a
+    ld a, [nes_hstitch_key]
+    cp b
+    jr nz, .backward_loop
     xor a
     ld [nes_hstitch_dirty], a
     ret
 
 .full_rebuild:
+    ld a, [nes_hstitch_full_rebuilds]
+    inc a
+    ld [nes_hstitch_full_rebuilds], a
     ; Initial activation / discontinuous area jump. A one-time LCD-off rebuild
     ; is acceptable here; steady scrolling never comes through this path.
     ld a, c
