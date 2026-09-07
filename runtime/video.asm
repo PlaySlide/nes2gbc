@@ -851,32 +851,12 @@ nes_video_apply_map_select_a:
 ; 256 pixels. If the visible crop crosses NES Y=240, arm a one-shot STAT split
 ; that toggles the vertical nametable and adds 16 to SCY at the exact seam.
 nes_video_apply_single_scroll:
-    ; Build the true 9-bit horizontal crop start. The GBC SCX register keeps
-    ; only the low 8 bits, but with vertical mirroring the carry means the crop
-    ; has crossed into the horizontally adjacent NES nametable (PPUCTRL bit 0).
+    ; Horizontal crop remains a simple 256-pixel wrap.
     ld a, [nes_ppu_scroll_x]
     ld b, a
     ldh a, [nes_view_x]
     add b
     ldh [rSCX], a
-    ld c, $00
-    jr nc, .x_ctrl_ready
-    inc c
-.x_ctrl_ready:
-    ld a, [nes_ppuctrl]
-    ld b, a
-    ld a, c
-    and a
-    jr z, .x_ctrl_store
-    ld a, [nes_mirroring]
-    cp $01
-    jr nz, .x_ctrl_store
-    ld a, b
-    xor $01
-    ld b, a
-.x_ctrl_store:
-    ld a, b
-    ldh [nes_seam_top_ctrl], a
 
     ; Compute 9-bit y_total = NES scroll Y + crop Y.
     ld a, [nes_ppu_scroll_y]
@@ -899,8 +879,9 @@ nes_video_apply_single_scroll:
     cp $F0
     jr nc, .top_wrapped
 
-    ; Top of crop is still in the effective horizontally selected nametable.
-    ldh a, [nes_seam_top_ctrl]
+    ; Top of crop is still in the base nametable.
+    ld a, [nes_ppuctrl]
+    ldh [nes_seam_top_ctrl], a
     call nes_video_apply_map_select_a
     ld a, d
     ldh [nes_seam_top_y], a
@@ -933,9 +914,7 @@ nes_video_apply_single_scroll:
     ret
 
 .top_wrapped:
-    ; Vertical wrap toggles logical nametable bit 1 on top of any horizontal
-    ; carry already folded into nes_seam_top_ctrl above.
-    ldh a, [nes_seam_top_ctrl]
+    ld a, [nes_ppuctrl]
     xor $02
     ldh [nes_seam_top_ctrl], a
     call nes_video_apply_map_select_a
