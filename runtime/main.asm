@@ -273,9 +273,6 @@ Start:
     ld [nes_nametable_queue_ptr_lo], a
     ld [nes_nametable_queue_overflow], a
     ld [nes_mask_dirty], a
-    ld [nes_native_scroll_x_last], a
-    ld [nes_native_scroll_x_changes], a
-    ld [nes_native_scroll_x_active], a
     ld a, $D8
     ld [nes_nametable_queue_ptr_hi], a
     xor a
