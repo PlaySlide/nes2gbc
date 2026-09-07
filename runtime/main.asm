@@ -301,6 +301,9 @@ Start:
     ld [nes_hstitch_copy_start], a
     ld [nes_hstitch_copy_len], a
     ld [nes_hstitch_copy_skip], a
+    ld [nes_hstitch_target_key], a
+    ld [nes_hstitch_full_rebuilds], a
+    ld [nes_hstitch_catchups], a
     ld [nes_ntdiag_min_row], a
     ld [nes_ntdiag_max_row], a
     ld [nes_ntdiag_display_map], a
