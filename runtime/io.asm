@@ -56,6 +56,11 @@ nes_view_select_prev:       ds 1
 nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
 nes_reset_count_wram_pad:    ds 1 ; preserves legacy WRAM layout
+
+; Follow-camera bookkeeping lives in the gap immediately after the optional
+; runtime profile counters ($C870-$C8E8) and before virtual NES OAM at $C900.
+; Keep the legacy $C860 debug-view block fixed so profiler builds do not overlap.
+SECTION "NES follow viewport", WRAM0[$C8E9]
 nes_view_follow_enabled:     ds 1 ; 1=automatic player-follow camera, 0=manual
 nes_view_follow_valid:       ds 1
 nes_view_follow_was_valid:   ds 1
