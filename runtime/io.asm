@@ -48,6 +48,13 @@ nes_debug_bus_hi:           ds 1 ; last generic NES CPU bus-read address
 nes_debug_bus_lo:           ds 1
 nes_debug_bus_value:        ds 1 ; last PRG byte returned by generic CPU read
 
+; During a translated NES NMI, nametable writes are staged so the host never
+; displays a half-updated mountain/frame while that NMI spans multiple GBC frames.
+; C859-C85B are free between the dispatch cache and legacy viewport block.
+nes_nametable_queue_ptr_lo: ds 1 ; next byte in $D800-$DFFF staging queue
+nes_nametable_queue_ptr_hi: ds 1
+nes_nametable_queue_overflow: ds 1
+
 SECTION "NES debug viewport", WRAM0[$C860]
 nes_view_mode:              ds 1 ; 0 TL, 1 TR, 2 BL, 3 BR, 4 center
 nes_view_x_wram_pad:        ds 1
@@ -135,3 +142,9 @@ nes_oam_ram: ds 256
 ; Two physical NES nametables. Mirroring maps the four logical tables here.
 SECTION "NES nametable RAM", WRAMX[$D000], BANK[1]
 nes_nametable_ram: ds $800
+
+; Up to 1024 staged physical nametable addresses (2 bytes each). Ice Climber's
+; NMI PPU buffer is much smaller than this; the large queue keeps the mechanism
+; generic and avoids per-write deduplication in the hot path.
+SECTION "NES nametable staging queue", WRAMX[$D800], BANK[1]
+nes_nametable_queue: ds $800
