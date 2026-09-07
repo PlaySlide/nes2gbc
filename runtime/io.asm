@@ -111,12 +111,6 @@ nes_split_pending_ctrl:   ds 1   ; $FFE8
 nes_split_armed_top_x:    ds 1   ; $FFE9, immutable HUD X for current host frame
 nes_split_armed_top_y:    ds 1   ; $FFEA
 nes_split_armed_top_ctrl: ds 1   ; $FFEB
-nes_seam_active:           ds 1   ; $FFEC, single-scroll crop crosses NES Y=240
-nes_seam_line:             ds 1   ; $FFED, host scanline for vertical nametable seam
-nes_seam_top_ctrl:         ds 1   ; $FFEE, logical nametable above seam
-nes_seam_bottom_ctrl:      ds 1   ; $FFEF, logical nametable below seam
-nes_seam_top_y:            ds 1   ; $FFF0, GBC SCY before seam
-nes_seam_bottom_y:         ds 1   ; $FFF1, GBC SCY after seam (+16 compensation)
 
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
