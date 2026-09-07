@@ -164,6 +164,45 @@ nes_view_follow_update:
     ld [nes_view_follow_valid], a
 
 .camera:
+    ; Detect games that already own the horizontal camera. Two changes in the
+    ; game's completed NES X scroll are enough to distinguish real scrolling
+    ; from a one-time/static scroll setup. Once active, keep our 160px crop at
+    ; the left edge of the NES viewport instead of panning independently.
+    ;
+    ; This matters for SMB: it intentionally preloads backgrounds and sprites
+    ; near the far-right side of the 256px NES screen before they are gameplay-
+    ; active. Our extra 0..96px follow pan exposed that offscreen preparation
+    ; roughly half a GBC screen early.
+    ld a, [nes_native_scroll_x_active]
+    and a
+    jr nz, .native_x_owned
+
+    ld a, [nes_ppu_scroll_x]
+    ld b, a
+    ld a, [nes_native_scroll_x_last]
+    cp b
+    jr z, .horizontal_follow
+
+    ld a, b
+    ld [nes_native_scroll_x_last], a
+    ld a, [nes_native_scroll_x_changes]
+    cp $02
+    jr nc, .activate_native_x
+    inc a
+    ld [nes_native_scroll_x_changes], a
+    cp $02
+    jr c, .horizontal_follow
+
+.activate_native_x:
+    ld a, $01
+    ld [nes_native_scroll_x_active], a
+
+.native_x_owned:
+    xor a
+    ldh [nes_view_x], a
+    jr .camera_y
+
+.horizontal_follow:
     ; Horizontal dead-zone: keep target within viewport-relative X 56..104.
     ldh a, [nes_view_x]
     ld c, a
