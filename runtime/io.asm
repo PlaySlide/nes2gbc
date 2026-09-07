@@ -71,6 +71,7 @@ nes_view_follow_ref_y:       ds 1
 nes_view_follow_best_dist:   ds 1
 nes_view_follow_candidate_x: ds 1
 nes_view_follow_candidate_y: ds 1
+nes_view_follow_slot:        ds 1 ; locked NES OAM slot (0-63)
 
 SECTION "NES hot sprite state", HRAM[$FF88]
 nes_view_x:                ds 1
