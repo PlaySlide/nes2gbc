@@ -97,6 +97,14 @@ nes_gbc_vblank_isr:
     call nes_video_update_ctrl
 .ctrl_done:
 
+    ld a, [nes_mask_dirty]
+    and a
+    jr z, .mask_done
+    xor a
+    ld [nes_mask_dirty], a
+    call nes_video_update_mask
+.mask_done:
+
     ; A proven HUD/playfield split is persistent display state, not merely a
     ; reaction to a fresh $2005 write. The LYC source is one-shot, so once a
     ; split has been detected it must be re-armed on every presented host frame.
@@ -264,6 +272,7 @@ Start:
     ld [nes_dispatch_cache_valid], a
     ld [nes_nametable_queue_ptr_lo], a
     ld [nes_nametable_queue_overflow], a
+    ld [nes_mask_dirty], a
     ld a, $D8
     ld [nes_nametable_queue_ptr_hi], a
     xor a
