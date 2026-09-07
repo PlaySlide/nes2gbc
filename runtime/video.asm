@@ -130,6 +130,68 @@ nes_video_copy:
     jr nz, .loop
     ret
 
+; Publish every nametable address staged by the completed translated NES NMI.
+; Unlike the earlier queue experiment, this really is atomic from the player's
+; point of view: the LCD is disabled during VBlank before the first live-map
+; write and is not re-enabled until the whole transaction is copied.
+nes_video_flush_nametable_queue_atomic:
+    ; Empty queue?
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $D8
+    jr nz, .has_entries
+    ld a, [nes_nametable_queue_ptr_lo]
+    and a
+    ret z
+
+.has_entries:
+    ; This routine is called from host VBlank. Save the exact display control,
+    ; turn LCD off while it is legal, and make all queued VRAM writes invisible.
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    and $7F
+    ldh [rLCDC], a
+
+    ld a, $01
+    ldh [rSVBK], a
+    ld de, nes_nametable_queue
+
+.loop:
+    ; DE == queue end?
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp d
+    jr nz, .read_entry
+    ld a, [nes_nametable_queue_ptr_lo]
+    cp e
+    jr z, .done
+
+.read_entry:
+    ld a, [de]
+    inc de
+    ld l, a
+    ld a, [de]
+    inc de
+    ld h, a
+
+    push de
+    ld a, [hl]
+    call nes_video_sync_nametable_write
+    pop de
+    jr .loop
+
+.done:
+    ; Reset transaction before re-enabling scanout.
+    xor a
+    ld [nes_nametable_queue_ptr_lo], a
+    ld [nes_nametable_queue_overflow], a
+    ld a, $D8
+    ld [nes_nametable_queue_ptr_hi], a
+
+    xor a
+    ldh [rVBK], a
+    ld a, [nes_saved_lcdc]
+    ldh [rLCDC], a
+    ret
+
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
 ; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
 ; entire frame waiting for LY>=144 for every translated NES PPU write.
