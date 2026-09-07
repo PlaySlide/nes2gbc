@@ -94,9 +94,14 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
  None
 }
 
+// A byte-sized dispatcher index can address at most 128 distinct 16-bit
+// entries when used as an even byte offset (ASL/TAY is the common NES idiom).
+// Use that architectural bound rather than a game-specific guess.
+const MAX_WORD_TABLE_ENTRIES:u16=128;
+
 fn inline_word_table_targets(mapper:u16,prg:&[u8],base:u16)->Vec<u16>{
  let mut out=Vec::new();
- for i in 0..64u16{
+ for i in 0..MAX_WORD_TABLE_ENTRIES{
   let a=base.wrapping_add(i*2);
   let Ok(o)=off(mapper,prg.len(),a)else{break};
   if o+1>=prg.len(){break}
@@ -109,8 +114,9 @@ fn inline_word_table_targets(mapper:u16,prg:&[u8],base:u16)->Vec<u16>{
 
 // Recognize the common 6502 jump-table idiom:
 //   LDA table,Y / STA ptr / INY / LDA table,Y / STA ptr+1 / ... / JMP (ptr)
-// The index is often derived from a small state nibble. Conservatively inspect the
-// first 16 little-endian table entries and keep only destinations that decode as code.
+// The index is often byte-sized and scaled to an even offset. Walk up to the
+// architectural 128-word maximum, stopping at the first non-code destination
+// once a table has begun.
 fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>{
  if pointer>0x00FE{return Vec::new()}
 
@@ -180,7 +186,7 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
  let mut out=Vec::new();
  for base in tables{
   let mut found_any=false;
-  for i in 0..16u16{
+  for i in 0..MAX_WORD_TABLE_ENTRIES{
    let a=base.wrapping_add(i*2);
    let Ok(o)=off(mapper,prg.len(),a)else{break};
    if o+1>=prg.len(){break}
@@ -404,18 +410,52 @@ mod tests {
             ],
         );
 
-        // 36 valid entries; entry 35 mirrors SMB's flagpole position.
-        for i in 0..36u16 {
+        // 80 valid entries. Entry 35 mirrors SMB's flagpole position, while
+        // entry 79 proves discovery is no longer truncated at the old 64-word
+        // emergency limit.
+        for i in 0..80u16 {
             let target = 0xA000u16 + i * 0x10;
             let a = 0x9003u16 + i * 2;
             put(&mut prg, a, &target.to_le_bytes());
             put(&mut prg, target, &[0x60]); // RTS
         }
         // Stop table discovery cleanly after the valid entries.
-        put(&mut prg, 0x9003 + 36 * 2, &[0x00, 0x00]);
+        put(&mut prg, 0x9003 + 80 * 2, &[0x00, 0x00]);
 
         let graph = discover(0, &prg, &[0x9000]).unwrap();
         assert!(graph.blocks.contains_key(&(0xA000 + 35 * 0x10)));
+        assert!(graph.blocks.contains_key(&(0xA000 + 79 * 0x10)));
+    }
+
+    #[test]
+    fn discovers_indexed_indirect_targets_beyond_sixteen_entries() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xB9, 0x00, 0xA0, // LDA $A000,Y
+                0x85, 0x02,       // STA $02
+                0xC8,             // INY
+                0xB9, 0x00, 0xA0, // LDA $A000,Y
+                0x85, 0x03,       // STA $03
+                0x6C, 0x02, 0x00, // JMP ($0002)
+            ],
+        );
+
+        // Twenty-one valid word entries: the old 16-entry scan could never
+        // discover the distinct handler at entry 20.
+        for i in 0..21u16 {
+            let target = if i == 20 { 0x9300u16 } else { 0x9200u16 };
+            put(&mut prg, 0xA000 + i * 2, &target.to_le_bytes());
+        }
+        put(&mut prg, 0xA000 + 21 * 2, &[0x00, 0x00]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9300, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9300));
     }
 
     #[test]
