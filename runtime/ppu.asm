@@ -158,24 +158,37 @@ nes_ppu_cpu_write:
     and a
     jr nz, .scroll_capture_bottom
 
+    ; First pair is only a candidate. Do not disturb the currently proven
+    ; HUD/playfield split until a second pair confirms this NMI really contains
+    ; a split update.
     ld a, [nes_ppu_scroll_x]
-    ldh [nes_split_top_x], a
+    ldh [nes_split_pending_x], a
     ld a, [nes_ppu_scroll_y]
-    ldh [nes_split_top_y], a
+    ldh [nes_split_pending_y], a
     ld a, [nes_ppuctrl]
-    ldh [nes_split_top_ctrl], a
+    ldh [nes_split_pending_ctrl], a
     ld a, $01
     ldh [nes_scroll_pair_count], a
     ldh [nes_scroll_dirty], a
     ret
 
 .scroll_capture_bottom:
+    ; Second pair confirms a real raster split. Commit the pending first pair
+    ; atomically as the stable HUD/top state, and this pair as playfield/bottom.
+    ldh a, [nes_split_pending_x]
+    ldh [nes_split_top_x], a
+    ldh a, [nes_split_pending_y]
+    ldh [nes_split_top_y], a
+    ldh a, [nes_split_pending_ctrl]
+    ldh [nes_split_top_ctrl], a
+
     ld a, [nes_ppu_scroll_x]
     ldh [nes_split_bottom_x], a
     ld a, [nes_ppu_scroll_y]
     ldh [nes_split_bottom_y], a
     ld a, [nes_ppuctrl]
     ldh [nes_split_bottom_ctrl], a
+
     ld a, $02
     ldh [nes_scroll_pair_count], a
     ld a, $01
