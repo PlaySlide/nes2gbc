@@ -284,11 +284,36 @@ nes_restore_code_bank:
     ret
 
 nes_unimplemented:
+    ; Snapshot the computed-control-flow state before stopping. This has zero
+    ; cost in normal execution and is especially useful for SMB's JumpEngine,
+    ; which leaves its caller pointer in $04/$05 and computed target in $06/$07.
+    ld a, [nes_dispatch_cache_pc_lo]
+    ldh [nes_fault_target_lo], a
+    ld a, [nes_dispatch_cache_pc_hi]
+    ldh [nes_fault_target_hi], a
+    ldh a, [nes_sp]
+    ldh [nes_fault_sp_snapshot], a
+    ldh a, [nes_a]
+    ldh [nes_fault_a_snapshot], a
+    ldh a, [nes_x]
+    ldh [nes_fault_x_snapshot], a
+    ldh a, [nes_y]
+    ldh [nes_fault_y_snapshot], a
+
+    ld a, [$C004]
+    ldh [nes_fault_zp04_snapshot], a
+    ld a, [$C005]
+    ldh [nes_fault_zp05_snapshot], a
+    ld a, [$C006]
+    ldh [nes_fault_zp06_snapshot], a
+    ld a, [$C007]
+    ldh [nes_fault_zp07_snapshot], a
+
+    ld a, $01
+    ldh [nes_fault_kind], a
     ld a, $FF
     ldh [nes_fault_hram], a
-IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_debug_fault], a
-ENDC
     di
 .hang:
     halt
