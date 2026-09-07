@@ -91,6 +91,8 @@ fn pocketnes_follow_slot(crc: u32) -> Option<u8> {
         0x4864_C304 => Some(8),
         // PocketNES database: Ice Climber (U).
         0xFB98_D46E => Some(0),
+        // PocketNES database: Super Mario Bros. (PRG 0) (JU).
+        0xD445_F698 => Some(8),
         _ => None,
     }
 }
@@ -300,6 +302,7 @@ mod follow_hint_tests {
         assert_eq!(pocketnes_follow_slot(0x703E_1948), Some(0));
         assert_eq!(pocketnes_follow_slot(0x4864_C304), Some(8));
         assert_eq!(pocketnes_follow_slot(0xFB98_D46E), Some(0));
+        assert_eq!(pocketnes_follow_slot(0xD445_F698), Some(8));
         assert_eq!(pocketnes_follow_slot(0), None);
     }
 }
