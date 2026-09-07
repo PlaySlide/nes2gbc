@@ -97,6 +97,17 @@ nes_view_follow_candidate_x: ds 1
 nes_view_follow_candidate_y: ds 1
 nes_view_follow_slot:        ds 1 ; locked NES OAM slot (0-63)
 
+; Horizontal nametable stitch state. For vertical mirroring, the two NES
+; physical nametables are horizontal neighbours; a single 256px GBC map cannot
+; represent their 512px scroll space without stitching the wrap columns.
+SECTION "NES horizontal stitch state", WRAM0[$C8F4]
+nes_hstitch_valid:          ds 1
+nes_hstitch_dirty:          ds 1
+nes_hstitch_key:            ds 1 ; bit5=base physical page, bits0-4=coarse X
+nes_hstitch_copy_start:     ds 1
+nes_hstitch_copy_len:       ds 1
+nes_hstitch_copy_skip:      ds 1
+
 SECTION "NES hot sprite state", HRAM[$FF88]
 nes_view_x:                ds 1
 nes_view_y:                ds 1
