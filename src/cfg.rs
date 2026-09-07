@@ -96,7 +96,7 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
 
 fn inline_word_table_targets(mapper:u16,prg:&[u8],base:u16)->Vec<u16>{
  let mut out=Vec::new();
- for i in 0..32u16{
+ for i in 0..64u16{
   let a=base.wrapping_add(i*2);
   let Ok(o)=off(mapper,prg.len(),a)else{break};
   if o+1>=prg.len(){break}
@@ -369,6 +369,53 @@ mod tests {
             matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0002 })
                 && edge.target == Some(0x9210)
         }));
+    }
+
+    #[test]
+    fn discovers_long_inline_dispatch_table_targets() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        // SMB's area-object JumpEngine table has more than 32 entries; the
+        // flagpole handler is entry 35. Make sure non-returning inline-table
+        // discovery reaches targets beyond the old 32-word cutoff.
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0x20, 0x00, 0x91, // JSR $9100
+            ],
+        );
+        put(
+            &mut prg,
+            0x9100,
+            &[
+                0xA5, 0x55,       // LDA $55
+                0x0A,             // ASL
+                0xA8,             // TAY
+                0x68, 0x85, 0x00, // PLA / STA $00
+                0x68, 0x85, 0x01, // PLA / STA $01
+                0xC8,
+                0xB1, 0x00,
+                0x85, 0x02,
+                0xC8,
+                0xB1, 0x00,
+                0x85, 0x03,
+                0x6C, 0x02, 0x00, // JMP ($0002)
+            ],
+        );
+
+        // 36 valid entries; entry 35 mirrors SMB's flagpole position.
+        for i in 0..36u16 {
+            let target = 0xA000u16 + i * 0x10;
+            let a = 0x9003u16 + i * 2;
+            put(&mut prg, a, &target.to_le_bytes());
+            put(&mut prg, target, &[0x60]); // RTS
+        }
+        // Stop table discovery cleanly after the valid entries.
+        put(&mut prg, 0x9003 + 36 * 2, &[0x00, 0x00]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&(0xA000 + 35 * 0x10)));
     }
 
     #[test]
