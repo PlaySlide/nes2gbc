@@ -144,6 +144,10 @@ nes_video_flush_nametable_queue_atomic:
     ret z
 
 .has_entries:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_QUEUE_FLUSH
+    ld [nes_diag_event_flags], a
+
     ; Start a fresh diagnostic summary for exactly the transaction that is
     ; about to become visible.
     xor a
@@ -695,6 +699,10 @@ nes_video_set_obj_color:
 ; Stream the preconverted 64-byte palette shadow to CGB palette RAM.
 ; Called only from host VBlank.
 nes_video_sync_palette_shadow:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_PALETTE_COMMIT
+    ld [nes_diag_event_flags], a
+
     ld hl, nes_gbc_palette_shadow
 
     ld a, $80
@@ -913,6 +921,10 @@ nes_video_sync_oam:
 ; NES global select changes. Do not XOR: a single stale/mismatched attribute
 ; would otherwise remain permanently opposite to the rest of the map.
 nes_video_toggle_bg_pattern_bank:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_BG_BANK_REWRITE
+    ld [nes_diag_event_flags], a
+
     ldh a, [rLCDC]
     bit 7, a
     jr z, .lcd_already_off
@@ -1056,6 +1068,10 @@ nes_video_update_horizontal_stitch:
     jp .full_rebuild
 
 .catchup_forward:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_CATCHUP
+    ld [nes_diag_event_flags], a
+
     ld a, [nes_hstitch_catchups]
     inc a
     ld [nes_hstitch_catchups], a
@@ -1079,6 +1095,10 @@ nes_video_update_horizontal_stitch:
     ret
 
 .catchup_backward:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_CATCHUP
+    ld [nes_diag_event_flags], a
+
     ld a, [nes_hstitch_catchups]
     inc a
     ld [nes_hstitch_catchups], a
@@ -1100,6 +1120,10 @@ nes_video_update_horizontal_stitch:
     ret
 
 .full_rebuild:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_FULL_REBUILD
+    ld [nes_diag_event_flags], a
+
     ld a, [nes_hstitch_full_rebuilds]
     inc a
     ld [nes_hstitch_full_rebuilds], a
@@ -1472,6 +1496,10 @@ nes_video_rearm_vertical_seam:
 
 ; Reflect NES base-nametable selection and sprite size into GBC LCDC.
 nes_video_update_ctrl:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_CTRL_COMMIT
+    ld [nes_diag_event_flags], a
+
     ldh a, [rLCDC]
     and $F3
     ld b, a
