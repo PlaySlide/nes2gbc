@@ -627,7 +627,7 @@ nes_video_sync_attribute_write_stitched:
     call nes_video_hstitch_source_for_column
     pop bc
     cp d
-    jr nz, .next_column
+    jp nz, .next_column
 
     ; Preserve source-page/end-column while DE becomes the CGB destination.
     push de
@@ -697,7 +697,7 @@ nes_video_sync_attribute_write_stitched:
     inc l
     ld a, l
     cp e
-    jr c, .column_loop
+    jp c, .column_loop
 
     xor a
     ldh [rVBK], a
