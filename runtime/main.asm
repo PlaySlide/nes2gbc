@@ -18,6 +18,10 @@ nes_gbc_vblank_isr:
     push de
     push hl
 
+    ; Snapshot the host frame that just finished, then clear its event latch so
+    ; work done by this VBlank is attributed to the frame about to be shown.
+    call nes_diag_snapshot_frame
+
     ; A translated NES NMI may take more than one host GBC frame. Never publish
     ; partially updated NES video state while it is still running; staged OAM,
     ; palette, control, and scroll state are committed atomically on the first
@@ -54,6 +58,9 @@ nes_gbc_vblank_isr:
     jp .done
 
 .commit_ready:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_COMMIT
+    ld [nes_diag_event_flags], a
 
     ; Publish the completed NES NMI's nametable transaction before matching
     ; OAM/palette/control/scroll state. The flush itself keeps LCD off, so a
@@ -194,6 +201,9 @@ nes_gbc_stat_isr:
     jr z, .check_vertical_seam
 
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_STAT_SPLIT
+    ld [nes_diag_event_flags], a
     call nes_video_apply_split_bottom_map
 
     ldh a, [nes_split_armed_x]
@@ -230,6 +240,95 @@ nes_gbc_stat_isr:
     pop bc
     pop af
     reti
+
+; Record the host frame that just completed into C800-C80F.
+; Four records of four bytes:
+;   +0 frame serial
+;   +1 state bits: 0=NMI active, 1=split active, 2=stitch valid,
+;      3=stitch dirty, 4=NT queue nonempty, 5=BG+OBJ rendering enabled,
+;      6=ctrl dirty, 7=scroll dirty
+;   +2 horizontal-stitch key
+;   +3 event bits (NES_DIAG_EVENT_* above)
+; C8FE points to the next slot to be written, so the newest record is the
+; preceding slot modulo four.
+nes_diag_snapshot_frame:
+    ld a, [nes_diag_ring_index]
+    and $03
+    add a
+    add a
+    add LOW(nes_diag_ring)
+    ld l, a
+    ld h, HIGH(nes_diag_ring)
+
+    ld a, [nes_diag_frame_serial]
+    inc a
+    ld [nes_diag_frame_serial], a
+    ld [hli], a
+
+    xor a
+    ld b, a
+
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .diag_state_split
+    set 0, b
+.diag_state_split:
+    ldh a, [nes_split_active]
+    and a
+    jr z, .diag_state_valid
+    set 1, b
+.diag_state_valid:
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .diag_state_dirty
+    set 2, b
+.diag_state_dirty:
+    ld a, [nes_hstitch_dirty]
+    and a
+    jr z, .diag_state_queue
+    set 3, b
+.diag_state_queue:
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $D8
+    jr nz, .diag_queue_nonempty
+    ld a, [nes_nametable_queue_ptr_lo]
+    and a
+    jr z, .diag_state_render
+.diag_queue_nonempty:
+    set 4, b
+.diag_state_render:
+    ld a, [nes_ppumask]
+    and $18
+    cp $18
+    jr nz, .diag_state_ctrl
+    set 5, b
+.diag_state_ctrl:
+    ldh a, [nes_ctrl_dirty]
+    and a
+    jr z, .diag_state_scroll
+    set 6, b
+.diag_state_scroll:
+    ldh a, [nes_scroll_dirty]
+    and a
+    jr z, .diag_state_store
+    set 7, b
+.diag_state_store:
+    ld a, b
+    ld [hli], a
+
+    ld a, [nes_hstitch_key]
+    ld [hli], a
+    ld a, [nes_diag_event_flags]
+    ld [hl], a
+
+    ld a, [nes_diag_ring_index]
+    inc a
+    and $03
+    ld [nes_diag_ring_index], a
+
+    xor a
+    ld [nes_diag_event_flags], a
+    ret
 
 Start:
     di
@@ -304,6 +403,17 @@ Start:
     ld [nes_hstitch_target_key], a
     ld [nes_hstitch_full_rebuilds], a
     ld [nes_hstitch_catchups], a
+    ld [nes_diag_frame_serial], a
+    ld [nes_diag_ring_index], a
+    ld [nes_diag_event_flags], a
+
+    ld hl, nes_diag_ring
+    ld b, $10
+.clear_diag_ring:
+    ld [hli], a
+    dec b
+    jr nz, .clear_diag_ring
+
     ld [nes_ntdiag_min_row], a
     ld [nes_ntdiag_max_row], a
     ld [nes_ntdiag_display_map], a
