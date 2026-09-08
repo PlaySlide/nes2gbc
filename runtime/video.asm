@@ -32,16 +32,6 @@ nes_video_init:
     ld bc, $0800
     call nes_video_fill_zero
 
-    ; GBC maps start cleared, so the published-byte shadow starts cleared too.
-    ; Restore bank 1 afterward because virtual NES nametable RAM lives there.
-    ld a, $06
-    ldh [rSVBK], a
-    ld hl, nes_nametable_published_shadow
-    ld bc, $0800
-    call nes_video_fill_zero
-    ld a, $01
-    ldh [rSVBK], a
-
     xor a
     ldh [rVBK], a
     ldh [rSCX], a
@@ -158,6 +148,21 @@ nes_video_flush_nametable_queue_atomic:
     or NES_DIAG_EVENT_QUEUE_FLUSH
     ld [nes_diag_event_flags], a
 
+    ; Clear the per-transaction seen bitmap.  This removes duplicate staged
+    ; addresses from this one NMI without carrying any cache state across host
+    ; frames or stitch remaps.
+    ld a, $06
+    ldh [rSVBK], a
+    xor a
+    ld hl, nes_nametable_publish_seen
+    ld b, $00
+.clear_publish_seen:
+    ld [hli], a
+    dec b
+    jr nz, .clear_publish_seen
+    ld a, $01
+    ldh [rSVBK], a
+
     ; Start a fresh diagnostic summary for exactly the transaction that is
     ; about to become visible.
     xor a
@@ -211,6 +216,16 @@ nes_video_flush_nametable_queue_atomic:
     ld a, [de]
     inc de
     ld h, a
+
+    ; The queue stores addresses only and SMB may stage the same address many
+    ; times in one NMI.  Since authoritative nametable WRAM already contains
+    ; the final byte, publishing an address more than once here is guaranteed
+    ; redundant.  Skip repeats before any VRAM waits or writes.
+    push de
+    call nes_video_nametable_publish_first_visit
+    pop de
+    and a
+    jp z, .loop
 
     ; Record only tile-cell destinations; attribute writes use a different
     ; address geometry and would muddy the column range.
@@ -303,7 +318,7 @@ nes_video_flush_nametable_queue_atomic:
 .diag_done:
     push de
     ld a, [hl]
-    call nes_video_sync_nametable_write_if_changed
+    call nes_video_sync_nametable_write
     pop de
     jp .loop
 
@@ -321,6 +336,66 @@ nes_video_flush_nametable_queue_atomic:
 
     xor a
     ldh [rVBK], a
+    ret
+
+; Input: HL = physical nametable address $D000-$D7FF.
+; Return A=1 the first time this address is seen in the current publish,
+; A=0 for duplicates.  Preserves HL; clobbers BC/DE.
+nes_video_nametable_publish_first_visit:
+    push hl
+
+    ; bit number = L & 7
+    ld a, l
+    and $07
+    ld e, a
+
+    ; byte index = (((H & 7) << 5) | (L >> 3)), 0..255
+    ld a, l
+    srl a
+    srl a
+    srl a
+    ld c, a
+    ld a, h
+    and $07
+    swap a
+    add a
+    or c
+    ld l, a
+    ld h, HIGH(nes_nametable_publish_seen)
+
+    ; mask = 1 << bit number
+    ld b, $01
+    ld a, e
+    and a
+    jr z, .mask_ready
+.mask_loop:
+    sla b
+    dec a
+    jr nz, .mask_loop
+.mask_ready:
+
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    ld c, a
+    and b
+    jr nz, .duplicate
+
+    ld a, c
+    or b
+    ld [hl], a
+    ld a, $01
+    jr .finish
+
+.duplicate:
+    xor a
+
+.finish:
+    ld b, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, b
+    pop hl
     ret
 
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
@@ -357,32 +432,6 @@ nes_video_wait_oam:
     ldh a, [rLY]
     cp 144
     jr c, .wait_busy
-    ret
-
-; Input: HL = physical virtual nametable address ($D000-$D7FF),
-; A = byte that should be published.  Suppress exact repeats before touching
-; live VRAM.  SMB's scrolling NMI often stages addresses whose final value is
-; unchanged; the old path still paid mode waits plus tile/attribute writes for
-; every one and could occupy scanlines 0-31 before the HUD split.
-nes_video_sync_nametable_write_if_changed:
-    ld c, a
-
-    ld a, $06
-    ldh [rSVBK], a
-    ld a, [hl]
-    cp c
-    jr z, .unchanged
-
-    ld a, c
-    ld [hl], a
-    ld a, $01
-    ldh [rSVBK], a
-    ld a, c
-    jp nes_video_sync_nametable_write
-
-.unchanged:
-    ld a, $01
-    ldh [rSVBK], a
     ret
 
 ; Input: HL = physical virtual nametable address ($D000-$D7FF), A = written byte.
