@@ -220,3 +220,9 @@ nes_nametable_queue: ds $800
 ; work; stitched columns still source their actual content from bank-1 WRAM.
 SECTION "NES published nametable shadow", WRAMX[$D000], BANK[6]
 nes_nametable_published_shadow: ds $800
+
+; One bit per physical nametable byte, cleared when a translated NES NMI starts.
+; If the same PPU address is written repeatedly during that NMI, enqueue it once.
+; The retained queue entry still publishes the final authoritative WRAM byte.
+SECTION "NES nametable stage seen", WRAMX[$D800], BANK[6]
+nes_nametable_stage_seen: ds $100
