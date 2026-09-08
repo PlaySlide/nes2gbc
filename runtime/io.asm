@@ -213,3 +213,10 @@ nes_nametable_ram: ds $800
 ; read from authoritative nametable WRAM only when the completed NMI is published.
 SECTION "NES nametable staging queue", WRAMX[$D800], BANK[1]
 nes_nametable_queue: ds $800
+
+; Last NES nametable bytes successfully processed for live GBC publication.
+; Bank 6 is intentionally separate from authoritative NT RAM (bank 1) and the
+; NROM PRG cache (banks 2-5).  Matching bytes can skip all synchronized VRAM
+; work; stitched columns still source their actual content from bank-1 WRAM.
+SECTION "NES published nametable shadow", WRAMX[$D000], BANK[6]
+nes_nametable_published_shadow: ds $800
