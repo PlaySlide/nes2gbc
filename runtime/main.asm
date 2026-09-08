@@ -165,6 +165,14 @@ nes_gbc_vblank_isr:
     ldh a, [nes_split_bottom_ctrl]
     ldh [nes_split_armed_ctrl], a
 
+    ; Freeze the follow-camera crop with the same completed NES display state.
+    ; The next translated NMI may move the live camera before this host frame
+    ; has finished displaying, so STAT must not read nes_view_x/y directly.
+    ldh a, [nes_view_x]
+    ld [nes_view_armed_x], a
+    ldh a, [nes_view_y]
+    ld [nes_view_armed_y], a
+
     call nes_video_apply_split_top_map
 
     ; Fixed HUD: never add the artificial world viewport offset here.
@@ -208,13 +216,13 @@ nes_gbc_stat_isr:
 
     ldh a, [nes_split_armed_x]
     ld b, a
-    ldh a, [nes_view_x]
+    ld a, [nes_view_armed_x]
     add b
     ldh [rSCX], a
 
     ldh a, [nes_split_armed_y]
     ld b, a
-    ldh a, [nes_view_y]
+    ld a, [nes_view_armed_y]
     add b
     ldh [rSCY], a
     jr .disable_stat
@@ -380,6 +388,8 @@ Start:
     ld a, $30
     ldh [nes_view_x], a
     ldh [nes_view_y], a
+    ld [nes_view_armed_x], a
+    ld [nes_view_armed_y], a
     ld a, $01
     ld [nes_view_follow_enabled], a
     xor a
