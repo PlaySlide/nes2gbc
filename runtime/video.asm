@@ -447,13 +447,43 @@ nes_video_sync_nametable_write:
 
     ; Preserve the palette selected by the NES attribute table. A nametable
     ; tile write changes the tile ID, not its 2-bit background palette.
-    ; Only refresh CGB attribute bit 3, which mirrors global PPUCTRL.4.
+    ;
+    ; During an SMB-style stitched split, the two presentation surfaces have
+    ; their own captured PPUCTRL state.  $9800 is the fixed top/HUD backing map
+    ; and $9C00 is the lower/playfield stitched map.  Using generic nes_ppuctrl
+    ; here allowed direct NT1 writes to give otherwise-correct tile IDs the
+    ; wrong CGB VRAM-bank bit, producing recognizable ghost digits/scenery
+    ; until a later full bank rewrite repaired them.
     ld a, $01
     ldh [rVBK], a
     ld a, [de]
     and $07
     ld b, a
+
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .tile_bank_global
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .tile_bank_global
+    ldh a, [nes_split_active]
+    and a
+    jr z, .tile_bank_global
+
+    ld a, d
+    cp $9C
+    jr z, .tile_bank_bottom
+    ldh a, [nes_split_top_ctrl]
+    jr .tile_bank_select
+
+.tile_bank_bottom:
+    ldh a, [nes_split_bottom_ctrl]
+    jr .tile_bank_select
+
+.tile_bank_global:
     ld a, [nes_ppuctrl]
+
+.tile_bank_select:
     and $10
     srl a
     or b
@@ -586,7 +616,29 @@ nes_video_sync_attribute_write_physical:
 .dest_ready:
 
     ; Attribute bit 3 selects converted NES pattern table 1 in CGB VRAM bank 1.
+    ; When this is the fixed $9800 HUD/backing surface of an active stitched
+    ; split, derive the bank from the captured top state rather than whichever
+    ; PPUCTRL value happened to be live at publication time.  The stitched
+    ; $9C00 path below already uses nes_split_bottom_ctrl explicitly.
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .attr_bank_global
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .attr_bank_global
+    ldh a, [nes_split_active]
+    and a
+    jr z, .attr_bank_global
+    ld a, d
+    cp $9C
+    jr z, .attr_bank_global
+    ldh a, [nes_split_top_ctrl]
+    jr .attr_bank_select
+
+.attr_bank_global:
     ld a, [nes_ppuctrl]
+
+.attr_bank_select:
     and $10
     srl a
     ld c, a
