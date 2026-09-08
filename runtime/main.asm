@@ -101,6 +101,20 @@ nes_gbc_vblank_isr:
     jp z, .ctrl_done
     xor a
     ldh [nes_ctrl_dirty], a
+
+    ; Commit PPUCTRL.4 only from a completed NES frame.  Ignore transient
+    ; mid-NMI toggles that return to the already-published bank.
+    ld a, [nes_ppuctrl]
+    and $10
+    srl a
+    ld b, a
+    ld a, [nes_bg_pattern_committed]
+    cp b
+    jr z, .ctrl_bank_done
+    ld a, b
+    ld [nes_bg_pattern_committed], a
+    call nes_video_toggle_bg_pattern_bank
+.ctrl_bank_done:
     call nes_video_update_ctrl
 .ctrl_done:
 
@@ -404,6 +418,7 @@ Start:
     ld [nes_view_follow_candidate_y], a
     ld [nes_view_follow_slot], a
     ld [nes_view_select_prev], a
+    ld [nes_bg_pattern_committed], a
     ld [nes_hstitch_valid], a
     ld [nes_hstitch_dirty], a
     ld [nes_hstitch_key], a
