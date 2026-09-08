@@ -221,7 +221,7 @@ nes_ppu_cpu_write:
     ; recognizes the common NES raster-split pattern used by Balloon Fight B.
     ld a, [nes_nmi_active]
     and a
-    jr z, .scroll_normal
+    jp z, .scroll_normal
 
     ldh a, [nes_scroll_pair_count]
     and a
