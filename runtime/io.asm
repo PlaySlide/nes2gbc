@@ -76,8 +76,8 @@ nes_ntdiag_display_map:     ds 1 ; $C85F, GBC BG map at publish: 0=$9800, 1=$9C0
 
 SECTION "NES debug viewport", WRAM0[$C860]
 nes_view_mode:              ds 1 ; 0 TL, 1 TR, 2 BL, 3 BR, 4 center
-nes_view_x_wram_pad:        ds 1
-nes_view_y_wram_pad:        ds 1
+nes_view_armed_x:           ds 1 ; crop X committed with current host frame
+nes_view_armed_y:           ds 1 ; crop Y committed with current host frame
 nes_view_select_prev:       ds 1
 nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
