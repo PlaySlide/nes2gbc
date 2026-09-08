@@ -399,7 +399,9 @@ nes_video_sync_nametable_write:
     ; touch the live stitched surface until the column is actually within the
     ; 160px GBC viewport.
     ld a, [nes_hstitch_copy_start]
+    push bc
     call nes_video_hstitch_column_visible
+    pop bc
     and a
     ret z
 
@@ -647,7 +649,9 @@ nes_video_sync_attribute_write_stitched:
     jp nz, .next_column
 
     ld a, [nes_hstitch_copy_start]
+    push bc
     call nes_video_hstitch_column_visible
+    pop bc
     and a
     jp z, .next_column
 
