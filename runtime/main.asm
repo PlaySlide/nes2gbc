@@ -426,6 +426,7 @@ Start:
     ld [nes_ntdiag_last_hi], a
     ld [nes_ntdiag_last_lo], a
     ld [nes_ntdiag_commit_serial], a
+    ld [nes_split_duplicate_streak], a
     ldh [nes_reset_count], a
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
