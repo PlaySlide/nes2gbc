@@ -152,13 +152,13 @@ nes_ppu_cpu_write:
     ld [nes_oam_dirty], a
 
 .ctrl_bg_check:
-    ; NES background pattern-table select (bit 4) is global. CGB represents
-    ; that selection per tile using attribute bit 3, so every existing tile
-    ; attribute must flip when the NES global bit changes.
-    ld a, b
-    and $10
-    jr z, .ctrl_defer
-    call nes_video_toggle_bg_pattern_bank
+    ; NES background pattern-table select (bit 4) is represented by CGB
+    ; attribute bit 3.  Do NOT rewrite live VRAM here: SMB changes PPUCTRL
+    ; transiently while a translated NMI is still running, and a long scrolling
+    ; NMI can span several host frames.  Publishing that intermediate bit made
+    ; the supposedly frozen previous frame show tiles from the wrong pattern
+    ; table.  nes_ctrl_dirty below causes the final PPUCTRL value to be
+    ; reconciled atomically at the next completed-frame VBlank.
 
 .ctrl_defer:
     ; Base nametable and sprite-size changes should become visible on the same
