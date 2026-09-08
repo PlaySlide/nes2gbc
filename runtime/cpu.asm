@@ -824,6 +824,22 @@ nes_poll_nmi_hl:
     ld a, $D8
     ld [nes_nametable_queue_ptr_hi], a
 
+    ; Clear duplicate-address tracking here, in translated CPU time rather than
+    ; in the host VBlank ISR. Preserve HL because it is the interrupted NES PC.
+    push hl
+    ld a, $06
+    ldh [rSVBK], a
+    xor a
+    ld hl, nes_nametable_stage_seen
+    ld b, $00
+.clear_nametable_stage_seen:
+    ld [hli], a
+    dec b
+    jr nz, .clear_nametable_stage_seen
+    ld a, $01
+    ldh [rSVBK], a
+    pop hl
+
     xor a
     ldh [nes_scroll_pair_count], a
     ; Once a two-state raster split has been proven, keep it latched. Some
