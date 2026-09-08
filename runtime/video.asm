@@ -387,9 +387,19 @@ nes_video_sync_nametable_write:
     jr z, .tile_write
     ld a, l
     and $1F
+    ld [nes_hstitch_copy_start], a
     push bc
     call nes_video_hstitch_source_for_column
     pop bc
+    and a
+    ret z
+
+    ; Page ownership alone is insufficient: SMB constructs future/offscreen
+    ; columns in the same physical nametable.  Do not let those parser writes
+    ; touch the live stitched surface until the column is actually within the
+    ; 160px GBC viewport.
+    ld a, [nes_hstitch_copy_start]
+    call nes_video_hstitch_column_visible
     and a
     ret z
 
@@ -450,9 +460,15 @@ nes_video_stitch_repair_tile_from_page0:
 
     ld a, l
     and $1F
+    ld [nes_hstitch_copy_start], a
     call nes_video_hstitch_source_for_column
     and a
     ret nz                       ; source 1: map 1 already has the right cell
+
+    ld a, [nes_hstitch_copy_start]
+    call nes_video_hstitch_column_visible
+    and a
+    ret z                        ; authoritative WRAM is enough until it enters view
 
     ; Convert virtual D0-D7 inner row bits to same-cell $9800/$9C00 addresses.
     ld a, h
@@ -623,11 +639,17 @@ nes_video_sync_attribute_write_stitched:
     ; Does this stitched destination column currently come from the physical
     ; nametable that was just changed?
     ld a, l
+    ld [nes_hstitch_copy_start], a
     push bc
     call nes_video_hstitch_source_for_column
     pop bc
     cp d
     jp nz, .next_column
+
+    ld a, [nes_hstitch_copy_start]
+    call nes_video_hstitch_column_visible
+    and a
+    jp z, .next_column
 
     ; Preserve source-page/end-column while DE becomes the CGB destination.
     push de
@@ -1482,6 +1504,28 @@ nes_video_refresh_stitch_column:
 
     xor a
     ldh [rVBK], a
+    ret
+
+; Return A=1 iff destination tile column A (0..31) can currently be scanned
+; by the 160px lower playfield.  A 160px viewport covers 20 whole tiles and,
+; when SCX has a fine offset, one additional partial tile, so retain q..q+20.
+; Columns farther ahead are NES parser construction work and must stay only in
+; authoritative virtual nametable WRAM until scrolling brings them on-screen.
+nes_video_hstitch_column_visible:
+    and $1F
+    ld b, a
+    ld a, [nes_hstitch_key]
+    and $1F
+    ld c, a
+    ld a, b
+    sub c
+    and $1F
+    cp $15                         ; distances 0..20 are potentially visible
+    jr c, .visible
+    xor a
+    ret
+.visible:
+    ld a, $01
     ret
 
 ; Return A=0/1 for the physical NES nametable currently assigned to a GBC
