@@ -402,7 +402,7 @@ nes_ppu_write_data:
 
 .nametable_sync_now:
     ld a, e
-    call nes_video_sync_nametable_write_if_changed
+    call nes_video_sync_nametable_write
     jp nes_ppu_increment_addr
 
 .pattern:
