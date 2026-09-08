@@ -1383,8 +1383,12 @@ nes_video_update_horizontal_stitch:
     ret
 
 ; Input: A = destination GBC tile column 0..31.
-; Refresh one complete stitched column from the authoritative virtual NES
-; nametables. This is cheap enough to do while LCD timing remains enabled.
+; Refresh one complete stitched column from authoritative virtual NES
+; nametables. This routine is called only from the host-VBlank stitch commit
+; (or with LCD disabled during a full rebuild), so keep it aggressively
+; VBlank-fast: select each VRAM bank once and never poll STAT per cell.
+; The old per-cell wait/VBK path routinely ran past scanline 32, blocking the
+; SMB HUD/playfield STAT interrupt and producing the periodic garbage frames.
 nes_video_refresh_stitch_column:
     and $1F
     ld [nes_hstitch_copy_start], a
@@ -1415,13 +1419,11 @@ nes_video_refresh_stitch_column:
     ld e, a
     ld b, $1E                    ; 30 NES tile rows
 
+    xor a
+    ldh [rVBK], a                ; entire tile column uses VRAM bank 0
+
 .tile_loop:
     ld a, [hl]
-    ld c, a
-    call nes_video_wait_vram
-    xor a
-    ldh [rVBK], a
-    ld a, c
     ld [de], a
 
     ld a, l
@@ -1459,6 +1461,9 @@ nes_video_refresh_stitch_column:
     ld e, a
     ld b, $08                    ; eight 4-row attribute bands
 
+    ld a, $01
+    ldh [rVBK], a                ; entire attribute column uses VRAM bank 1
+
 .attr_group:
     ; Top two rows of the 4x4 attribute cell.
     ld a, [hl]
@@ -1478,8 +1483,8 @@ nes_video_refresh_stitch_column:
     ld a, [nes_hstitch_copy_skip]
     or c
     ld c, a
-    call nes_video_stitch_write_attr_row
-    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row_fast
+    call nes_video_stitch_write_attr_row_fast
 
     ; Bottom two rows.
     ld a, [hl]
@@ -1500,8 +1505,8 @@ nes_video_refresh_stitch_column:
     ld a, [nes_hstitch_copy_skip]
     or c
     ld c, a
-    call nes_video_stitch_write_attr_row
-    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row_fast
+    call nes_video_stitch_write_attr_row_fast
 
     ld a, l
     add $08
@@ -1565,6 +1570,19 @@ nes_video_hstitch_source_for_column:
     ld a, c
     ret
 
+; VBlank-fast version used only by nes_video_refresh_stitch_column.
+; Caller has already selected VRAM bank 1 and guarantees VRAM accessibility.
+nes_video_stitch_write_attr_row_fast:
+    ld a, c
+    ld [de], a
+    ld a, e
+    add $20
+    ld e, a
+    ret nc
+    inc d
+    ret
+
+; General synchronized version for live nametable/attribute publication.
 ; Write C to stitched-map CGB attributes at DE and advance one tile row.
 nes_video_stitch_write_attr_row:
     call nes_video_wait_vram
