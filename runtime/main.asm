@@ -22,6 +22,55 @@ nes_gbc_vblank_isr:
     ; work done by this VBlank is attributed to the frame about to be shown.
     call nes_diag_snapshot_frame
 
+    ; Arm the HUD/playfield raster state before any potentially long
+    ; completed-frame publication.  Do not enable nested interrupts here: if
+    ; publication runs past LYC, the STAT request simply remains pending and
+    ; fires immediately after this VBlank ISR returns.
+    ldh a, [nes_split_active]
+    and a
+    jp z, .early_split_done
+
+    ; A completed translated NMI has a coherent new split state. Freeze it now
+    ; so the raster state used by this host frame matches the transaction being
+    ; published below. If an NMI is still active, retain the previous armed state.
+    ld a, [nes_nmi_active]
+    and a
+    jr nz, .early_split_apply
+
+    ldh a, [nes_split_top_x]
+    ldh [nes_split_armed_top_x], a
+    ldh a, [nes_split_top_y]
+    ldh [nes_split_armed_top_y], a
+    ldh a, [nes_split_top_ctrl]
+    ldh [nes_split_armed_top_ctrl], a
+
+    ldh a, [nes_split_bottom_x]
+    ldh [nes_split_armed_x], a
+    ldh a, [nes_split_bottom_y]
+    ldh [nes_split_armed_y], a
+    ldh a, [nes_split_bottom_ctrl]
+    ldh [nes_split_armed_ctrl], a
+
+    ldh a, [nes_view_x]
+    ld [nes_view_armed_x], a
+    ldh a, [nes_view_y]
+    ld [nes_view_armed_y], a
+
+.early_split_apply:
+    call nes_video_apply_split_top_map
+    ldh a, [nes_split_armed_top_x]
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_top_y]
+    ldh [rSCY], a
+
+    ldh a, [nes_split_line]
+    ldh [rLYC], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
+
+.early_split_done:
+
     ; A translated NES NMI may take more than one host GBC frame. Never publish
     ; partially updated NES video state while it is still running; staged OAM,
     ; palette, control, and scroll state are committed atomically on the first
@@ -35,20 +84,7 @@ nes_gbc_vblank_isr:
     ; the one-shot LYC split so the completed frame remains visually stable.
     ldh a, [nes_split_active]
     and a
-    jr z, .nmi_check_seam
-
-    call nes_video_apply_split_top_map
-    ldh a, [nes_split_armed_top_x]
-    ldh [rSCX], a
-    ldh a, [nes_split_armed_top_y]
-    ldh [rSCY], a
-
-    ldh a, [nes_split_line]
-    ldh [rLYC], a
-    ldh a, [rSTAT]
-    or $40
-    ldh [rSTAT], a
-    jp .done
+    jp nz, .done
 
 .nmi_check_seam:
     ldh a, [nes_seam_active]
@@ -158,49 +194,11 @@ nes_gbc_vblank_isr:
     xor a
     ldh [nes_seam_active], a
 
-    ; Consume any fresh scroll notification, but keep presenting the already
-    ; proven split even on frames where the NES does not rewrite $2005.
+    ; The raster trigger was armed at ISR entry. Do not switch back to the top
+    ; map here if publication has already overrun line 32; that was the source
+    ; of whole-frame HUD-map ghosts. Just consume the fresh scroll notification.
     xor a
     ldh [nes_scroll_dirty], a
-
-    ; Freeze the complete top/HUD and lower/playfield state for this host
-    ; frame before the next translated NES NMI can update the capture buffer.
-    ldh a, [nes_split_top_x]
-    ldh [nes_split_armed_top_x], a
-    ldh a, [nes_split_top_y]
-    ldh [nes_split_armed_top_y], a
-    ldh a, [nes_split_top_ctrl]
-    ldh [nes_split_armed_top_ctrl], a
-
-    ldh a, [nes_split_bottom_x]
-    ldh [nes_split_armed_x], a
-    ldh a, [nes_split_bottom_y]
-    ldh [nes_split_armed_y], a
-    ldh a, [nes_split_bottom_ctrl]
-    ldh [nes_split_armed_ctrl], a
-
-    ; Freeze the follow-camera crop with the same completed NES display state.
-    ; The next translated NMI may move the live camera before this host frame
-    ; has finished displaying, so STAT must not read nes_view_x/y directly.
-    ldh a, [nes_view_x]
-    ld [nes_view_armed_x], a
-    ldh a, [nes_view_y]
-    ld [nes_view_armed_y], a
-
-    call nes_video_apply_split_top_map
-
-    ; Fixed HUD: never add the artificial world viewport offset here.
-    ldh a, [nes_split_armed_top_x]
-    ldh [rSCX], a
-    ldh a, [nes_split_armed_top_y]
-    ldh [rSCY], a
-
-    ; Re-arm the one-shot lower/playfield transition every host frame.
-    ldh a, [nes_split_line]
-    ldh [rLYC], a
-    ldh a, [rSTAT]
-    or $40
-    ldh [rSTAT], a
 .scroll_done:
 
     ; This host frame was presented from a completed NES state, so it may
