@@ -81,7 +81,7 @@ nes_view_y_wram_pad:        ds 1
 nes_view_select_prev:       ds 1
 nes_view_coord_tmp_wram_pad: ds 1
 nes_view_sprite_tile_tmp_wram_pad: ds 1
-nes_reset_count_wram_pad:    ds 1 ; preserves legacy WRAM layout
+nes_split_duplicate_streak:  ds 1 ; $C866 consecutive duplicate-only split NMIs
 
 ; Last completed translated-NMI nametable transaction diagnostics.
 ; These are observational only: they do not alter renderer behavior.
