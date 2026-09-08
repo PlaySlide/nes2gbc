@@ -1295,11 +1295,17 @@ nes_video_update_horizontal_stitch:
     ld [nes_hstitch_catchups], a
 .forward_loop:
     ld a, [nes_hstitch_key]
-    ld b, a                    ; column falling off the left edge
     inc a
     and $3F
     ld [nes_hstitch_key], a
-    ld a, b
+
+    ; Offscreen parser writes are deliberately kept out of $9C00.  Therefore
+    ; when the viewport advances a coarse tile, refresh the NEW column entering
+    ; at the right edge from authoritative NES WRAM.  The old code refreshed
+    ; the column that fell off the left edge; after adding offscreen-write
+    ; protection that left the entering column stale until it flashed onscreen.
+    and $1F
+    add $14                     ; 20 tiles across the 160px viewport
     and $1F
     call nes_video_refresh_stitch_column
 
