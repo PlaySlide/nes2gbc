@@ -29,7 +29,7 @@ nes_gbc_vblank_isr:
     ; of the next frame and completely miss the line-32 split.
     ldh a, [nes_split_active]
     and a
-    jr z, .early_split_done
+    jp z, .early_split_done
 
     ; If the translated NMI has completed, freeze its newest complete split
     ; state now.  If it is still active, keep using the previously armed state.
