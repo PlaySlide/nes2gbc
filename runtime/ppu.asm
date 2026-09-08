@@ -264,16 +264,47 @@ nes_ppu_cpu_write:
     cp b
     jr nz, .scroll_confirm_split
 
-    ; Duplicate pair: current display is ordinary single-scroll. Also clear a
-    ; stale split latched by an earlier screen/transition.
+    ; Duplicate-only NMI.  A proven split is persistent display state:
+    ; SMB intermittently writes a duplicate scroll pair between genuine
+    ; HUD/playfield updates.  Clearing split_active immediately makes the next
+    ; host frame show the HUD map across the entire screen.  Require two
+    ; consecutive duplicate-only NMIs before retiring a previously proven split
+    ; so ordinary single-scroll games such as Ice Climber still shed stale
+    ; transition state quickly.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .duplicate_no_latched_split
+
+    ld a, [nes_split_duplicate_streak]
+    inc a
+    ld [nes_split_duplicate_streak], a
+    cp $02
+    jr c, .duplicate_keep_split
+
     xor a
     ldh [nes_split_active], a
+    ld [nes_split_duplicate_streak], a
+    jr .duplicate_finish
+
+.duplicate_keep_split:
+    ld a, $01
+    ldh [nes_split_active], a
+    jr .duplicate_finish
+
+.duplicate_no_latched_split:
+    xor a
+    ld [nes_split_duplicate_streak], a
+
+.duplicate_finish:
     ld a, $01
     ldh [nes_scroll_pair_count], a
     ldh [nes_scroll_dirty], a
     ret
 
 .scroll_confirm_split:
+    xor a
+    ld [nes_split_duplicate_streak], a
+
     ; Distinct second pair confirms a real raster split. Commit the pending
     ; first pair atomically as the stable HUD/top state, and this pair as the
     ; playfield/bottom state.
