@@ -387,20 +387,8 @@ nes_video_sync_nametable_write:
     jr z, .tile_write
     ld a, l
     and $1F
-    ld [nes_hstitch_copy_start], a
     push bc
     call nes_video_hstitch_source_for_column
-    pop bc
-    and a
-    ret z
-
-    ; Page ownership alone is insufficient: SMB constructs future/offscreen
-    ; columns in the same physical nametable.  Do not let those parser writes
-    ; touch the live stitched surface until the column is actually within the
-    ; 160px GBC viewport.
-    ld a, [nes_hstitch_copy_start]
-    push bc
-    call nes_video_hstitch_column_visible
     pop bc
     and a
     ret z
@@ -462,15 +450,9 @@ nes_video_stitch_repair_tile_from_page0:
 
     ld a, l
     and $1F
-    ld [nes_hstitch_copy_start], a
     call nes_video_hstitch_source_for_column
     and a
     ret nz                       ; source 1: map 1 already has the right cell
-
-    ld a, [nes_hstitch_copy_start]
-    call nes_video_hstitch_column_visible
-    and a
-    ret z                        ; authoritative WRAM is enough until it enters view
 
     ; Convert virtual D0-D7 inner row bits to same-cell $9800/$9C00 addresses.
     ld a, h
@@ -641,19 +623,11 @@ nes_video_sync_attribute_write_stitched:
     ; Does this stitched destination column currently come from the physical
     ; nametable that was just changed?
     ld a, l
-    ld [nes_hstitch_copy_start], a
     push bc
     call nes_video_hstitch_source_for_column
     pop bc
     cp d
     jp nz, .next_column
-
-    ld a, [nes_hstitch_copy_start]
-    push bc
-    call nes_video_hstitch_column_visible
-    pop bc
-    and a
-    jp z, .next_column
 
     ; Preserve source-page/end-column while DE becomes the CGB destination.
     push de
@@ -1295,17 +1269,11 @@ nes_video_update_horizontal_stitch:
     ld [nes_hstitch_catchups], a
 .forward_loop:
     ld a, [nes_hstitch_key]
+    ld b, a                    ; column falling off the left edge
     inc a
     and $3F
     ld [nes_hstitch_key], a
-
-    ; Offscreen parser writes are deliberately kept out of $9C00.  Therefore
-    ; when the viewport advances a coarse tile, refresh the NEW column entering
-    ; at the right edge from authoritative NES WRAM.  The old code refreshed
-    ; the column that fell off the left edge; after adding offscreen-write
-    ; protection that left the entering column stale until it flashed onscreen.
-    and $1F
-    add $14                     ; 20 tiles across the 160px viewport
+    ld a, b
     and $1F
     call nes_video_refresh_stitch_column
 
@@ -1383,12 +1351,8 @@ nes_video_update_horizontal_stitch:
     ret
 
 ; Input: A = destination GBC tile column 0..31.
-; Refresh one complete stitched column from authoritative virtual NES
-; nametables. This routine is called only from the host-VBlank stitch commit
-; (or with LCD disabled during a full rebuild), so keep it aggressively
-; VBlank-fast: select each VRAM bank once and never poll STAT per cell.
-; The old per-cell wait/VBK path routinely ran past scanline 32, blocking the
-; SMB HUD/playfield STAT interrupt and producing the periodic garbage frames.
+; Refresh one complete stitched column from the authoritative virtual NES
+; nametables. This is cheap enough to do while LCD timing remains enabled.
 nes_video_refresh_stitch_column:
     and $1F
     ld [nes_hstitch_copy_start], a
@@ -1419,11 +1383,13 @@ nes_video_refresh_stitch_column:
     ld e, a
     ld b, $1E                    ; 30 NES tile rows
 
-    xor a
-    ldh [rVBK], a                ; entire tile column uses VRAM bank 0
-
 .tile_loop:
     ld a, [hl]
+    ld c, a
+    call nes_video_wait_vram
+    xor a
+    ldh [rVBK], a
+    ld a, c
     ld [de], a
 
     ld a, l
@@ -1461,9 +1427,6 @@ nes_video_refresh_stitch_column:
     ld e, a
     ld b, $08                    ; eight 4-row attribute bands
 
-    ld a, $01
-    ldh [rVBK], a                ; entire attribute column uses VRAM bank 1
-
 .attr_group:
     ; Top two rows of the 4x4 attribute cell.
     ld a, [hl]
@@ -1483,8 +1446,8 @@ nes_video_refresh_stitch_column:
     ld a, [nes_hstitch_copy_skip]
     or c
     ld c, a
-    call nes_video_stitch_write_attr_row_fast
-    call nes_video_stitch_write_attr_row_fast
+    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row
 
     ; Bottom two rows.
     ld a, [hl]
@@ -1505,8 +1468,8 @@ nes_video_refresh_stitch_column:
     ld a, [nes_hstitch_copy_skip]
     or c
     ld c, a
-    call nes_video_stitch_write_attr_row_fast
-    call nes_video_stitch_write_attr_row_fast
+    call nes_video_stitch_write_attr_row
+    call nes_video_stitch_write_attr_row
 
     ld a, l
     add $08
@@ -1519,28 +1482,6 @@ nes_video_refresh_stitch_column:
 
     xor a
     ldh [rVBK], a
-    ret
-
-; Return A=1 iff destination tile column A (0..31) can currently be scanned
-; by the 160px lower playfield.  A 160px viewport covers 20 whole tiles and,
-; when SCX has a fine offset, one additional partial tile, so retain q..q+20.
-; Columns farther ahead are NES parser construction work and must stay only in
-; authoritative virtual nametable WRAM until scrolling brings them on-screen.
-nes_video_hstitch_column_visible:
-    and $1F
-    ld b, a
-    ld a, [nes_hstitch_key]
-    and $1F
-    ld c, a
-    ld a, b
-    sub c
-    and $1F
-    cp $15                         ; distances 0..20 are potentially visible
-    jr c, .visible
-    xor a
-    ret
-.visible:
-    ld a, $01
     ret
 
 ; Return A=0/1 for the physical NES nametable currently assigned to a GBC
@@ -1570,19 +1511,6 @@ nes_video_hstitch_source_for_column:
     ld a, c
     ret
 
-; VBlank-fast version used only by nes_video_refresh_stitch_column.
-; Caller has already selected VRAM bank 1 and guarantees VRAM accessibility.
-nes_video_stitch_write_attr_row_fast:
-    ld a, c
-    ld [de], a
-    ld a, e
-    add $20
-    ld e, a
-    ret nc
-    inc d
-    ret
-
-; General synchronized version for live nametable/attribute publication.
 ; Write C to stitched-map CGB attributes at DE and advance one tile row.
 nes_video_stitch_write_attr_row:
     call nes_video_wait_vram
