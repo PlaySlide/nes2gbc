@@ -32,6 +32,16 @@ nes_video_init:
     ld bc, $0800
     call nes_video_fill_zero
 
+    ; GBC maps start cleared, so the published-byte shadow starts cleared too.
+    ; Restore bank 1 afterward because virtual NES nametable RAM lives there.
+    ld a, $06
+    ldh [rSVBK], a
+    ld hl, nes_nametable_published_shadow
+    ld bc, $0800
+    call nes_video_fill_zero
+    ld a, $01
+    ldh [rSVBK], a
+
     xor a
     ldh [rVBK], a
     ldh [rSCX], a
@@ -293,7 +303,7 @@ nes_video_flush_nametable_queue_atomic:
 .diag_done:
     push de
     ld a, [hl]
-    call nes_video_sync_nametable_write
+    call nes_video_sync_nametable_write_if_changed
     pop de
     jp .loop
 
@@ -347,6 +357,32 @@ nes_video_wait_oam:
     ldh a, [rLY]
     cp 144
     jr c, .wait_busy
+    ret
+
+; Input: HL = physical virtual nametable address ($D000-$D7FF),
+; A = byte that should be published.  Suppress exact repeats before touching
+; live VRAM.  SMB's scrolling NMI often stages addresses whose final value is
+; unchanged; the old path still paid mode waits plus tile/attribute writes for
+; every one and could occupy scanlines 0-31 before the HUD split.
+nes_video_sync_nametable_write_if_changed:
+    ld c, a
+
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    cp c
+    jr z, .unchanged
+
+    ld a, c
+    ld [hl], a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, c
+    jp nes_video_sync_nametable_write
+
+.unchanged:
+    ld a, $01
+    ldh [rSVBK], a
     ret
 
 ; Input: HL = physical virtual nametable address ($D000-$D7FF), A = written byte.
