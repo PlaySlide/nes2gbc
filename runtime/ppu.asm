@@ -417,6 +417,65 @@ nes_ppu_write_data:
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
 
+; Input HL = physical nametable address $D000-$D7FF.
+; Return A=1 on first visit during this translated NMI, A=0 on repeats.
+; HL is preserved and WRAM bank 1 is restored before returning.
+nes_ppu_nametable_stage_first_visit:
+    push hl
+
+    ; E = bit number (low three address bits).
+    ld a, l
+    and $07
+    ld e, a
+
+    ; D800 + (((H & 7) << 5) | (L >> 3)) selects the bitmap byte.
+    ld a, l
+    srl a
+    srl a
+    srl a
+    ld c, a
+    ld a, h
+    and $07
+    swap a
+    add a
+    or c
+    ld l, a
+    ld h, HIGH(nes_nametable_stage_seen)
+
+    ld b, $01
+    ld a, e
+    and a
+    jr z, .stage_mask_ready
+.stage_mask_loop:
+    sla b
+    dec a
+    jr nz, .stage_mask_loop
+.stage_mask_ready:
+
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    ld c, a
+    and b
+    jr nz, .stage_duplicate
+
+    ld a, c
+    or b
+    ld [hl], a
+    ld a, $01
+    jr .stage_finish
+
+.stage_duplicate:
+    xor a
+
+.stage_finish:
+    ld b, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, b
+    pop hl
+    ret
+
 ; Append physical virtual nametable address HL ($D000-$D7FF) to the
 ; current translated-NMI transaction. The tile/attribute value itself is already
 ; stored in authoritative WRAM, so duplicate addresses are harmless.
@@ -424,6 +483,13 @@ nes_ppu_stage_nametable_hl:
     ld a, [nes_nametable_queue_overflow]
     and a
     ret nz
+
+    ; The queue reads the final byte from authoritative nametable WRAM after
+    ; RTI, so multiple writes to the same physical PPU address in one NMI need
+    ; only one queue entry. Suppress repeats now, outside host VBlank.
+    call nes_ppu_nametable_stage_first_visit
+    and a
+    ret z
 
     ld a, [nes_nametable_queue_ptr_hi]
     cp $E0
