@@ -193,6 +193,15 @@ nes_ppu_cpu_write:
     and a
     jr nz, .mask_defer
 
+    ; Once a vertical-mirroring title has proven that it uses the stitched
+    ; raster presentation, temporary split/stitch loss must not let its
+    ; mid-NMI PPUMASK blanking escape to live LCDC. dj22 showed those writes
+    ; turning BG+OBJ off from VBlank until about scanline 31, i.e. exactly the
+    ; HUD region, then restoring them mid-frame.
+    ld a, [nes_hstitch_seen]
+    and a
+    jr nz, .mask_defer
+
 .mask_publish_now:
     xor a
     ld [nes_mask_dirty], a
