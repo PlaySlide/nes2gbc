@@ -824,8 +824,16 @@ nes_poll_nmi_hl:
     ld a, $D8
     ld [nes_nametable_queue_ptr_hi], a
 
-    ; Clear duplicate-address tracking here, in translated CPU time rather than
-    ; in the host VBlank ISR. Preserve HL because it is the interrupted NES PC.
+    ; Only SMB-style stitched NMIs use the duplicate-address bitmap.
+    ; Clearing all 256 bytes on every NMI was pure overhead for DK/IC/BF and
+    ; lengthened the interval in which their live map writes could reach host
+    ; visible scanout.
+    ld a, [nes_nametable_stage_used]
+    and a
+    jr z, .stage_seen_clear_done
+
+    xor a
+    ld [nes_nametable_stage_used], a
     push hl
     ld a, $06
     ldh [rSVBK], a
@@ -840,6 +848,7 @@ nes_poll_nmi_hl:
     ldh [rSVBK], a
     pop hl
 
+.stage_seen_clear_done:
     xor a
     ldh [nes_scroll_pair_count], a
     ; Once a two-state raster split has been proven, keep it latched. Some
