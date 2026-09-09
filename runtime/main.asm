@@ -98,15 +98,11 @@ nes_gbc_vblank_isr:
     or NES_DIAG_EVENT_COMMIT
     ld [nes_diag_event_flags], a
 
-    ; Publish the completed NES NMI's nametable transaction before matching
-    ; OAM/palette/control/scroll state. The flush itself keeps LCD off, so a
-    ; long translated NMI can never leak half-built SMB columns to scanout.
-    call nes_video_flush_nametable_queue_atomic
-    call nes_video_update_horizontal_stitch
-
-    ; Flush virtual NES OAM exactly once at the start of host VBlank.
-    ; Normal $4014 DMA has already built the 160-byte GBC OAM shadow; direct
-    ; $2004 writers fall back to building it here.
+    ; Sprite OAM has a hard scanout deadline: once visible lines begin, a
+    ; 160-byte hardware-OAM copy can mix two NES metasprite states in one GBC
+    ; frame. Publish ONLY OAM before the heavier BG transaction. Palette,
+    ; control, scroll, and all BG ordering remain unchanged from the stable
+    ; renderer baseline.
     ld a, [nes_oam_dirty]
     and a
     jp z, .oam_done
@@ -120,6 +116,10 @@ nes_gbc_vblank_isr:
 .oam_shadow_ready:
     call nes_video_sync_oam
 .oam_done:
+
+    ; Preserve the proven background publication order.
+    call nes_video_flush_nametable_queue_atomic
+    call nes_video_update_horizontal_stitch
 
     ldh a, [nes_palette_dirty]
     and a
