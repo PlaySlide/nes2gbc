@@ -310,7 +310,24 @@ nes_video_flush_nametable_queue_atomic:
 .diag_done:
     push de
     ld a, [hl]
+
+    ; Persistent-value suppression is specific to the synthesized SMB stitched
+    ; map. Ordinary physical maps have side effects such as vertical seam
+    ; padding, so a staged generic write must run the full publication path
+    ; even when the NES byte itself happens to match the previous value.
+    ld b, a
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .publish_generic
+    ld a, b
     call nes_video_sync_nametable_write_if_changed
+    jr .publish_done
+
+.publish_generic:
+    ld a, b
+    call nes_video_sync_nametable_write
+
+.publish_done:
     pop de
     jp .loop
 
