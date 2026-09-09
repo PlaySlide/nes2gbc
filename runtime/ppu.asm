@@ -422,13 +422,11 @@ nes_ppu_write_data:
     jp nes_ppu_increment_addr
 
 .nametable_sync_now:
-    ; Generic physical maps are never repurposed like SMB's stitched $9C00
-    ; surface, so an identical NES nametable byte has nothing new to publish.
-    ; Skip the entire synchronized tile/attribute VRAM path for exact repeats.
-    ; Palette attribute bytes have their own nametable addresses, and global
-    ; PPUCTRL.4 pattern-bank changes are reconciled separately at frame commit.
+    ; Generic maps have stable physical destinations. Publish them normally;
+    ; do not use SMB's persistent published-value cache here because a repeated
+    ; NES byte can still need CGB attribute/pattern-bank side effects refreshed.
     ld a, e
-    call nes_video_sync_nametable_write_if_changed
+    call nes_video_sync_nametable_write
     jp nes_ppu_increment_addr
 
 .pattern:
