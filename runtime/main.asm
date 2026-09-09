@@ -98,13 +98,12 @@ nes_gbc_vblank_isr:
     or NES_DIAG_EVENT_COMMIT
     ld [nes_diag_event_flags], a
 
-    ; Publish the completed NES NMI's nametable transaction before matching
-    ; OAM/palette/control/scroll state. The flush itself keeps LCD off, so a
-    ; long translated NMI can never leak half-built SMB columns to scanout.
-    call nes_video_flush_nametable_queue_atomic
-    call nes_video_update_horizontal_stitch
-
-    ; Flush virtual NES OAM exactly once at the start of host VBlank.
+    ; OAM and palette must win the VBlank deadline. They describe one coherent
+    ; completed NES frame, but the heavier nametable/stitch work below can run
+    ; well into visible scanout. Publishing sprites afterward allowed a single
+    ; GBC frame to contain pieces from two NES OAM states (and likewise old/new
+    ; sprite palette state), visibly jumbling animated metasprites.
+    ;
     ; Normal $4014 DMA has already built the 160-byte GBC OAM shadow; direct
     ; $2004 writers fall back to building it here.
     ld a, [nes_oam_dirty]
@@ -128,6 +127,12 @@ nes_gbc_vblank_isr:
     ldh [nes_palette_dirty], a
     call nes_video_sync_palette_shadow
 .palette_done:
+
+    ; Background publication is allowed to consume the remainder of VBlank
+    ; and, where unavoidable, HBlank windows. Sprite state above is already
+    ; coherent before visible scanout begins.
+    call nes_video_flush_nametable_queue_atomic
+    call nes_video_update_horizontal_stitch
 
     ; Commit display-control and scroll state only on a host frame boundary.
     ; This prevents partial $2005 pairs / mid-scan PPUCTRL writes from tearing
