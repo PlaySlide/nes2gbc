@@ -192,12 +192,35 @@ nes_video_flush_nametable_queue_atomic:
 .diag_display_store:
     ld [nes_ntdiag_display_map], a
 
-    ; This routine is called from host VBlank, but a completed NES update may
-    ; still take longer than the GBC VBlank window. Keep LCD timing running:
-    ; nes_video_sync_nametable_write waits out mode 3 before each VRAM access.
-    ; Disabling/re-enabling LCD here resets LY and can make the SMB sprite-0
-    ; HUD/playfield STAT split miss an entire frame, producing the repeating
-    ; full-screen flash/fixed-background pattern.
+    ; Fixed-screen games have no raster deadline to preserve. Their staged
+    ; NMI updates are often a short vertical column; publishing that column
+    ; through HBlank can visibly expose one tile at a time for 60+ scanlines.
+    ; For frames with no split, no synthetic vertical seam, and no SMB stitch,
+    ; make the transaction truly atomic by disabling LCD during this VBlank.
+    ;
+    ; Raster/seam/stitch users must keep LCD timing alive because resetting LY
+    ; would destroy their presentation timing.
+    xor a
+    ld [nes_saved_lcdc], a
+
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .flush_keep_lcd
+    ldh a, [nes_seam_active]
+    and a
+    jr nz, .flush_keep_lcd
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .flush_keep_lcd
+
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    bit 7, a
+    jr z, .flush_keep_lcd
+    and $7F
+    ldh [rLCDC], a
+
+.flush_keep_lcd:
     ld a, $01
     ldh [rSVBK], a
     ld de, nes_nametable_queue
@@ -345,6 +368,13 @@ nes_video_flush_nametable_queue_atomic:
 
     xor a
     ldh [rVBK], a
+
+    ; Restore LCD only when this flush took the fixed-screen atomic path.
+    ; A saved value with bit 7 clear means no active LCD was disabled here.
+    ld a, [nes_saved_lcdc]
+    bit 7, a
+    ret z
+    ldh [rLCDC], a
     ret
 
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
