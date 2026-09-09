@@ -457,10 +457,19 @@ nes_video_sync_nametable_write:
     and $10
     srl a
     or b
+    ld b, a
     ld [de], a
 
     xor a
     ldh [rVBK], a
+
+    ; NES nametables have only 30 tile rows. Keep the two otherwise-unused
+    ; GBC rows 30-31 populated from the vertically adjacent NES nametable for
+    ; ordinary single-scroll games. Normally the synthetic Y=240 raster seam
+    ; switches maps before these rows are scanned; if a long VBlank commit
+    ; delays that switch, the padding shows correct adjacent content instead
+    ; of tile-0/attribute garbage.
+    call nes_video_mirror_vertical_seam_tile_safe
     call nes_video_stitch_repair_tile_from_page0
     ret
 
@@ -602,6 +611,172 @@ nes_video_sync_attribute_write_physical:
     call nes_video_attr_bottom_row
     call nes_video_wait_vram
     call nes_video_attr_bottom_row
+
+    xor a
+    ldh [rVBK], a
+    call nes_video_mirror_vertical_seam_attr_safe
+    ret
+
+; Populate GBC padding rows 30-31 for the ordinary single-scroll
+; vertical-seam path. Do nothing for game-authored raster splits or the SMB
+; horizontal stitched presentation map.
+; Input: HL = physical NES nametable tile address, C = tile ID, B = CGB attr.
+nes_video_mirror_vertical_seam_tile_safe:
+    ldh a, [nes_split_active]
+    and a
+    ret nz
+    ld a, [nes_hstitch_valid]
+    and a
+    ret nz
+
+    ; Only source NES tile rows 0 and 1 feed GBC padding rows 30 and 31.
+    ld a, h
+    and $03
+    ret nz
+    ld a, l
+    cp $40
+    ret nc
+
+    ; Horizontal mirroring: vertical adjacency changes physical table.
+    ; Vertical mirroring: vertical adjacency repeats the same physical table.
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .tile_same_table
+
+    ld a, h
+    and $04
+    ld d, $9F
+    jr z, .tile_dest_ready
+    ld d, $9B
+    jr .tile_dest_ready
+
+.tile_same_table:
+    ld a, h
+    and $04
+    ld d, $9B
+    jr z, .tile_dest_ready
+    ld d, $9F
+
+.tile_dest_ready:
+    ld a, l
+    add $C0
+    ld e, a
+
+    call nes_video_wait_vram
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+    ld a, b
+    ld [de], a
+
+    xor a
+    ldh [rVBK], a
+    ret
+
+; Mirror palette attributes for source NES tile rows 0-1 into the same safety
+; rows. Input after physical attribute expansion: H=$D3/$D7, L=index $00-$3F.
+nes_video_mirror_vertical_seam_attr_safe:
+    ldh a, [nes_split_active]
+    and a
+    ret nz
+    ld a, [nes_hstitch_valid]
+    and a
+    ret nz
+
+    ld a, l
+    cp $08
+    ret nc
+
+    ; Source CGB map.
+    ld a, h
+    and $04
+    ld b, $98
+    jr z, .attr_source_ready
+    ld b, $9C
+.attr_source_ready:
+
+    ; Destination padding map follows NES vertical adjacency.
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .attr_same_table
+
+    ld a, h
+    and $04
+    ld c, $9F
+    jr z, .attr_dest_ready
+    ld c, $9B
+    jr .attr_dest_ready
+
+.attr_same_table:
+    ld a, h
+    and $04
+    ld c, $9B
+    jr z, .attr_dest_ready
+    ld c, $9F
+
+.attr_dest_ready:
+    ld a, l
+    and $07
+    add a
+    add a
+    ld l, a
+    ld e, a
+    ld h, b
+    ld d, c
+    ld a, e
+    add $C0
+    ld e, a
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+
+    ; Source row 0 -> padding row 30.
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+
+    ; Advance both pointers to row 1 / padding row 31.
+    ld a, l
+    add $1C
+    ld l, a
+    jr nc, .attr_src_row1_ready
+    inc h
+.attr_src_row1_ready:
+    ld a, e
+    add $1D
+    ld e, a
+    jr nc, .attr_dst_row1_ready
+    inc d
+.attr_dst_row1_ready:
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hli]
+    ld [de], a
+    inc de
+    ld a, [hl]
+    ld [de], a
 
     xor a
     ldh [rVBK], a
