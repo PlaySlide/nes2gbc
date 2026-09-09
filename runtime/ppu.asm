@@ -214,6 +214,14 @@ nes_ppu_cpu_write:
     and a
     jr nz, .mask_apply_now
 
+    ; Most PPUMASK off/on pairs are not screen constructions. Only pay the
+    ; expensive LCD-off authoritative rebuild when hidden nametable contents
+    ; actually changed since the previous presentation.
+    ld a, [nes_generic_map_rebuild_dirty]
+    and a
+    jr z, .mask_apply_now
+    xor a
+    ld [nes_generic_map_rebuild_dirty], a
     call nes_video_rebuild_generic_maps_atomic
 
 .mask_apply_now:
@@ -434,6 +442,34 @@ nes_ppu_write_data:
 
     ; $3000-$3EFF mirrors $2000-$2EFF.
     call nes_ppu_map_nametable_hl
+
+    ; The authoritative full-map rebuild is only needed after a *real*
+    ; generic screen construction. SMB (and DKC in some pre-game states)
+    ; repeatedly toggles PPUMASK off/on even when its nametable is unchanged;
+    ; rebuilding both GBC maps on every such toggle produces long LCD-off
+    ; white flashes.
+    ;
+    ; Record an actual byte change only while generic rendering is hidden.
+    ; Established raster/stitch presentation paths never consume this flag.
+    ld a, [hl]
+    cp e
+    jr z, .nametable_store_value
+
+    ld a, [nes_ppumask]
+    and $18
+    jr nz, .nametable_store_value
+
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .nametable_store_value
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .nametable_store_value
+
+    ld a, $01
+    ld [nes_generic_map_rebuild_dirty], a
+
+.nametable_store_value:
     ld a, e
     ld [hl], a
 
