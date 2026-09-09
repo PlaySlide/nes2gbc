@@ -212,6 +212,9 @@ nes_video_flush_nametable_queue_atomic:
     ld a, [nes_hstitch_valid]
     and a
     jr nz, .flush_keep_lcd
+    ld a, [nes_hstitch_seen]
+    and a
+    jr nz, .flush_keep_lcd
 
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
@@ -1515,6 +1518,12 @@ nes_video_update_horizontal_stitch:
     ldh a, [nes_split_active]
     and a
     jr z, .disable
+
+    ; Once a title has successfully established the vertical-mirroring
+    ; horizontal stitch, remember that classification across temporary split
+    ; loss during area/tileset transitions.
+    ld a, $01
+    ld [nes_hstitch_seen], a
 
     ; effective X = lower NES scroll + our crop offset.
     ldh a, [nes_split_bottom_x]
