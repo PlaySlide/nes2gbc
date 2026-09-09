@@ -80,7 +80,7 @@ nes_view_armed_x:           ds 1 ; crop X committed with current host frame
 nes_view_armed_y:           ds 1 ; crop Y committed with current host frame
 nes_view_select_prev:       ds 1
 nes_bg_pattern_committed:    ds 1 ; $C864 committed CGB attr bank bit (0/$08)
-nes_view_sprite_tile_tmp_wram_pad: ds 1
+nes_nametable_stage_used:     ds 1 ; staging bitmap touched since last clear
 nes_split_duplicate_streak:  ds 1 ; $C866 consecutive duplicate-only split NMIs
 
 ; Last completed translated-NMI nametable transaction diagnostics.
