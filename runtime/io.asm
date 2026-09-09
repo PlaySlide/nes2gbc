@@ -38,7 +38,7 @@ nes_dac:              ds 1
 nes_saved_lcdc:       ds 1
 nes_palette_sync_color: ds 1
 nes_generic_map_rebuild_dirty: ds 1 ; changed NT data while generic rendering was off
-nes_sprite_bank_tmp_wram_pad: ds 1
+nes_hstitch_seen: ds 1 ; title has successfully established horizontal stitched presentation
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
 nes_host_vblank_pending: ds 1
