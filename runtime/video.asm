@@ -377,6 +377,54 @@ nes_video_flush_nametable_queue_atomic:
     ldh [rLCDC], a
     ret
 
+; Rebuild both physical GBC background maps from authoritative NES
+; nametable WRAM.  This is a correctness checkpoint used when an ordinary game
+; finishes a rendering-off screen construction and re-enables the background.
+; It tells us whether incremental publication has drifted from virtual NES state.
+nes_video_rebuild_generic_maps_atomic:
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    bit 7, a
+    jr z, .rebuild_lcd_off
+
+    ; LCD may only be disabled during VBlank.
+    call nes_video_wait_oam
+    ldh a, [rLCDC]
+    and $7F
+    ldh [rLCDC], a
+
+.rebuild_lcd_off:
+    ld a, $01
+    ldh [rSVBK], a
+    ld hl, $D000
+
+.rebuild_loop:
+    ld a, [hl]
+    push hl
+    call nes_video_sync_nametable_write
+    pop hl
+    inc hl
+    ld a, h
+    cp $D8
+    jr nz, .rebuild_loop
+
+    ; The rebuilt attributes used the current global PPUCTRL.4, so make that
+    ; state the committed baseline and avoid an immediate redundant full-bank
+    ; rewrite after LCD is restored.
+    ld a, [nes_ppuctrl]
+    and $10
+    srl a
+    ld [nes_bg_pattern_committed], a
+
+    ld a, $01
+    ldh [rSVBK], a
+    xor a
+    ldh [rVBK], a
+
+    ld a, [nes_saved_lcdc]
+    ldh [rLCDC], a
+    ret
+
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
 ; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
 ; entire frame waiting for LY>=144 for every translated NES PPU write.
