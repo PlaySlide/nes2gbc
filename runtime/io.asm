@@ -37,7 +37,7 @@ nes_ppu_read_buffer:  ds 1
 nes_dac:              ds 1
 nes_saved_lcdc:       ds 1
 nes_palette_sync_color: ds 1
-nes_sprite_attr_tmp_wram_pad: ds 1
+nes_generic_map_rebuild_dirty: ds 1 ; changed NT data while generic rendering was off
 nes_sprite_bank_tmp_wram_pad: ds 1
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
