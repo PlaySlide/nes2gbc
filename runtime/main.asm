@@ -420,6 +420,7 @@ Start:
     ld [nes_nametable_stage_used], a
     ld [nes_generic_map_rebuild_dirty], a
     ld [nes_hstitch_valid], a
+    ld [nes_hstitch_seen], a
     ld [nes_hstitch_dirty], a
     ld [nes_hstitch_key], a
     ld [nes_hstitch_copy_start], a
