@@ -418,6 +418,7 @@ Start:
     ld [nes_view_select_prev], a
     ld [nes_bg_pattern_committed], a
     ld [nes_nametable_stage_used], a
+    ld [nes_generic_map_rebuild_dirty], a
     ld [nes_hstitch_valid], a
     ld [nes_hstitch_dirty], a
     ld [nes_hstitch_key], a
