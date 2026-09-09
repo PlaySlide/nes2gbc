@@ -167,12 +167,34 @@ nes_ppu_cpu_write:
     ldh [nes_ctrl_dirty], a
     ret
 .mask:
-    ; PPUMASK is part of the rendered NES frame. SMB deliberately disables
-    ; rendering at the start of NMI and re-enables it after its VRAM update;
-    ; publishing those intermediate writes to the GBC creates host-frame
-    ; flashes when one translated NMI spans multiple GBC frames.
     ld a, e
     ld [nes_ppumask], a
+
+    ; Ordinary NES games use PPUMASK rendering-off as the protection window
+    ; for bulk nametable/attribute redraws. Their $2007 writes are published
+    ; live, so delaying PPUMASK until a long translated NMI finishes exposes
+    ; the entire half-built screen (DK/IC/BF regression).
+    ;
+    ; Keep the deferred behavior only for the SMB-style vertical-mirroring
+    ; stitched raster path, where temporary mask toggles inside one long NMI
+    ; must not blank several host frames.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .mask_publish_now
+
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .mask_defer
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .mask_defer
+
+.mask_publish_now:
+    xor a
+    ld [nes_mask_dirty], a
+    jp nes_video_update_mask
+
+.mask_defer:
     ld a, $01
     ld [nes_mask_dirty], a
     ret
