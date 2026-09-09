@@ -453,9 +453,11 @@ nes_video_sync_nametable_write:
     ld a, [de]
     and $07
     ld b, a
-    ld a, [nes_ppuctrl]
-    and $10
-    srl a
+    ; Attribute bank belongs to the last committed presentation state,
+    ; never to a transient PPUCTRL value observed while translated NMI is
+    ; constructing the next frame. A real PPUCTRL.4 change is reconciled by
+    ; nes_video_toggle_bg_pattern_bank at completed-frame commit.
+    ld a, [nes_bg_pattern_committed]
     or b
     ld b, a
     ld [de], a
@@ -594,10 +596,9 @@ nes_video_sync_attribute_write_physical:
     ld e, a
 .dest_ready:
 
-    ; Attribute bit 3 selects converted NES pattern table 1 in CGB VRAM bank 1.
-    ld a, [nes_ppuctrl]
-    and $10
-    srl a
+    ; Attribute bit 3 follows the last committed global background pattern
+    ; table. Never bake a transient mid-NMI PPUCTRL.4 into individual cells.
+    ld a, [nes_bg_pattern_committed]
     ld c, a
 
     call nes_video_wait_vram
