@@ -196,6 +196,10 @@ nes_video_flush_nametable_queue_atomic:
     ld de, nes_nametable_queue
 
 .loop:
+    ; Even a queue consisting mostly of persistent-shadow hits can consume
+    ; enough CPU to cross line 32. Service the raster deadline while walking it.
+    call nes_video_service_split_deadline
+
     ; DE == queue end?
     ld a, [nes_nametable_queue_ptr_hi]
     cp d
@@ -323,10 +327,73 @@ nes_video_flush_nametable_queue_atomic:
     ldh [rVBK], a
     ret
 
+; While a long host-VBlank publication is running with interrupts masked,
+; service an already-armed SMB-style lower-playfield split cooperatively once
+; LY reaches the split line.  This avoids showing the fixed $9800 backing map
+; for scanlines 32..45+ without nesting STAT inside VRAM/OAM code.
+; Clobbers A; preserves BC.
+nes_video_service_split_deadline:
+    push bc
+
+    ldh a, [nes_split_active]
+    and a
+    jr z, .service_done
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .service_done
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .service_done
+
+    ; $9C00 already selected means this frame's lower split has fired.
+    ldh a, [rLCDC]
+    bit 3, a
+    jr nz, .service_done
+
+    ldh a, [nes_split_line]
+    ld b, a
+    ldh a, [rLY]
+    cp $90
+    jr nc, .service_done
+    cp b
+    jr c, .service_done
+
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_STAT_SPLIT
+    ld [nes_diag_event_flags], a
+
+    call nes_video_apply_split_bottom_map
+
+    ldh a, [nes_split_armed_x]
+    ld b, a
+    ld a, [nes_view_armed_x]
+    add b
+    ldh [rSCX], a
+
+    ldh a, [nes_split_armed_y]
+    ld b, a
+    ld a, [nes_view_armed_y]
+    add b
+    ldh [rSCY], a
+
+    ; The split has been serviced manually. Disable its one-shot STAT source
+    ; and discard a pending LYC request so it cannot fire again after RETI.
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    ldh a, [rIF]
+    and $FD
+    ldh [rIF], a
+
+.service_done:
+    pop bc
+    ret
+
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
 ; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
 ; entire frame waiting for LY>=144 for every translated NES PPU write.
 nes_video_wait_vram:
+    call nes_video_service_split_deadline
     ldh a, [rLCDC]
     bit 7, a
     ret z
@@ -1140,7 +1207,12 @@ nes_video_sync_oam:
     ld [de], a
     inc de
     dec b
-    jr nz, .copy_shadow
+    jr z, .copy_done
+    ld a, b
+    and $0F
+    call z, nes_video_service_split_deadline
+    jr .copy_shadow
+.copy_done:
     ret
 
 ; NES PPUCTRL bit 4 globally selects BG pattern table $0000/$1000.
@@ -1740,6 +1812,22 @@ nes_video_update_ctrl:
     ld b, a
 .size_done:
 
+    ; In an active vertical-mirroring stitch, map selection is raster state.
+    ; Preserve LCDC.3 exactly as it stands; the top/bottom split code owns it.
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .ctrl_map_normal
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .ctrl_map_normal
+    ldh a, [nes_split_active]
+    and a
+    jr z, .ctrl_map_normal
+    ld a, b
+    ldh [rLCDC], a
+    ret
+
+.ctrl_map_normal:
     ld a, [nes_mirroring]
     cp $01
     jr z, .vertical
