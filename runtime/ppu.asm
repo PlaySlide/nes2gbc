@@ -412,31 +412,33 @@ nes_ppu_write_data:
     ld a, e
     ld [hl], a
 
-    ; Only the SMB-style horizontal stitch needs transactional nametable
-    ; publication.  It repurposes $9C00 as a synthesized presentation surface,
-    ; so exposing future-column parser writes while a translated NMI is still
-    ; running can leak half-built world data.
+    ; A translated NES NMI is logically executing during NES VBlank even if
+    ; it takes several host GBC frames.  When rendering remains enabled, do not
+    ; expose those $2007 writes directly to visible GBC scanout: stage them and
+    ; publish the final values after translated RTI.
     ;
-    ; Ordinary games must not pay that cost. Ice Climber's vertical scrolling
-    ; can generate enough $2007 traffic that flushing the global transaction at
-    ; the front of host VBlank runs to scanline 30-90+, delaying OAM/scroll/map
-    ; commits and producing the large ghost dumps seen in debi8.
+    ; If PPUMASK has disabled both BG and OBJ, direct publication is already
+    ; hidden and is preferable for large screen rebuilds; it avoids recreating
+    ; the enormous generic transactions that previously broke Ice Climber.
     ld a, [nes_nmi_active]
     and a
     jr z, .nametable_sync_now
 
+    ; SMB's stitched presentation always remains transactional regardless of
+    ; temporary PPUMASK state.
     ld a, [nes_mirroring]
     cp $01
-    jr nz, .nametable_sync_now
-
-    ; Once a vertical-mirroring raster split has established the horizontal
-    ; stitched presentation, keep staging even across a transient split-state
-    ; wobble while the stitched map itself remains valid.
+    jr nz, .nametable_generic_nmi
     ldh a, [nes_split_active]
     and a
     jr nz, .nametable_stage
     ld a, [nes_hstitch_valid]
     and a
+    jr nz, .nametable_stage
+
+.nametable_generic_nmi:
+    ld a, [nes_ppumask]
+    and $18
     jr z, .nametable_sync_now
 
 .nametable_stage:
