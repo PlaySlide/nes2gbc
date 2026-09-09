@@ -468,6 +468,8 @@ nes_ppu_write_data:
 ; HL is preserved and WRAM bank 1 is restored before returning.
 nes_ppu_nametable_stage_first_visit:
     push hl
+    ld a, $01
+    ld [nes_nametable_stage_used], a
 
     ; E = bit number (low three address bits).
     ld a, l
