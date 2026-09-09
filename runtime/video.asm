@@ -1414,11 +1414,24 @@ nes_video_sync_oam:
     PROFILE_INC nes_profile_oam_sync
     ld hl, nes_gbc_oam_shadow
     ld de, $FE00
-    ld b, $A0
+    ld b, 40
+
+    ; One loop per complete CGB OAM entry. E runs only $00-$9F, so INC E is
+    ; sufficient and cheaper than INC DE. Reducing loop branches as well cuts
+    ; the publication cost substantially without changing OAM contents.
 .copy_shadow:
     ld a, [hli]
     ld [de], a
-    inc de
+    inc e
+    ld a, [hli]
+    ld [de], a
+    inc e
+    ld a, [hli]
+    ld [de], a
+    inc e
+    ld a, [hli]
+    ld [de], a
+    inc e
     dec b
     jr nz, .copy_shadow
     ret
