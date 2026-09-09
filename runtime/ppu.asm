@@ -167,6 +167,10 @@ nes_ppu_cpu_write:
     ldh [nes_ctrl_dirty], a
     ret
 .mask:
+    ; Keep the previous mask so ordinary BG-off -> BG-on transitions can serve
+    ; as a screen-construction commit boundary.
+    ld a, [nes_ppumask]
+    ld b, a
     ld a, e
     ld [nes_ppumask], a
 
@@ -192,6 +196,27 @@ nes_ppu_cpu_write:
 .mask_publish_now:
     xor a
     ld [nes_mask_dirty], a
+
+    ; If BG was off and is now being enabled, the game has just finished a
+    ; hidden screen construction. Reproject the authoritative virtual NES maps
+    ; before exposing them. Do not do this inside an established SMB stitch or
+    ; game-authored raster split; those have their own presentation surfaces.
+    ld a, e
+    bit 3, a
+    jr z, .mask_apply_now
+    bit 3, b
+    jr nz, .mask_apply_now
+
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .mask_apply_now
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .mask_apply_now
+
+    call nes_video_rebuild_generic_maps_atomic
+
+.mask_apply_now:
     jp nes_video_update_mask
 
 .mask_defer:
