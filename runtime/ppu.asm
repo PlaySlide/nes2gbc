@@ -213,6 +213,9 @@ nes_ppu_cpu_write:
     ld a, [nes_hstitch_valid]
     and a
     jr nz, .mask_apply_now
+    ld a, [nes_hstitch_seen]
+    and a
+    jr nz, .mask_apply_now
 
     ; Most PPUMASK off/on pairs are not screen constructions. Only pay the
     ; expensive LCD-off authoritative rebuild when hidden nametable contents
