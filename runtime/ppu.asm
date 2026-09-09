@@ -390,43 +390,32 @@ nes_ppu_write_data:
     ld a, e
     ld [hl], a
 
-    ; Only the SMB-style horizontal stitch needs transactional nametable
-    ; publication.  It repurposes $9C00 as a synthesized presentation surface,
-    ; so exposing future-column parser writes while a translated NMI is still
-    ; running can leak half-built world data.
+    ; Never expose translated-NMI nametable construction directly to live
+    ; GBC scanout.  Earlier global staging built enormous Ice Climber queues,
+    ; while the direct-write workaround traded that backlog for visible tearing.
     ;
-    ; Ordinary games must not pay that cost. Ice Climber's vertical scrolling
-    ; can generate enough $2007 traffic that flushing the global transaction at
-    ; the front of host VBlank runs to scanline 30-90+, delaying OAM/scroll/map
-    ; commits and producing the large ghost dumps seen in debi8.
+    ; We now have a persistent published-value shadow, so filter here BEFORE
+    ; queueing.  Only an address whose current NES byte differs from the last
+    ; successfully published byte enters the transaction.  The queue still
+    ; stores addresses only and therefore publishes the final authoritative
+    ; value if the game rewrites the cell again later in the same NMI.
     ld a, [nes_nmi_active]
     and a
     jr z, .nametable_sync_now
 
-    ld a, [nes_mirroring]
-    cp $01
-    jr nz, .nametable_sync_now
-
-    ; Once a vertical-mirroring raster split has established the horizontal
-    ; stitched presentation, keep staging even across a transient split-state
-    ; wobble while the stitched map itself remains valid.
-    ldh a, [nes_split_active]
+    call nes_ppu_nametable_differs_from_published
     and a
-    jr nz, .nametable_stage
-    ld a, [nes_hstitch_valid]
-    and a
-    jr z, .nametable_sync_now
+    jp z, nes_ppu_increment_addr
 
-.nametable_stage:
     call nes_ppu_stage_nametable_hl
     jp nes_ppu_increment_addr
 
 .nametable_sync_now:
-    ; Generic maps have stable physical destinations. Publish them normally;
-    ; do not use SMB's persistent published-value cache here because a repeated
-    ; NES byte can still need CGB attribute/pattern-bank side effects refreshed.
+    ; Outside translated NMI, physical map writes can publish immediately, but
+    ; exact repeats still need no VRAM work. Global pattern-bank changes are
+    ; committed separately at the host frame boundary.
     ld a, e
-    call nes_video_sync_nametable_write
+    call nes_video_sync_nametable_write_if_changed
     jp nes_ppu_increment_addr
 
 .pattern:
@@ -440,6 +429,32 @@ nes_ppu_write_data:
     ld [hl], a
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
+
+; Input HL = physical nametable address $D000-$D7FF, E = new NES byte.
+; Return A=1 if it differs from the last successfully published byte, else 0.
+; HL/E are preserved and WRAM bank 1 is restored before returning.
+nes_ppu_nametable_differs_from_published:
+    push hl
+    push de
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    cp e
+    jr z, .same_published
+    ld a, $01
+    jr .published_result
+
+.same_published:
+    xor a
+
+.published_result:
+    ld b, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, b
+    pop de
+    pop hl
+    ret
 
 ; Input HL = physical nametable address $D000-$D7FF.
 ; Return A=1 on first visit during this translated NMI, A=0 on repeats.
