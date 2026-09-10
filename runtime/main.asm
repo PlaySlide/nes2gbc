@@ -152,6 +152,17 @@ nes_gbc_vblank_isr:
     call nes_video_toggle_bg_pattern_bank
 .ctrl_bank_done:
     call nes_video_update_ctrl
+
+    ; A completed PPUCTRL commit may select the playfield nametable globally.
+    ; During a captured raster split that must not survive into scanline 0:
+    ; the HUD/top map was armed at VBlank entry and the STAT ISR owns the later
+    ; switch to the playfield map. Reassert only the top map here after the
+    ; control commit so intermittent ctrl_dirty frames cannot render $9C00
+    ; across the HUD region.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .ctrl_done
+    call nes_video_apply_split_top_map
 .ctrl_done:
 
     ld a, [nes_mask_dirty]
