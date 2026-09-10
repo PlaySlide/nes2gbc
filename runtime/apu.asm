@@ -20,6 +20,10 @@ nes_apu_len_p1:     ds 1
 nes_apu_len_p2:     ds 1
 nes_apu_len_tri:    ds 1
 nes_apu_len_noi:    ds 1
+; Last written NRx2 (GB volume is write-only; track silence→audible).
+nes_apu_last_nr12_p1: ds 1
+nes_apu_last_nr12_p2: ds 1
+nes_apu_last_nr12_noi: ds 1
 ; Frame sequencer divider (host VBlank ticks).
 nes_apu_frame_div:  ds 1
 
@@ -28,7 +32,7 @@ SECTION "NES APU code", ROM0
 ; ---------------------------------------------------------------------------
 nes_apu_init:
     ld hl, nes_apu_regs
-    ld b, $18 + 7          ; regs + prev/idx/lens/frame_div
+    ld b, $18 + 10         ; regs + prev/idx/lens/lastvol/frame_div
     xor a
 .clear:
     ld [hli], a
@@ -143,8 +147,22 @@ nes_apu_update_pulse1:
     ldh [rNR11], a
     ld a, [nes_apu_regs + $00]
     call nes_apu_vol_to_nrx2
+    ld b, a
+    ld a, [nes_apu_last_nr12_p1]
+    ld c, a
+    ld a, b
+    ld [nes_apu_last_nr12_p1], a
     ldh [rNR12], a
-    ret
+    ; If we were silent and now have volume, retrigger so music/SFX ordered
+    ; as freq-then-volume become audible. Skip if already audible so mid-note
+    ; envelope ticks (jump) do not reset sweep pitch to the bottom.
+    ld a, c
+    and $F0
+    ret nz
+    ld a, b
+    and $F0
+    ret z
+    jp nes_apu_retrigger_p1
 
 .do_sweep:
     ; NES $4001 bit7=enable; bits6-0 match GB NR10 layout.
@@ -160,6 +178,9 @@ nes_apu_update_pulse1:
     ret
 
 .do_freq:
+    ld a, [nes_apu_write_idx]
+    cp $03
+    jr z, nes_apu_retrigger_p1
     ld a, [nes_apu_regs + $02]
     ld c, a
     ld a, [nes_apu_regs + $03]
@@ -170,13 +191,28 @@ nes_apu_update_pulse1:
     ldh [rNR13], a
     ld a, d
     and $07
-    ld d, a
-    ld a, [nes_apu_write_idx]
-    cp $03
+    ldh [rNR14], a
+    ret
+
+nes_apu_retrigger_p1:
+    ld a, [nes_apu_regs + $02]
+    ld c, a
+    ld a, [nes_apu_regs + $03]
+    and $07
+    ld b, a
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR13], a
+    ld a, [nes_apu_regs + $00]
+    and $C0
+    ldh [rNR11], a
+    ld a, [nes_apu_regs + $00]
+    call nes_apu_vol_to_nrx2
+    ld [nes_apu_last_nr12_p1], a
+    ldh [rNR12], a
     ld a, d
-    jr nz, .write_nr14
+    and $07
     or $80
-.write_nr14:
     ldh [rNR14], a
     ret
 
@@ -216,10 +252,24 @@ nes_apu_update_pulse2:
     ldh [rNR21], a
     ld a, [nes_apu_regs + $04]
     call nes_apu_vol_to_nrx2
+    ld b, a
+    ld a, [nes_apu_last_nr12_p2]
+    ld c, a
+    ld a, b
+    ld [nes_apu_last_nr12_p2], a
     ldh [rNR22], a
-    ret
+    ld a, c
+    and $F0
+    ret nz
+    ld a, b
+    and $F0
+    ret z
+    jp nes_apu_retrigger_p2
 
 .do_freq:
+    ld a, [nes_apu_write_idx]
+    cp $07
+    jr z, nes_apu_retrigger_p2
     ld a, [nes_apu_regs + $06]
     ld c, a
     ld a, [nes_apu_regs + $07]
@@ -230,13 +280,28 @@ nes_apu_update_pulse2:
     ldh [rNR23], a
     ld a, d
     and $07
-    ld d, a
-    ld a, [nes_apu_write_idx]
-    cp $07
+    ldh [rNR24], a
+    ret
+
+nes_apu_retrigger_p2:
+    ld a, [nes_apu_regs + $06]
+    ld c, a
+    ld a, [nes_apu_regs + $07]
+    and $07
+    ld b, a
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR23], a
+    ld a, [nes_apu_regs + $04]
+    and $C0
+    ldh [rNR21], a
+    ld a, [nes_apu_regs + $04]
+    call nes_apu_vol_to_nrx2
+    ld [nes_apu_last_nr12_p2], a
+    ldh [rNR22], a
     ld a, d
-    jr nz, .write_nr24
+    and $07
     or $80
-.write_nr24:
     ldh [rNR24], a
     ret
 
@@ -360,10 +425,24 @@ nes_apu_update_noise:
     ldh [rNR41], a
     ld a, [nes_apu_regs + $0C]
     call nes_apu_vol_to_nrx2
+    ld b, a
+    ld a, [nes_apu_last_nr12_noi]
+    ld c, a
+    ld a, b
+    ld [nes_apu_last_nr12_noi], a
     ldh [rNR42], a
-    ret
+    ld a, c
+    and $F0
+    ret nz
+    ld a, b
+    and $F0
+    ret z
+    jp nes_apu_retrigger_noi
 
 .do_freq:
+    ld a, [nes_apu_write_idx]
+    cp $0F
+    jr z, nes_apu_retrigger_noi
     ld a, [nes_apu_regs + $0E]
     ld b, a
     and $0F
@@ -377,12 +456,29 @@ nes_apu_update_noise:
     or $08
 .nr43:
     ldh [rNR43], a
-    ld a, [nes_apu_write_idx]
-    cp $0F
-    ld a, $00
-    jr nz, .write_nr44
+    xor a
+    ldh [rNR44], a
+    ret
+
+nes_apu_retrigger_noi:
+    ld a, [nes_apu_regs + $0E]
+    ld b, a
+    and $0F
+    ld e, a
+    ld d, 0
+    ld hl, nes_apu_noise_nr43
+    add hl, de
+    ld a, [hl]
+    bit 7, b
+    jr z, .nr43b
+    or $08
+.nr43b:
+    ldh [rNR43], a
+    ld a, [nes_apu_regs + $0C]
+    call nes_apu_vol_to_nrx2
+    ld [nes_apu_last_nr12_noi], a
+    ldh [rNR42], a
     ld a, $80
-.write_nr44:
     ldh [rNR44], a
     ret
 
@@ -415,6 +511,7 @@ nes_apu_update_status:
     jr nz, .p1_on
     xor a
     ldh [rNR12], a
+    ld [nes_apu_last_nr12_p1], a
     jr .p2
 .p1_on:
     bit 0, d
@@ -427,6 +524,7 @@ nes_apu_update_status:
     jr nz, .p2_on
     xor a
     ldh [rNR22], a
+    ld [nes_apu_last_nr12_p2], a
     jr .tri
 .p2_on:
     bit 1, d
@@ -451,6 +549,7 @@ nes_apu_update_status:
     jr nz, .noi_on
     xor a
     ldh [rNR42], a
+    ld [nes_apu_last_nr12_noi], a
     ret
 .noi_on:
     bit 3, d
@@ -621,6 +720,7 @@ nes_apu_frame_tick:
     ld [nes_apu_len_p1], a
     jr nz, .p2
     ldh [rNR12], a                ; A=0
+    ld [nes_apu_last_nr12_p1], a
 .p2:
     ld a, [nes_apu_regs + $04]
     bit 5, a
@@ -632,6 +732,7 @@ nes_apu_frame_tick:
     ld [nes_apu_len_p2], a
     jr nz, .tri
     ldh [rNR22], a
+    ld [nes_apu_last_nr12_p2], a
 .tri:
     ld a, [nes_apu_regs + $08]
     bit 7, a
@@ -654,6 +755,7 @@ nes_apu_frame_tick:
     ld [nes_apu_len_noi], a
     ret nz
     ldh [rNR42], a
+    ld [nes_apu_last_nr12_noi], a
     ret
 
 ; Official NES length counter table (bits 3-7 of $4003/$4007/$400B/$400F).
