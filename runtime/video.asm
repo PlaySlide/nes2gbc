@@ -346,14 +346,6 @@ nes_video_flush_nametable_queue_atomic:
     and a
     jr z, .publish_generic
 
-    ; hstitch_valid can remain set for one completed-frame publication after
-    ; SMB drops its raster split during a pipe/area transition. At that point
-    ; $9800/$9C00 are becoming ordinary physical maps again, so the stitched
-    ; persistent-value shadow is not a valid reason to suppress publication.
-    ; Require the split itself to still be active before using that cache.
-    ldh a, [nes_split_active]
-    and a
-    jr z, .publish_generic
 
     ld a, b
     call nes_video_sync_nametable_write_if_changed
