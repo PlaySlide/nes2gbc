@@ -166,13 +166,22 @@ nes_apu_update_pulse1:
     ld a, b
     and $F0
     ret z
+    ; During an active NES sweep, volume table ticks must not retrigger
+    ; (that restarts the chirp from the bottom forever after a mute).
+    ld a, [nes_apu_regs + $01]
+    bit 7, a
+    ret nz
     jp nes_apu_retrigger_p1
 
 .do_sweep:
     ; Always disable GB hardware sweep; we emulate NES sweep in software.
     xor a
     ldh [rNR10], a
-    ; Seed working period from current timer regs and reload divider.
+    ld a, [nes_apu_regs + $01]
+    bit 7, a
+    jp z, nes_apu_mute_p1_locked
+    ; Sweep enabled: seed working period + divider, then trigger so the
+    ; note starts even when $4000 came while last_nr12 was locked.
     ld a, [nes_apu_regs + $02]
     ld [nes_apu_sweep_period_lo], a
     ld a, [nes_apu_regs + $03]
@@ -185,7 +194,7 @@ nes_apu_update_pulse1:
     rrca
     and $07
     ld [nes_apu_sweep_div], a
-    ret
+    jp nes_apu_retrigger_p1
 
 .do_freq:
     ld a, [nes_apu_write_idx]
@@ -810,6 +819,14 @@ nes_apu_clock_sweep_p1:
     ld l, a
     ld a, [nes_apu_sweep_period_hi]
     ld h, a
+    ; NES: channel muted while period < 8
+    ld a, h
+    and a
+    jr nz, .period_ge8
+    ld a, l
+    cp $08
+    jp c, .mute
+.period_ge8:
     ; DE = HL >> shift
     ld a, l
     ld e, a
@@ -825,27 +842,37 @@ nes_apu_clock_sweep_p1:
     ld a, [nes_apu_regs + $01]
     bit 3, a
     jr nz, .negate
-    ; period += delta
+    ; target = period + delta; mute if target > $7FF
     ld a, l
     add e
-    ld l, a
+    ld c, a
     ld a, h
     adc d
-    ld h, a
-    ; overflow if bit11+ set or >$7FF
-    ld a, h
+    ld b, a
     and $F8
-    jr nz, .mute
+    jp nz, .mute
+    ld l, c
+    ld h, b
     jr .store
 .negate:
-    ; period -= delta (ones-complement style uses +1 on NES; approx subtract)
+    ; target = period - delta - 1 (pulse1 ones-complement approx)
+    ld a, e
+    or d
+    jr z, .store                 ; shift produced 0
     ld a, l
     sub e
-    ld l, a
+    ld c, a
     ld a, h
     sbc d
+    ld b, a
+    jp c, .mute
+    ld a, c
+    sub $01
+    ld l, a
+    ld a, b
+    sbc $00
     ld h, a
-    jr c, .mute
+    jp c, .mute
 .store:
     ; Mute if period < 8
     ld a, h
@@ -853,7 +880,7 @@ nes_apu_clock_sweep_p1:
     jr nz, .ok_period
     ld a, l
     cp $08
-    jr c, .mute
+    jp c, .mute
 .ok_period:
     ld a, l
     ld [nes_apu_sweep_period_lo], a
@@ -870,10 +897,13 @@ nes_apu_clock_sweep_p1:
     ldh [rNR14], a                ; no trigger — continue note
     ret
 .mute:
+nes_apu_mute_p1_locked:
     xor a
     ldh [rNR12], a
+    ; Keep a non-zero high nibble in last_nr12 so the next $4000 envelope
+    ; tick is NOT treated as silence→audible (which would restart jump).
+    ld a, $10
     ld [nes_apu_last_nr12_p1], a
-    ; Clear sweep enable in shadow so we stop clocking
     ld a, [nes_apu_regs + $01]
     and $7F
     ld [nes_apu_regs + $01], a
