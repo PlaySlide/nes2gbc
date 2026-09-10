@@ -117,9 +117,11 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
-    ; Preserve the proven background publication order.
+    ; Preserve the proven background publication order. The selective wrapper
+    ; changes only steady 1..8-tile stitch catch-up; every rebuild/transition
+    ; path still falls through to the original updater.
     call nes_video_flush_nametable_queue_atomic
-    call nes_video_update_horizontal_stitch
+    call nes_video_update_horizontal_stitch_selective
 
     ldh a, [nes_palette_dirty]
     and a
@@ -542,5 +544,6 @@ INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
 INCLUDE "video.asm"
+INCLUDE "stitch_selective.asm"
 INCLUDE "input.asm"
 INCLUDE "generated.asm"
