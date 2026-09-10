@@ -21,7 +21,7 @@ all: $(OUTPUT)
 build:
 	mkdir -p build
 
-$(OBJ): main.asm hardware.inc io.asm profile.asm cpu.asm ppu.asm video.asm input.asm generated.asm | build
+$(OBJ): main.asm hardware.inc io.asm profile.asm cpu.asm ppu.asm video.asm stitch_selective.asm input.asm generated.asm | build
 	rgbasm $(RGBASM_FLAGS) -o "$@" main.asm
 
 $(OUTPUT): $(OBJ)
