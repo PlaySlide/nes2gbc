@@ -1803,7 +1803,11 @@ nes_video_refresh_stitch_column:
     ld a, $01
     ldh [rSVBK], a
 
-    ; Tile IDs: source D000/D400, destination stitched map $9C00.
+    ; Rebuild this stitched column row-by-row from authoritative NES state.
+    ; Tile ID and palette attribute are published together for each cell.
+    ; The old two-pass implementation could reuse a destination cell for a new
+    ; world tile while leaving its previous question/coin palette attached
+    ; until a later attribute pass or full rebuild.
     ld a, [nes_hstitch_copy_len]
     and a
     jr z, .tile_source0
@@ -1819,6 +1823,7 @@ nes_video_refresh_stitch_column:
     ld b, $1E                    ; 30 NES tile rows
 
 .tile_loop:
+    ; Publish tile ID.
     ld a, [hl]
     ld c, a
     call nes_video_wait_vram
@@ -1827,6 +1832,27 @@ nes_video_refresh_stitch_column:
     ld a, c
     ld [de], a
 
+    ; Derive this exact tile's palette directly from authoritative NES
+    ; attribute RAM, then combine it with the captured playfield pattern bank.
+    push bc
+    push de
+    push hl
+    call nes_video_authoritative_tile_palette
+    ld c, a
+    ld a, [nes_hstitch_copy_skip]
+    or c
+    ld c, a
+    pop hl
+    pop de
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    pop bc
+
+    ; Advance source and destination by one tile row.
     ld a, l
     add $20
     ld l, a
@@ -1841,79 +1867,6 @@ nes_video_refresh_stitch_column:
 .tile_d_ok:
     dec b
     jr nz, .tile_loop
-
-    ; CGB attributes for this column. One NES attribute byte covers 4x4 tiles.
-    ld a, [nes_hstitch_copy_len]
-    and a
-    jr z, .attr_source0
-    ld h, $D7
-    jr .attr_source_ready
-.attr_source0:
-    ld h, $D3
-.attr_source_ready:
-    ld a, [nes_hstitch_copy_start]
-    srl a
-    srl a
-    add $C0
-    ld l, a
-
-    ld d, $9C
-    ld a, [nes_hstitch_copy_start]
-    ld e, a
-    ld b, $08                    ; eight 4-row attribute bands
-
-.attr_group:
-    ; Top two rows of the 4x4 attribute cell.
-    ld a, [hl]
-    ld c, a
-    ld a, [nes_hstitch_copy_start]
-    and $02
-    jr z, .attr_top_left
-    ld a, c
-    srl a
-    srl a
-    jr .attr_top_mask
-.attr_top_left:
-    ld a, c
-.attr_top_mask:
-    and $03
-    ld c, a
-    ld a, [nes_hstitch_copy_skip]
-    or c
-    ld c, a
-    call nes_video_stitch_write_attr_row
-    call nes_video_stitch_write_attr_row
-
-    ; Bottom two rows.
-    ld a, [hl]
-    swap a
-    ld c, a
-    ld a, [nes_hstitch_copy_start]
-    and $02
-    jr z, .attr_bottom_left
-    ld a, c
-    srl a
-    srl a
-    jr .attr_bottom_mask
-.attr_bottom_left:
-    ld a, c
-.attr_bottom_mask:
-    and $03
-    ld c, a
-    ld a, [nes_hstitch_copy_skip]
-    or c
-    ld c, a
-    call nes_video_stitch_write_attr_row
-    call nes_video_stitch_write_attr_row
-
-    ld a, l
-    add $08
-    ld l, a
-    jr nc, .attr_h_ok
-    inc h
-.attr_h_ok:
-    dec b
-    jr nz, .attr_group
 
     xor a
     ldh [rVBK], a
