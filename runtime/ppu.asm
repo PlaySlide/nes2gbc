@@ -194,13 +194,21 @@ nes_ppu_cpu_write:
     jr nz, .mask_defer
 
     ; Once a vertical-mirroring title has proven that it uses the stitched
-    ; raster presentation, temporary split/stitch loss must not let its
-    ; mid-NMI PPUMASK blanking escape to live LCDC. dj22 showed those writes
-    ; turning BG+OBJ off from VBlank until about scanline 31, i.e. exactly the
-    ; HUD region, then restoring them mid-frame.
+    ; raster presentation, harmless temporary PPUMASK toggles must not blank
+    ; the host frame.  However, after the split has genuinely gone away for an
+    ; area transition, a real hidden nametable construction is marked dirty.
+    ; Its final BG-off -> BG-on transition must be allowed through so we can
+    ; reconcile the physical maps before revealing them.
     ld a, [nes_hstitch_seen]
     and a
-    jr nz, .mask_defer
+    jr z, .mask_publish_now
+
+    ld a, e
+    bit 3, a
+    jr z, .mask_defer
+    ld a, [nes_generic_map_rebuild_dirty]
+    and a
+    jr z, .mask_defer
 
 .mask_publish_now:
     xor a
@@ -220,9 +228,6 @@ nes_ppu_cpu_write:
     and a
     jr nz, .mask_apply_now
     ld a, [nes_hstitch_valid]
-    and a
-    jr nz, .mask_apply_now
-    ld a, [nes_hstitch_seen]
     and a
     jr nz, .mask_apply_now
 
@@ -478,8 +483,22 @@ nes_ppu_write_data:
     and a
     jr nz, .nametable_store_value
 
+    ; Only the first changed byte needs to turn the deferred host mask into
+    ; a real hidden-construction window.
+    ld a, [nes_generic_map_rebuild_dirty]
+    and a
+    jr nz, .nametable_store_value
+
     ld a, $01
     ld [nes_generic_map_rebuild_dirty], a
+
+    ; Ordinary games already published PPUMASK-off immediately. This special
+    ; step is only for a title that previously established the stitched SMB
+    ; presentation and is now temporarily outside it for an area transition.
+    ld a, [nes_hstitch_seen]
+    and a
+    jr z, .nametable_store_value
+    call nes_video_update_mask
 
 .nametable_store_value:
     ld a, e
