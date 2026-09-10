@@ -386,11 +386,11 @@ nes_apu_vol_to_nrx2:
 
 ; ---------------------------------------------------------------------------
 ; Input:  BC = NES 11-bit timer t
-; Output: DE = GBC period n = 2048 - min(2047, ((t+1)*75)/64), in 0..2047
+; Output: DE = GBC period n = 2048 - min(2047, ((t+1)*75)/16), in 0..2047
 ; Clobbers: AF, HL, BC
 ;
-; Uses (t+1)*75/64 = (t+1) + ((t+1)*11)/64 so intermediates fit in 16 bits
-; (max t+1 = 2048 → max product 22528).
+; Base ratio is (t+1)*75/64 ≈ NES→GB square. SMB listening was ~2 octaves
+; sharp, so we *4 the period length afterward (effective /16).
 ; ---------------------------------------------------------------------------
 nes_apu_timer_to_period:
     ; HL = t + 1
@@ -439,6 +439,19 @@ nes_apu_timer_to_period:
     adc d
     ld d, a                       ; DE = (t+1)*75/64
 
+    ; Empirical: first listen was ~2 octaves sharp vs NES, so lengthen
+    ; the GBC period by 4 (drop two octaves) before clamping.
+    sla e
+    rl d
+    jr c, .period_overflow
+    sla e
+    rl d
+    jr nc, .period_scaled
+.period_overflow:
+    ld de, $07FF
+    jr .capped
+.period_scaled:
+
     ; Cap at 2047 ($07FF).
     ld a, d
     cp $08
@@ -469,5 +482,6 @@ nes_apu_timer_to_period:
 
 ; NES noise period index 0..F → rough NR43 encoding (lower = higher pitch).
 nes_apu_noise_nr43:
-    db $F7, $F3, $E3, $D3, $C3, $B3, $A3, $93
-    db $83, $73, $63, $53, $43, $33, $23, $13
+    ; Clock shift +2 vs first table (~2 octaves lower), saturating at $Fx.
+    db $F7, $F3, $F3, $F3, $E3, $D3, $C3, $B3
+    db $A3, $93, $83, $73, $63, $53, $43, $33

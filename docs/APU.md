@@ -25,7 +25,10 @@ v1 maps the NES APU register file onto Game Boy Color sound channels.
 
 NES 11-bit timer `t` → GBC period:
 
-`n = 2048 - min(2047, ((t+1)*75)/64)` clamped to `0..2047`.
+`n = 2048 - min(2047, ((t+1)*75)/16)` clamped to `0..2047`.
+
+The theoretical NES→GB square ratio is `((t+1)*75)/64`; SMB listening was
+about two octaves sharp, so v1 lengthens the period by 4 (`/16`).
 
 Duty bits 6-7 map straight into `NR11`/`NR21`. Constant-volume (bit4) uses bits0-3 as `NRx2` volume; otherwise a simple envelope approximation is used. Trigger (`NRx4` bit7) on length/freq-hi writes (`$4003/$4007/$400B/$400F`) and when `$4015` enables a previously disabled channel.
 
@@ -35,5 +38,5 @@ Duty bits 6-7 map straight into `NR11`/`NR21`. Constant-volume (bit4) uses bits0
 - Frame sequencer / IRQ from `$4017` not implemented
 - Length counters and triangle linear counter are approximate (enable bits gate channels)
 - Sweep unit accuracy not modeled (NR10 cleared)
-- Noise period table is a rough NR43 encoding, not cycle-accurate
+- Noise period table is a rough NR43 encoding (shifted ~2 octaves down with pulse/triangle), not cycle-accurate
 - No host-side audio buffering / resampling beyond GB hardware
