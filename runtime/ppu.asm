@@ -1,6 +1,13 @@
 ; NES PPU register semantics backed by GBC WRAM/ROM banks.
 ; This is a semantic model, not cycle-accurate PPU emulation.
 
+; C816 is free between cartridge metadata and virtual IO.  For SMB's stitched
+; renderer, 0 means $9C00 may still contain synthesized columns and therefore
+; needs one authoritative de-stitch rebuild before generic presentation.
+; 1 means both physical GBC maps have already been reconciled.
+SECTION "NES SMB de-stitch state", WRAM0[$C816]
+nes_smb_maps_reconciled: ds 1
+
 SECTION "NES PPU helpers", ROM0
 
 ; Input: L = mirrored PPU register index ($00-$07)
@@ -237,9 +244,46 @@ nes_ppu_cpu_write:
     ld a, [nes_generic_map_rebuild_dirty]
     and a
     jr z, .mask_apply_now
+
+    ; SMB PRG0 is NROM-256 with vertical mirroring. For this stitched renderer,
+    ; the 2 KiB rebuild has one specific job: restore physical $9C00 after it
+    ; was used as a synthesized playfield. 08082 proves pre-stitch rebuilds are
+    ; pure no-ops; 0808/08081 prove repeats after one de-stitch are no-ops too.
+    ; Preserve the generic d2303d78 behavior for every other cartridge shape.
+    ld a, [nes_mapper]
+    and a
+    jr nz, .mask_do_rebuild
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .mask_do_rebuild
+    ld a, [nes_prg_16k_mirror]
+    and a
+    jr nz, .mask_do_rebuild
+
+    ; Before the first stitch both GBC maps are already ordinary physical maps.
+    ld a, [nes_hstitch_seen]
+    and a
+    jr z, .mask_skip_rebuild
+
+    ; After one authoritative de-stitch they are physical again. Do not keep
+    ; shutting the LCD off every time SMB's housekeeping toggles PPUMASK.
+    ld a, [nes_smb_maps_reconciled]
+    and a
+    jr nz, .mask_skip_rebuild
+
+.mask_do_rebuild:
     xor a
     ld [nes_generic_map_rebuild_dirty], a
     call nes_video_rebuild_generic_maps_atomic
+    ; Harmless for non-SMB titles because this latch is only consulted under
+    ; the mapper0/vertical/NROM-256 gate above.
+    ld a, $01
+    ld [nes_smb_maps_reconciled], a
+    jr .mask_apply_now
+
+.mask_skip_rebuild:
+    xor a
+    ld [nes_generic_map_rebuild_dirty], a
 
 .mask_apply_now:
     jp nes_video_update_mask
@@ -393,6 +437,12 @@ nes_ppu_cpu_write:
     ldh [nes_split_bottom_y], a
     ld a, [nes_ppuctrl]
     ldh [nes_split_bottom_ctrl], a
+
+    ; A real split means $9C00 is about to become a synthesized playfield.
+    ; Arm exactly one future authoritative de-stitch if this presentation is
+    ; later retired for an area transition.
+    xor a
+    ld [nes_smb_maps_reconciled], a
 
     ld a, $02
     ldh [nes_scroll_pair_count], a
