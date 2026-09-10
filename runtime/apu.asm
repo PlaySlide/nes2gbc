@@ -24,8 +24,6 @@ nes_apu_len_noi:    ds 1
 nes_apu_last_nr12_p1: ds 1
 nes_apu_last_nr12_p2: ds 1
 nes_apu_last_nr12_noi: ds 1
-nes_apu_vol_pending_p1: ds 1
-nes_apu_vol_pending_p2: ds 1
 ; Pulse1 NES sweep working state (do NOT use GB NR10 — it fights our period map).
 nes_apu_sweep_div:    ds 1
 nes_apu_sweep_period_lo: ds 1
@@ -38,7 +36,7 @@ SECTION "NES APU code", ROM0
 ; ---------------------------------------------------------------------------
 nes_apu_init:
     ld hl, nes_apu_regs
-    ld b, $18 + 15         ; regs + prev/idx/lens/lastvol/pending/sweep/frame_div
+    ld b, $18 + 13         ; regs + prev/idx/lens/lastvol/sweep/frame_div
     xor a
 .clear:
     ld [hli], a
@@ -168,13 +166,12 @@ nes_apu_update_pulse1:
     ld a, b
     and $F0
     ret z
+    ; During an active NES sweep, volume table ticks must not retrigger
+    ; (that restarts the chirp from the bottom forever after a mute).
     ld a, [nes_apu_regs + $01]
     bit 7, a
     ret nz
-    ; Defer retrigger: avoids flagpole double (vol-then-freq).
-    ld a, $01
-    ld [nes_apu_vol_pending_p1], a
-    ret
+    jp nes_apu_retrigger_p1
 
 .do_sweep:
     ; Always disable GB hardware sweep; we emulate NES sweep in software.
@@ -219,8 +216,6 @@ nes_apu_update_pulse1:
     ret
 
 nes_apu_retrigger_p1:
-    xor a
-    ld [nes_apu_vol_pending_p1], a
     ld a, [nes_apu_regs + $02]
     ld c, a
     ld [nes_apu_sweep_period_lo], a
@@ -292,9 +287,7 @@ nes_apu_update_pulse2:
     ld a, b
     and $F0
     ret z
-    ld a, $01
-    ld [nes_apu_vol_pending_p2], a
-    ret
+    jp nes_apu_retrigger_p2
 
 .do_freq:
     ld a, [nes_apu_write_idx]
@@ -314,8 +307,6 @@ nes_apu_update_pulse2:
     ret
 
 nes_apu_retrigger_p2:
-    xor a
-    ld [nes_apu_vol_pending_p2], a
     ld a, [nes_apu_regs + $06]
     ld c, a
     ld a, [nes_apu_regs + $07]
@@ -373,7 +364,7 @@ nes_apu_update_triangle:
     jr z, .lin_mute
     ld a, $80
     ldh [rNR30], a
-    ld a, $40                     ; 50% — full wave drowns the mix
+    ld a, $20
     ldh [rNR32], a
     ret
 .lin_mute:
@@ -402,7 +393,7 @@ nes_apu_update_triangle:
     ld a, [nes_apu_regs + $08]
     and $7F
     jr z, .vol_mute
-    ld a, $40                     ; 50% wave volume
+    ld a, $20
     jr .vol_write
 .vol_mute:
     xor a
@@ -581,7 +572,6 @@ nes_apu_update_status:
     jr nz, .noi_on
     xor a
     ldh [rNR42], a
-    ld a, $10
     ld [nes_apu_last_nr12_noi], a
     ret
 .noi_on:
@@ -741,22 +731,6 @@ nes_apu_load_length:
 ; ---------------------------------------------------------------------------
 nes_apu_frame_tick:
     call nes_apu_clock_sweep_p1
-    call nes_apu_clock_sweep_p1
-    ; Flush deferred vol retriggers (freq-then-vol music path).
-    ld a, [nes_apu_vol_pending_p1]
-    and a
-    jr z, .no_pend_p1
-    xor a
-    ld [nes_apu_vol_pending_p1], a
-    call nes_apu_retrigger_p1
-.no_pend_p1:
-    ld a, [nes_apu_vol_pending_p2]
-    and a
-    jr z, .no_pend_p2
-    xor a
-    ld [nes_apu_vol_pending_p2], a
-    call nes_apu_retrigger_p2
-.no_pend_p2:
     ; ~60Hz length clock. Mute only on the frame the counter hits zero so we
     ; do not keep forcing NRx2=0 while music reprograms the channel.
     ; Pulse1
@@ -770,10 +744,7 @@ nes_apu_frame_tick:
     ld [nes_apu_len_p1], a
     jr nz, .p2
     ldh [rNR12], a                ; A=0
-    ld a, $10
     ld [nes_apu_last_nr12_p1], a
-    xor a
-    ld [nes_apu_vol_pending_p1], a
 .p2:
     ld a, [nes_apu_regs + $04]
     bit 5, a
@@ -785,10 +756,7 @@ nes_apu_frame_tick:
     ld [nes_apu_len_p2], a
     jr nz, .tri
     ldh [rNR22], a
-    ld a, $10
     ld [nes_apu_last_nr12_p2], a
-    xor a
-    ld [nes_apu_vol_pending_p2], a
 .tri:
     ld a, [nes_apu_regs + $08]
     bit 7, a
@@ -851,14 +819,14 @@ nes_apu_clock_sweep_p1:
     ld l, a
     ld a, [nes_apu_sweep_period_hi]
     ld h, a
-    ; Mute while period < 16 (earlier than NES <8, not brick-harsh)
+    ; NES: channel muted while period < 8
     ld a, h
     and a
-    jr nz, .period_ge16
+    jr nz, .period_ge8
     ld a, l
-    cp $10
+    cp $08
     jp c, .mute
-.period_ge16:
+.period_ge8:
     ; DE = HL >> shift
     ld a, l
     ld e, a
@@ -906,12 +874,12 @@ nes_apu_clock_sweep_p1:
     ld h, a
     jp c, .mute
 .store:
-    ; Mute if period < 16
+    ; Mute if period < 8
     ld a, h
     and a
     jr nz, .ok_period
     ld a, l
-    cp $10
+    cp $08
     jp c, .mute
 .ok_period:
     ld a, l
@@ -948,6 +916,6 @@ nes_apu_length_table:
 
 ; NES noise period index 0..F → rough NR43 encoding (lower = higher pitch).
 nes_apu_noise_nr43:
-    ; Bright / hi-hat leaning for stage percussion.
-    db $F7, $E7, $D7, $C7, $B7, $A7, $97, $87
-    db $77, $67, $57, $47, $37, $27, $17, $07
+    ; Brighter table — kill/kick/fireball noise was ~1 octave too dull.
+    db $F7, $F3, $E3, $D3, $C3, $B3, $A3, $93
+    db $83, $73, $63, $53, $43, $33, $23, $13
