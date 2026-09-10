@@ -56,7 +56,7 @@
 
 ## Later
 
-- APU translation
+- [ ] APU translation (partial: pulse/triangle/noise → NR* bridge on `apu/nes-sound-bridge`; DMC/frame sequencer/length counters approximate)
 - UxROM / MMC1 / MMC3
 - camera heuristics
 - raster effects

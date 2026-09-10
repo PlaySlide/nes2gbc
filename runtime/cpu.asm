@@ -367,12 +367,14 @@ IF DEF(NES2GBC_PROFILE)
     cp $80
     jp nc, .prg
 
-    ; Minimal APU / controller register reads for now.
+    ; APU / controller register reads.
     cp $40
     jp nz, .unsupported
     ld a, l
     cp $11
     jp z, .read_4011
+    cp $15
+    jp z, .read_4015
     cp $16
     jp z, .read_4016
     cp $17
@@ -386,12 +388,14 @@ ELSE
     cp $80
     jr nc, .prg
 
-    ; Minimal APU / controller register reads for now.
+    ; APU / controller register reads.
     cp $40
     jr nz, .unsupported
     ld a, l
     cp $11
     jr z, .read_4011
+    cp $15
+    jr z, .read_4015
     cp $16
     jr z, .read_4016
     cp $17
@@ -470,6 +474,10 @@ ENDC
     ld a, [nes_dac]
     ret
 
+.read_4015:
+    PROFILE_INC nes_profile_read_io
+    jp nes_apu_read_status
+
 .read_4016:
     PROFILE_INC nes_profile_read_io
     jp nes_controller_read
@@ -510,6 +518,8 @@ IF DEF(NES2GBC_PROFILE)
     jp z, .write_4014
     cp $16
     jp z, .write_4016
+    cp $18
+    jp c, .write_apu
     jp .unsupported
 ELSE
     cp $20
@@ -528,6 +538,8 @@ ELSE
     jr z, .write_4014
     cp $16
     jr z, .write_4016
+    cp $18
+    jr c, .write_apu
     jr .unsupported
 ENDC
 
@@ -570,6 +582,11 @@ ENDC
     ld a, e
     ld [nes_dac], a
     ret
+
+.write_apu:
+    PROFILE_INC nes_profile_write_io
+    ; L = register low byte, E = value (already set).
+    jp nes_apu_write
 
 .write_4014:
     PROFILE_INC nes_profile_write_io

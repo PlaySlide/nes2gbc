@@ -522,6 +522,7 @@ Start:
     call nes_generated_init
     call nes_generated_follow_init
     call nes_video_init
+    call nes_apu_init
     ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
     call nes_profile_reset
 
@@ -538,6 +539,7 @@ Start:
     jp nes_reset
 
 INCLUDE "io.asm"
+INCLUDE "apu.asm"
 INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
