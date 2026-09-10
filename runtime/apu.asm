@@ -730,6 +730,9 @@ nes_apu_load_length:
 ; (quarter frames); two decrements per VBlank is a usable approximation.
 ; ---------------------------------------------------------------------------
 nes_apu_frame_tick:
+    ; 3× sweep steps/VBlank: same period sequence, ~3× shorter (jump ~500ms→~170ms).
+    call nes_apu_clock_sweep_p1
+    call nes_apu_clock_sweep_p1
     call nes_apu_clock_sweep_p1
     ; ~60Hz length clock. Mute only on the frame the counter hits zero so we
     ; do not keep forcing NRx2=0 while music reprograms the channel.
