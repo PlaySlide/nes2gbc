@@ -550,11 +550,44 @@ nes_video_sync_nametable_write:
     ld a, c
     ld [de], a
 
-    ; Preserve the palette selected by the NES attribute table. A nametable
-    ; tile write changes the tile ID, not its 2-bit background palette.
-    ; Only refresh CGB attribute bit 3, which mirrors global PPUCTRL.4.
+    ; A tile write normally preserves the NES attribute palette. That is fine
+    ; for ordinary physical maps, but a stitched destination cell is reused as
+    ; the 512px world scrolls. Preserving the *old CGB cell* palette can leave a
+    ; question/coin palette attached to unrelated scenery after ownership
+    ; changes. Recompute stitched palette bits from authoritative NES attribute
+    ; RAM for this exact source tile instead.
     ld a, $01
     ldh [rVBK], a
+
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .tile_attr_preserve
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .tile_attr_preserve
+    ldh a, [nes_split_active]
+    and a
+    jr z, .tile_attr_preserve
+
+    push bc
+    push de
+    push hl
+    call nes_video_authoritative_tile_palette
+    pop hl
+    pop de
+    pop bc
+    ld b, a
+
+    ; The stitched playfield's pattern-table bank belongs to the captured
+    ; bottom raster state, not to a transient live PPUCTRL write.
+    ldh a, [nes_split_bottom_ctrl]
+    and $10
+    srl a
+    or b
+    ld b, a
+    jr .tile_attr_store
+
+.tile_attr_preserve:
     ld a, [de]
     and $07
     ld b, a
@@ -563,6 +596,9 @@ nes_video_sync_nametable_write:
     srl a
     or b
     ld b, a
+
+.tile_attr_store:
+    ld a, b
     ld [de], a
 
     xor a
@@ -581,6 +617,70 @@ nes_video_sync_nametable_write:
 .attribute:
     ld a, c
     jp nes_video_sync_attribute_write
+
+; Input: HL = authoritative physical NES tile address ($D000-$D7BF).
+; Output: A = NES 2-bit background palette for that exact tile.
+; Clobbers B/C/D/E/HL. Caller preserves anything it still needs.
+nes_video_authoritative_tile_palette:
+    ; Keep the original low byte: bits 0-4 are tile column, bit 6 selects the
+    ; lower half of a 4-row attribute cell, bit 7 contributes to attribute row.
+    ld c, l
+
+    ; E = attribute column (tile column / 4).
+    ld a, l
+    and $1F
+    srl a
+    srl a
+    ld e, a
+
+    ; D = attribute row. NES tile row =
+    ; ((physical-high & 3) * 8) + (low / 32), so row/4 simplifies to
+    ; ((physical-high & 3) * 2) + bit7(low).
+    ld a, h
+    and $03
+    add a
+    ld d, a
+    ld a, c
+    and $80
+    rlca
+    add d
+
+    ; L = $C0 + attribute_row*8 + attribute_column.
+    add a
+    add a
+    add a
+    add e
+    add $C0
+    ld l, a
+
+    ; H = $D3/$D7 attribute page matching the source physical nametable.
+    ld a, h
+    and $04
+    add $D3
+    ld h, a
+
+    ld a, [hl]
+    ld b, a
+
+    ; Vertical quadrant: tile rows 0-1 use low nibble, rows 2-3 high nibble.
+    bit 6, c
+    jr z, .auth_attr_top
+    ld a, b
+    swap a
+    ld b, a
+.auth_attr_top:
+
+    ; Horizontal quadrant: tile columns 0-1 use low pair, 2-3 high pair.
+    bit 1, c
+    jr z, .auth_attr_left
+    ld a, b
+    srl a
+    srl a
+    ld b, a
+.auth_attr_left:
+    ld a, b
+    and $03
+    ret
 
 ; Keep the synthesized map coherent after a physical nametable tile write.
 ; If this destination column currently represents physical NT0, copy the
