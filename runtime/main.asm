@@ -21,6 +21,7 @@ nes_gbc_vblank_isr:
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
     call nes_diag_snapshot_frame
+    call nes_apu_frame_tick
 
     ; Arm the HUD/playfield raster state before any potentially long
     ; completed-frame publication.  Do not enable nested interrupts here: if

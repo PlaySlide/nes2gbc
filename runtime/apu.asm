@@ -15,13 +15,20 @@ nes_apu_regs:       ds $18
 nes_apu_prev_4015:  ds 1
 ; Low byte of the register currently being written (survives helpers).
 nes_apu_write_idx:  ds 1
+; Coarse NES-style length counters (pulse1/pulse2/triangle/noise).
+nes_apu_len_p1:     ds 1
+nes_apu_len_p2:     ds 1
+nes_apu_len_tri:    ds 1
+nes_apu_len_noi:    ds 1
+; Frame sequencer divider (host VBlank ticks).
+nes_apu_frame_div:  ds 1
 
 SECTION "NES APU code", ROM0
 
 ; ---------------------------------------------------------------------------
 nes_apu_init:
     ld hl, nes_apu_regs
-    ld b, $18 + 1          ; regs + prev_4015
+    ld b, $18 + 7          ; regs + prev/idx/lens/frame_div
     xor a
 .clear:
     ld [hli], a
@@ -111,6 +118,17 @@ nes_apu_update_pulse1:
     ret
 
 .enabled:
+    ; Length expired and not halted → keep channel silent.
+    ld a, [nes_apu_regs + $00]
+    bit 5, a
+    jr nz, .len_ok_nes_apu_len_p1
+    ld a, [nes_apu_len_p1]
+    and a
+    jr nz, .len_ok_nes_apu_len_p1
+    xor a
+    ldh [rNR12], a
+    ret
+.len_ok_nes_apu_len_p1:
     xor a
     ldh [rNR10], a                    ; sweep unused in v1
 
@@ -142,7 +160,12 @@ nes_apu_update_pulse1:
     or $80
 .write_nr14:
     ldh [rNR14], a
-    ret
+    ld a, [nes_apu_write_idx]
+    cp $03
+    ret nz
+    ld a, [nes_apu_regs + $03]
+    ld hl, nes_apu_len_p1
+    jp nes_apu_load_length
 
 ; ---------------------------------------------------------------------------
 ; Pulse 2 → Square 2 (NR21–NR24); no sweep register on GB.
@@ -156,6 +179,17 @@ nes_apu_update_pulse2:
     ret
 
 .enabled:
+    ; Length expired and not halted → keep channel silent.
+    ld a, [nes_apu_regs + $04]
+    bit 5, a
+    jr nz, .len_ok_nes_apu_len_p2
+    ld a, [nes_apu_len_p2]
+    and a
+    jr nz, .len_ok_nes_apu_len_p2
+    xor a
+    ldh [rNR22], a
+    ret
+.len_ok_nes_apu_len_p2:
     ld a, [nes_apu_regs + $04]
     and $C0
     ldh [rNR21], a
@@ -183,7 +217,12 @@ nes_apu_update_pulse2:
     or $80
 .write_nr24:
     ldh [rNR24], a
-    ret
+    ld a, [nes_apu_write_idx]
+    cp $07
+    ret nz
+    ld a, [nes_apu_regs + $07]
+    ld hl, nes_apu_len_p2
+    jp nes_apu_load_length
 
 ; ---------------------------------------------------------------------------
 ; Triangle → Wave (NR30–NR34)
@@ -242,7 +281,12 @@ nes_apu_update_triangle:
     or $80
 .write_nr34:
     ldh [rNR34], a
-    ret
+    ld a, [nes_apu_write_idx]
+    cp $0B
+    ret nz
+    ld a, [nes_apu_regs + $0B]
+    ld hl, nes_apu_len_tri
+    jp nes_apu_load_length
 
 ; ---------------------------------------------------------------------------
 ; Noise → GB noise (NR41–NR44)
@@ -256,6 +300,28 @@ nes_apu_update_noise:
     ret
 
 .enabled:
+    ; Length expired and not halted → keep channel silent.
+    ld a, [nes_apu_regs + $0C]
+    bit 5, a
+    jr nz, .len_ok_nes_apu_len_noi
+    ld a, [nes_apu_len_noi]
+    and a
+    jr nz, .len_ok_nes_apu_len_noi
+    xor a
+    ldh [rNR42], a
+    ret
+.len_ok_nes_apu_len_noi:
+    ; Length expired and not halted → keep channel silent.
+    ld a, [nes_apu_regs + $08]
+    bit 7, a
+    jr nz, .len_ok_nes_apu_len_tri
+    ld a, [nes_apu_len_tri]
+    and a
+    jr nz, .len_ok_nes_apu_len_tri
+    xor a
+    ldh [rNR30], a
+    ret
+.len_ok_nes_apu_len_tri:
     xor a
     ldh [rNR41], a
 
@@ -285,7 +351,12 @@ nes_apu_update_noise:
     ld a, $80
 .write_nr44:
     ldh [rNR44], a
-    ret
+    ld a, [nes_apu_write_idx]
+    cp $0F
+    ret nz
+    ld a, [nes_apu_regs + $0F]
+    ld hl, nes_apu_len_noi
+    jp nes_apu_load_length
 
 ; ---------------------------------------------------------------------------
 ; $4015: channel enables. Rising edge reloads/triggers that channel.
@@ -364,24 +435,28 @@ nes_apu_update_status:
 ; A = NES vol/env ($4000/$4004/$400C) → A = NRx2
 ; ---------------------------------------------------------------------------
 nes_apu_vol_to_nrx2:
+    ; NES $4000/$4004/$400C:
+    ;   bits0-3 volume OR envelope period
+    ;   bit4    1=constant volume, 0=envelope
+    ;   bit5    length halt / envelope loop
     bit 4, a
     jr z, .envelope
-    ; Constant volume: bits0-3 → NR volume, period 0, direction 0.
+    ; Constant volume: bits0-3 → NR volume, envelope period 0.
     and $0F
     swap a
     ret
 .envelope:
+    ; Envelope always starts at volume 15 and decays. Bits0-2 → GB period.
+    ; (Old code wrongly used the period as the volume nibble, muting music.)
     ld b, a
-    and $0F
-    swap a                        ; rough start volume
-    bit 3, b                      ; envelope add → direction
-    jr z, .period
-    or $08
-.period:
+    and $07
     ld c, a
-    ld a, b
-    and $07                       ; period
+    ld a, $F0                     ; vol 15, decrease
     or c
+    bit 5, b                      ; loop/halt: keep a slow decay vs silence
+    ret z
+    ; Sustained notes often set halt+envelope; prefer audible sustain.
+    ld a, $F0
     ret
 
 ; ---------------------------------------------------------------------------
@@ -480,8 +555,92 @@ nes_apu_timer_to_period:
     ld de, $07FF
     ret
 
+
+; ---------------------------------------------------------------------------
+; A = length/freq hi register value; HL -> length counter byte
+; Loads NES length-table entry from bits 3-7.
+; ---------------------------------------------------------------------------
+nes_apu_load_length:
+    rrca
+    rrca
+    rrca
+    and $1F
+    ld e, a
+    ld d, 0
+    push hl
+    ld hl, nes_apu_length_table
+    add hl, de
+    ld a, [hl]
+    pop hl
+    ld [hl], a
+    ret
+
+; ---------------------------------------------------------------------------
+; Coarse frame tick from host VBlank (~60Hz). NES clocks length at 120Hz
+; (quarter frames); two decrements per VBlank is a usable approximation.
+; ---------------------------------------------------------------------------
+nes_apu_frame_tick:
+    ; Pulse1
+    ld a, [nes_apu_regs + $00]
+    bit 5, a
+    jr nz, .p2
+    ld a, [nes_apu_len_p1]
+    and a
+    jr z, .p1_silent
+    dec a
+    ld [nes_apu_len_p1], a
+    jr nz, .p2
+.p1_silent:
+    xor a
+    ldh [rNR12], a
+.p2:
+    ld a, [nes_apu_regs + $04]
+    bit 5, a
+    jr nz, .tri
+    ld a, [nes_apu_len_p2]
+    and a
+    jr z, .p2_silent
+    dec a
+    ld [nes_apu_len_p2], a
+    jr nz, .tri
+.p2_silent:
+    xor a
+    ldh [rNR22], a
+.tri:
+    ld a, [nes_apu_regs + $08]
+    bit 7, a                      ; triangle length halt is bit7 of $4008
+    jr nz, .noi
+    ld a, [nes_apu_len_tri]
+    and a
+    jr z, .tri_silent
+    dec a
+    ld [nes_apu_len_tri], a
+    jr nz, .noi
+.tri_silent:
+    xor a
+    ldh [rNR30], a
+.noi:
+    ld a, [nes_apu_regs + $0C]
+    bit 5, a
+    ret nz
+    ld a, [nes_apu_len_noi]
+    and a
+    jr z, .noi_silent
+    dec a
+    ld [nes_apu_len_noi], a
+    ret nz
+.noi_silent:
+    xor a
+    ldh [rNR42], a
+    ret
+
+; Official NES length counter table (bits 3-7 of $4003/$4007/$400B/$400F).
+nes_apu_length_table:
+    db 10,254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14
+    db 12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
+
 ; NES noise period index 0..F → rough NR43 encoding (lower = higher pitch).
 nes_apu_noise_nr43:
-    ; Clock shift +2 vs first table (~2 octaves lower), saturating at $Fx.
-    db $F7, $F3, $F3, $F3, $E3, $D3, $C3, $B3
-    db $A3, $93, $83, $73, $63, $53, $43, $33
+    ; Rough NR43 encoding; +1 clock shift from first draft after pitch fix.
+    db $F7, $E3, $D3, $C3, $B3, $A3, $93, $83
+    db $73, $63, $53, $43, $33, $23, $13, $03
