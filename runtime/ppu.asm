@@ -1,6 +1,13 @@
 ; NES PPU register semantics backed by GBC WRAM/ROM banks.
 ; This is a semantic model, not cycle-accurate PPU emulation.
 
+; C816-C817 are the two free bytes between cartridge metadata and virtual IO.
+; Count actual changed nametable bytes in one generic rendering-off window.
+; The boolean rebuild-dirty flag remains authoritative; this count only lets
+; SMB avoid turning the LCD off for ten host frames after a 1-3 byte update.
+SECTION "NES PPU transient state", WRAM0[$C816]
+nes_generic_hidden_change_count: ds 1
+
 SECTION "NES PPU helpers", ROM0
 
 ; Input: L = mirrored PPU register index ($00-$07)
@@ -237,8 +244,37 @@ nes_ppu_cpu_write:
     ld a, [nes_generic_map_rebuild_dirty]
     and a
     jr z, .mask_apply_now
+
+    ; The video traces separate these transactions cleanly: genuine screen/area
+    ; construction changes hundreds of nametable bytes, while the recurring
+    ; white flashes typically follow only 0-2 real changes.  For SMB's current
+    ; NROM-256 vertical-mirroring shape, skip only a tiny (<8) reconstruction;
+    ; all larger constructions and every other tested cartridge keep the exact
+    ; d2303d78 authoritative rebuild path.
+    ld a, [nes_mapper]
+    and a
+    jr nz, .mask_do_rebuild
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .mask_do_rebuild
+    ld a, [nes_prg_16k_mirror]
+    and a
+    jr nz, .mask_do_rebuild
+    ld a, [nes_generic_hidden_change_count]
+    cp $08
+    jr nc, .mask_do_rebuild
+
+    ; Tiny hidden updates have already been published by .nametable_sync_now.
+    ; Rebuilding all 2 KiB would only hold LCDC.7 low for about ten host frames.
     xor a
     ld [nes_generic_map_rebuild_dirty], a
+    ld [nes_generic_hidden_change_count], a
+    jr .mask_apply_now
+
+.mask_do_rebuild:
+    xor a
+    ld [nes_generic_map_rebuild_dirty], a
+    ld [nes_generic_hidden_change_count], a
     call nes_video_rebuild_generic_maps_atomic
 
 .mask_apply_now:
@@ -483,14 +519,24 @@ nes_ppu_write_data:
     and a
     jr nz, .nametable_store_value
 
-    ; Only the first changed byte needs to turn the deferred host mask into
-    ; a real hidden-construction window.
+    ; Count real changed bytes in this rendering-off construction. The first
+    ; change still owns the d2303d78 behavior of opening a real hidden window
+    ; after SMB has previously established the stitch.
     ld a, [nes_generic_map_rebuild_dirty]
     and a
-    jr nz, .nametable_store_value
+    jr z, .nametable_first_hidden_change
 
+    ld a, [nes_generic_hidden_change_count]
+    cp $FF
+    jr z, .nametable_store_value
+    inc a
+    ld [nes_generic_hidden_change_count], a
+    jr .nametable_store_value
+
+.nametable_first_hidden_change:
     ld a, $01
     ld [nes_generic_map_rebuild_dirty], a
+    ld [nes_generic_hidden_change_count], a
 
     ; Ordinary games already published PPUMASK-off immediately. This special
     ; step is only for a title that previously established the stitched SMB
