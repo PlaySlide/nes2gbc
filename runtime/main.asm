@@ -347,29 +347,62 @@ nes_gbc_vblank_isr:
 ; ordinary full-rebuild path. Return A=0 otherwise; on completion this lets the
 ; normal updater reconcile key 0 with whatever small coarse scroll delta accrued.
 nes_gbc_prepare_initial_hstitch_step:
+    ; Only SMB's already-proven first stitched presentation may enter this path.
     ld a, [nes_hstitch_seen]
     and a
-    jr nz, .prep_not_handled
+    jr z, .prep_shape_mapper
+    xor a
+    ret
 
+.prep_shape_mapper:
     ld a, [nes_mapper]
     and a
-    jr nz, .prep_cancel
+    jr z, .prep_shape_mirroring
+    xor a
+    ret
+
+.prep_shape_mirroring:
     ld a, [nes_mirroring]
     cp $01
-    jr nz, .prep_cancel
+    jr z, .prep_shape_prg
+    xor a
+    ret
+
+.prep_shape_prg:
     ld a, [nes_prg_16k_mirror]
     and a
-    jr nz, .prep_cancel
+    jr z, .prep_split_check
+    xor a
+    ret
+
+.prep_split_check:
     ldh a, [nes_split_active]
     and a
-    jr z, .prep_cancel
+    jr nz, .prep_split_active
 
+    ; If the candidate split vanished while preparation was in flight, throw
+    ; away the progress marker. $9C00 is still hidden so no live state regresses.
+    ld a, [nes_hstitch_valid]
+    cp $02
+    jr nz, .prep_split_inactive_return
+    xor a
+    ld [nes_hstitch_valid], a
+    ld [nes_hstitch_copy_start], a
+    ld [nes_hstitch_dirty], a
+.prep_split_inactive_return:
+    xor a
+    ret
+
+.prep_split_active:
     ld a, [nes_hstitch_valid]
     cp $02
     jr z, .prep_columns
     and a
-    jr nz, .prep_not_handled
+    jr z, .prep_check_initial_key
+    xor a
+    ret
 
+.prep_check_initial_key:
     ; Only the observed first key-0 activation uses this staged path. Any other
     ; initial geometry falls straight through to the old authoritative rebuild.
     ldh a, [nes_split_bottom_x]
@@ -394,8 +427,11 @@ nes_gbc_prepare_initial_hstitch_step:
     srl a
     or b
     and a
-    jr nz, .prep_not_handled
+    jr z, .prep_begin
+    xor a
+    ret
 
+.prep_begin:
     ; Start hidden key-0 construction. Using valid=$02 makes queued NT writes
     ; stitch-aware during preparation, so physical NT1 updates cannot overwrite
     ; columns already synthesized from authoritative NT0 state.
@@ -441,18 +477,6 @@ nes_gbc_prepare_initial_hstitch_step:
     ld [nes_hstitch_dirty], a
     ld a, $01
     ld [nes_hstitch_valid], a
-    xor a
-    ret
-
-.prep_cancel:
-    ld a, [nes_hstitch_valid]
-    cp $02
-    jr nz, .prep_not_handled
-    xor a
-    ld [nes_hstitch_valid], a
-    ld [nes_hstitch_copy_start], a
-    ld [nes_hstitch_dirty], a
-.prep_not_handled:
     xor a
     ret
 
@@ -506,7 +530,7 @@ nes_gbc_stat_isr:
     jr z, .disable_stat
 
     ; Synthetic NES Y=240 seam: switch to the vertically adjacent logical
-    ; nametable and compensate for the CGB map's extra 16 pixel rows.
+    ; nametable and compensate for the CGB's extra 16 pixel rows.
     ldh a, [nes_seam_bottom_ctrl]
     call nes_video_apply_map_select_a
     ldh a, [nes_seam_bottom_y]
