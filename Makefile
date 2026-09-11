@@ -34,6 +34,7 @@ generate:
 		python3 tools/index_math_generated.py runtime/generated.asm; \
 		python3 tools/inline_ppustatus_generated.py runtime/generated.asm; \
 		python3 tools/specialize_sprite0_poll.py runtime/generated.asm; \
+		python3 tools/fuse_sprite0_branch.py runtime/generated.asm; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 
