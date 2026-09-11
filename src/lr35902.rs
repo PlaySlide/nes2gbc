@@ -258,6 +258,144 @@ fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
         writeln!(out, "    call nes_cpu_write").unwrap();
     }
 }
+
+fn op_writes_nz(op: &IrOp) -> bool {
+    match op {
+        IrOp::Load { .. }
+        | IrOp::Logic { .. }
+        | IrOp::Arithmetic { .. }
+        | IrOp::Inc(_)
+        | IrOp::Dec(_)
+        | IrOp::Modify { .. }
+        | IrOp::Bit { .. }
+        | IrOp::Compare { .. }
+        | IrOp::ReadIo { .. }
+        | IrOp::Transfer { update_nz: true, .. } => true,
+        IrOp::StackPop(StackValue::A) => true,
+        IrOp::SetFlag { flag: Flag::Zero | Flag::Negative, .. } => true,
+        _ => false,
+    }
+}
+
+fn op_reads_nz(op: &IrOp) -> bool {
+    match op {
+        IrOp::Branch {
+            flag: Flag::Zero | Flag::Negative,
+            ..
+        } => true,
+        IrOp::StackPush(StackValue::Status) => true,
+        // RTI/PHP-adjacent materialize; treat status materialize consumers as reads.
+        IrOp::ReturnInterrupt => true,
+        _ => false,
+    }
+}
+
+fn op_escapes_flags(op: &IrOp) -> bool {
+    matches!(
+        op,
+        IrOp::Jump(_)
+            | IrOp::JumpIndirect { .. }
+            | IrOp::Call { .. }
+            | IrOp::Return
+            | IrOp::ReturnInterrupt
+            | IrOp::Break { .. }
+    )
+}
+
+fn nz_updates_live(ops: &[IrOp]) -> Vec<bool> {
+    let mut live = vec![false; ops.len()];
+    for i in 0..ops.len() {
+        if !op_writes_nz(&ops[i]) {
+            continue;
+        }
+        // Conservatively keep the last NZ write in the batch (flags may escape
+        // to a following branch emitted after flush, or the next block).
+        let mut keep = true;
+        for j in (i + 1)..ops.len() {
+            if op_reads_nz(&ops[j]) {
+                keep = true;
+                break;
+            }
+            if op_writes_nz(&ops[j]) {
+                keep = false;
+                break;
+            }
+            if op_escapes_flags(&ops[j]) {
+                keep = true;
+                break;
+            }
+        }
+        live[i] = keep;
+    }
+    live
+}
+
+
+fn op_updates_nes_a(op: &IrOp) -> bool {
+    match op {
+        IrOp::Load { dst: Register::A, .. }
+        | IrOp::Logic { .. }
+        | IrOp::Arithmetic { .. }
+        | IrOp::Inc(Register::A)
+        | IrOp::Dec(Register::A)
+        | IrOp::Modify {
+            target: ModifyTarget::Accumulator,
+            ..
+        }
+        | IrOp::ReadIo { dst: Register::A, .. }
+        | IrOp::StackPop(StackValue::A) => true,
+        IrOp::Transfer { dst: Register::A, .. } => true,
+        _ => false,
+    }
+}
+
+/// Ops that destroy host A (or force a_live=false) without storing a fresh nes_a.
+fn op_clobbers_a_without_nes_a_update(op: &IrOp) -> bool {
+    if op_updates_nes_a(op) {
+        return false;
+    }
+    match op {
+        // Direct WRAM stores of A keep host A live.
+        IrOp::Store {
+            src: Register::A,
+            dst: Operand::ZeroPage(_),
+        } => false,
+        IrOp::Store {
+            src: Register::A,
+            dst: Operand::Absolute(addr),
+        } if direct_ram_addr(*addr).is_some() => false,
+        IrOp::Nop => false,
+        // Everything else may clobber A or leave the batch.
+        _ => true,
+    }
+}
+
+fn a_commits_live(ops: &[IrOp]) -> Vec<bool> {
+    let mut live = vec![false; ops.len()];
+    for i in 0..ops.len() {
+        if !op_updates_nes_a(&ops[i]) {
+            continue;
+        }
+        let mut keep = true;
+        for j in (i + 1)..ops.len() {
+            if op_clobbers_a_without_nes_a_update(&ops[j]) {
+                keep = true;
+                break;
+            }
+            if op_updates_nes_a(&ops[j]) {
+                keep = false;
+                break;
+            }
+            if op_escapes_flags(&ops[j]) {
+                keep = true;
+                break;
+            }
+        }
+        live[i] = keep;
+    }
+    live
+}
+
 fn emit_update_nz(out: &mut String) {
     writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
     writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
@@ -268,8 +406,12 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
     // Host register A often already holds nes_a. Keep it live across ALU/store
     // chains instead of bouncing every result through HRAM.
     let mut a_live = false;
+    let nz_live = nz_updates_live(ops);
+    let a_commit = a_commits_live(ops);
 
-    for op in ops {
+    for (op_index, op) in ops.iter().enumerate() {
+        let update_nz_here = nz_live[op_index];
+        let commit_a_here = a_commit[op_index];
         match *op {
             IrOp::SetFlag { flag, value } => {
                 a_live = false;
@@ -300,8 +442,14 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
 
             IrOp::Load { dst, src } => {
                 emit_load_operand_to_a(&mut out, src);
-                writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
-                emit_update_nz(&mut out);
+                if dst == Register::A {
+                    if commit_a_here {
+                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                    }
+                } else {
+                    writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                }
+                if update_nz_here { emit_update_nz(&mut out); }
                 a_live = dst == Register::A;
             }
 
@@ -331,9 +479,15 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 } else {
                     writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
                 }
-                writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                if dst == Register::A {
+                    if commit_a_here {
+                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                    }
+                } else {
+                    writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                }
                 if update_nz {
-                    emit_update_nz(&mut out);
+                    if update_nz_here { emit_update_nz(&mut out); }
                 }
                 // A still holds the transferred value for TAX/TAY/TXA/TYA.
                 a_live = true;
@@ -345,14 +499,16 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         writeln!(out, "    ldh a, [nes_a]").unwrap();
                     }
                     writeln!(out, "    inc a").unwrap();
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
-                    emit_update_nz(&mut out);
+                    if commit_a_here {
+                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                    }
+                    if update_nz_here { emit_update_nz(&mut out); }
                     a_live = true;
                 } else {
                     writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
                     writeln!(out, "    inc a").unwrap();
                     writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
-                    emit_update_nz(&mut out);
+                    if update_nz_here { emit_update_nz(&mut out); }
                     a_live = false;
                 }
             }
@@ -363,14 +519,16 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         writeln!(out, "    ldh a, [nes_a]").unwrap();
                     }
                     writeln!(out, "    dec a").unwrap();
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
-                    emit_update_nz(&mut out);
+                    if commit_a_here {
+                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                    }
+                    if update_nz_here { emit_update_nz(&mut out); }
                     a_live = true;
                 } else {
                     writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
                     writeln!(out, "    dec a").unwrap();
                     writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
-                    emit_update_nz(&mut out);
+                    if update_nz_here { emit_update_nz(&mut out); }
                     a_live = false;
                 }
             }
@@ -405,8 +563,10 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         }
                     }
                 }
-                writeln!(out, "    ldh [nes_a], a").unwrap();
-                emit_update_nz(&mut out);
+                if commit_a_here {
+                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                }
+                if update_nz_here { emit_update_nz(&mut out); }
                 a_live = true;
             }
 
@@ -435,7 +595,9 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     ArithmeticOp::Adc => writeln!(out, "    call nes_adc_a_e").unwrap(),
                     ArithmeticOp::Sbc => writeln!(out, "    call nes_sbc_a_e").unwrap(),
                 }
-                writeln!(out, "    ldh [nes_a], a").unwrap();
+                if commit_a_here {
+                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                }
                 a_live = true;
             }
 
@@ -456,11 +618,11 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 match op {
                     ModifyOp::Inc => {
                         writeln!(out, "    inc a").unwrap();
-                        emit_update_nz(&mut out);
+                        if update_nz_here { emit_update_nz(&mut out); }
                     }
                     ModifyOp::Dec => {
                         writeln!(out, "    dec a").unwrap();
-                        emit_update_nz(&mut out);
+                        if update_nz_here { emit_update_nz(&mut out); }
                     }
                     ModifyOp::Asl => {
                         writeln!(out, "    call nes_asl_a").unwrap();
@@ -480,7 +642,9 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     emit_store_a_to_operand(&mut out, mem);
                     a_live = false;
                 } else {
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                    if commit_a_here {
+                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                    }
                     a_live = true;
                 }
             }
@@ -546,8 +710,10 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             }
             IrOp::StackPop(StackValue::A) => {
                 writeln!(out, "    call nes_stack_pop_a").unwrap();
-                writeln!(out, "    ldh [nes_a], a").unwrap();
-                emit_update_nz(&mut out);
+                if commit_a_here {
+                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                }
+                if update_nz_here { emit_update_nz(&mut out); }
                 a_live = true;
             }
             IrOp::StackPop(StackValue::Status) => {
@@ -645,8 +811,14 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         writeln!(out, "    xor a").unwrap();
                     }
                 }
-                writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
-                emit_update_nz(&mut out);
+                if dst == Register::A {
+                    if commit_a_here {
+                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                    }
+                } else {
+                    writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                }
+                if update_nz_here { emit_update_nz(&mut out); }
                 a_live = dst == Register::A;
             }
 
@@ -855,7 +1027,22 @@ mod tests {
         assert!(!asm.contains("ld e, a"));
         // One HRAM load of nes_a at most — should be zero after live-A load.
         assert_eq!(asm.matches("ldh a, [nes_a]").count(), 0);
-        assert!(asm.contains("ldh [nes_a], a"));
         assert!(asm.contains("ld [$C778], a"));
+        // LDA NZ is dead (AND overwrites); AND NZ stays (escapes batch).
+        assert_eq!(asm.matches("ldh [nes_z_shadow], a").count(), 1);
+        assert_eq!(asm.matches("ldh [nes_n_shadow], a").count(), 1);
+        // LDA's nes_a commit is dead (AND commits before store/end).
+        assert_eq!(asm.matches("ldh [nes_a], a").count(), 1);
+    }
+
+    #[test]
+    fn dead_nz_elided_when_overwritten_before_use() {
+        let asm = emit_ops(&[
+            IrOp::Load { dst: Register::A, src: Operand::Immediate(1) },
+            IrOp::Load { dst: Register::A, src: Operand::Immediate(0) },
+        ]);
+        // Only the second load's NZ is live-out.
+        assert_eq!(asm.matches("ldh [nes_z_shadow], a").count(), 1);
+        assert_eq!(asm.matches("ldh [nes_n_shadow], a").count(), 1);
     }
 }
