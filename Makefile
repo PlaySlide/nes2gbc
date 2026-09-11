@@ -26,6 +26,7 @@ generate:
 	fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/peephole_generated.py runtime/generated.asm; \
+		python3 tools/shrink_compare_generated.py runtime/generated.asm; \
 		python3 tools/hot_alu_generated.py runtime/generated.asm; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
