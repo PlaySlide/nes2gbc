@@ -800,15 +800,16 @@ nes_poll_nmi_hl:
     ret z
 
     ; pending is a counter (1+frame_skip per host VBlank). Deliver one NMI per
-    ; successful poll; keep the remainder when already inside an NMI so skip>0
-    ; can queue multiple NES frames. If NMI is disabled, drop one count.
+    ; successful poll so the main loop can drain skip>0 between host presents.
+    ; If NMI is already active, drop the whole queue (same as pre-skip) to avoid
+    ; back-to-back NMIs when a host VBlank lands mid-handler.
     ld a, [nes_ppuctrl]
     bit 7, a
     jr z, .consume_drop
 
     ld a, [nes_nmi_active]
     and a
-    ret nz
+    jr nz, .drop_all
 
     ld a, [nes_host_vblank_pending]
     dec a
@@ -877,6 +878,11 @@ nes_poll_nmi_hl:
     ldh [nes_p], a
 
     ld a, $01
+    ret
+
+.drop_all:
+    xor a
+    ld [nes_host_vblank_pending], a
     ret
 
 .consume_drop:
