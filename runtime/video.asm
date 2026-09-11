@@ -165,8 +165,10 @@ nes_video_flush_nametable_queue_atomic:
     or NES_DIAG_EVENT_QUEUE_FLUSH
     ld [nes_diag_event_flags], a
 
+IF DEF(NES2GBC_DEBUG_TRACE)
     ; Start a fresh diagnostic summary for exactly the transaction that is
-    ; about to become visible.
+    ; about to become visible. TRACE builds only — release used to pay this
+    ; (and the per-tile update below) on every published nametable byte.
     xor a
     ld [nes_ntdiag_tile_count], a
     ld [nes_ntdiag_phys_mask], a
@@ -191,6 +193,7 @@ nes_video_flush_nametable_queue_atomic:
     xor a
 .diag_display_store:
     ld [nes_ntdiag_display_map], a
+ENDC
 
     ; Fixed-screen games have no raster deadline to preserve. Their staged
     ; NMI updates are often a short vertical column; publishing that column
@@ -245,6 +248,7 @@ nes_video_flush_nametable_queue_atomic:
     inc de
     ld h, a
 
+IF DEF(NES2GBC_DEBUG_TRACE)
     ; Record only tile-cell destinations; attribute writes use a different
     ; address geometry and would muddy the column range.
     ld a, h
@@ -334,6 +338,7 @@ nes_video_flush_nametable_queue_atomic:
     ld [nes_ntdiag_max_row], a
 
 .diag_done:
+ENDC
     push de
     ld a, [hl]
 
@@ -360,9 +365,11 @@ nes_video_flush_nametable_queue_atomic:
     jp .loop
 
 .done:
+IF DEF(NES2GBC_DEBUG_TRACE)
     ld a, [nes_ntdiag_commit_serial]
     inc a
     ld [nes_ntdiag_commit_serial], a
+ENDC
 
     ; Reset transaction before re-enabling scanout.
     xor a
