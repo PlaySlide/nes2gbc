@@ -29,6 +29,8 @@ generate:
 		python3 tools/shrink_compare_generated.py runtime/generated.asm; \
 		python3 tools/hot_alu_generated.py runtime/generated.asm; \
 		python3 tools/fold_fixed_prg_reads.py runtime/generated.asm "$(ROM)"; \
+		if [ "$(TRACE)" != "1" ]; then python3 tools/mirror_indexed_prg_tables.py runtime/generated.asm "$(ROM)"; fi; \
+		python3 tools/index_math_generated.py runtime/generated.asm; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 
