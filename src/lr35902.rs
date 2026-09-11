@@ -625,10 +625,32 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         if update_nz_here { emit_update_nz(&mut out); }
                     }
                     ModifyOp::Asl => {
-                        writeln!(out, "    call nes_asl_a").unwrap();
+                        writeln!(out, "    ld e, a").unwrap();
+                        writeln!(out, "    xor a").unwrap();
+                        writeln!(out, "    bit 7, e").unwrap();
+                        writeln!(out, "    jr z, :+").unwrap();
+                        writeln!(out, "    inc a").unwrap();
+                        writeln!(out, ":").unwrap();
+                        writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                        writeln!(out, "    ld a, e").unwrap();
+                        writeln!(out, "    add a").unwrap();
+                        if update_nz_here {
+                            emit_update_nz(&mut out);
+                        }
                     }
                     ModifyOp::Lsr => {
-                        writeln!(out, "    call nes_lsr_a").unwrap();
+                        writeln!(out, "    ld e, a").unwrap();
+                        writeln!(out, "    xor a").unwrap();
+                        writeln!(out, "    bit 0, e").unwrap();
+                        writeln!(out, "    jr z, :+").unwrap();
+                        writeln!(out, "    inc a").unwrap();
+                        writeln!(out, ":").unwrap();
+                        writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                        writeln!(out, "    ld a, e").unwrap();
+                        writeln!(out, "    srl a").unwrap();
+                        if update_nz_here {
+                            emit_update_nz(&mut out);
+                        }
                     }
                     ModifyOp::Rol => {
                         writeln!(out, "    call nes_rol_a").unwrap();
@@ -674,9 +696,10 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 a_live = false;
             }
             IrOp::Compare { reg, rhs } => {
+                // Inline CMP/CPX/CPY: 6502 C = !(GB borrow), Z/N from A-rhs,
+                // and A is preserved (unlike nes_compare_a_e which leaves the diff).
                 match rhs {
                     Operand::Immediate(imm) => {
-                        writeln!(out, "    ld e, ${imm:02X}").unwrap();
                         if reg == Register::A {
                             if !a_live {
                                 writeln!(out, "    ldh a, [nes_a]").unwrap();
@@ -684,15 +707,41 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         } else {
                             writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
                         }
+                        writeln!(out, "    ld d, a").unwrap();
+                        writeln!(out, "    sub ${imm:02X}").unwrap();
+                        writeln!(out, "    ld c, a").unwrap();
+                        writeln!(out, "    ld a, d").unwrap();
+                        writeln!(out, "    cp ${imm:02X}").unwrap();
                     }
                     _ => {
-                        emit_load_operand_to_a(&mut out, rhs);
-                        writeln!(out, "    ld e, a").unwrap();
-                        writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
+                        if reg == Register::A && a_live {
+                            writeln!(out, "    ld d, a").unwrap();
+                            emit_load_operand_to_a(&mut out, rhs);
+                            writeln!(out, "    ld e, a").unwrap();
+                            writeln!(out, "    ld a, d").unwrap();
+                        } else {
+                            emit_load_operand_to_a(&mut out, rhs);
+                            writeln!(out, "    ld e, a").unwrap();
+                            writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
+                            writeln!(out, "    ld d, a").unwrap();
+                        }
+                        writeln!(out, "    sub e").unwrap();
+                        writeln!(out, "    ld c, a").unwrap();
+                        writeln!(out, "    ld a, d").unwrap();
+                        writeln!(out, "    cp e").unwrap();
                     }
                 }
-                writeln!(out, "    call nes_compare_a_e").unwrap();
-                a_live = false;
+                writeln!(out, "    ld a, $00").unwrap();
+                writeln!(out, "    jr c, :+").unwrap();
+                writeln!(out, "    inc a").unwrap();
+                writeln!(out, ":").unwrap();
+                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                if update_nz_here {
+                    writeln!(out, "    ld a, c").unwrap();
+                    emit_update_nz(&mut out);
+                }
+                writeln!(out, "    ld a, d").unwrap();
+                a_live = reg == Register::A;
             }
 
             IrOp::StackPush(StackValue::A) => {
@@ -1044,5 +1093,37 @@ mod tests {
         // Only the second load's NZ is live-out.
         assert_eq!(asm.matches("ldh [nes_z_shadow], a").count(), 1);
         assert_eq!(asm.matches("ldh [nes_n_shadow], a").count(), 1);
+    }
+
+    #[test]
+    fn compare_immediate_is_inlined_without_helper() {
+        let asm = emit_ops(&[
+            IrOp::Load { dst: Register::A, src: Operand::Immediate(5) },
+            IrOp::Compare { reg: Register::A, rhs: Operand::Immediate(5) },
+        ]);
+        assert!(asm.contains("cp $05") || asm.contains("sub $05"));
+        assert!(!asm.contains("call nes_compare_a_e"));
+        assert!(asm.contains("ldh [nes_c_shadow], a"));
+        // A restored after compare; no HRAM reload needed if it stayed live.
+        assert_eq!(asm.matches("ldh a, [nes_a]").count(), 0);
+    }
+
+    #[test]
+    fn asl_lsr_accumulator_are_inlined() {
+        let asl = emit_ops(&[IrOp::Modify {
+            op: ModifyOp::Asl,
+            target: ModifyTarget::Accumulator,
+        }]);
+        assert!(asl.contains("add a"));
+        assert!(asl.contains("bit 7, e"));
+        assert!(!asl.contains("call nes_asl_a"));
+
+        let lsr = emit_ops(&[IrOp::Modify {
+            op: ModifyOp::Lsr,
+            target: ModifyTarget::Accumulator,
+        }]);
+        assert!(lsr.contains("srl a"));
+        assert!(lsr.contains("bit 0, e"));
+        assert!(!lsr.contains("call nes_lsr_a"));
     }
 }
