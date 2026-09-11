@@ -17,14 +17,7 @@ def _code(line: str) -> str:
 
 
 def _inline_compare_helpers(out: list[str]) -> int:
-    """Inline the exact semantics of nes_compare_a_e.
-
-    The earlier broad CMP experiment changed register/liveness behavior along
-    with inlining and regressed games. This version does not: A is left holding
-    the subtraction result exactly like the runtime helper and C/Z/N are
-    published in the same order. PROFILE_INC is itself conditional, so profile
-    builds keep the existing counter without forcing a helper call.
-    """
+    """Inline the exact semantics of nes_compare_a_e."""
 
     inlined = 0
     for i in range(len(out)):
@@ -53,20 +46,13 @@ def _inline_compare_helpers(out: list[str]) -> int:
 
 
 def _inline_static_jsr_pushes(out: list[str]) -> int:
-    """Inline the exact two-byte 6502 JSR return-address push.
-
-    Static JSRs know the stacked return value at compile time. The runtime
-    helper calls the one-byte stack helper twice; direct writes preserve the
-    virtual stack byte-for-byte, including $0100-page wrap, while avoiding
-    several CALL/RET pairs.
-    """
+    """Inline the exact two-byte 6502 JSR return-address push."""
 
     inlined = 0
     ret_re = re.compile(r"ld hl, \$([0-9A-Fa-f]{4})")
     for i in range(1, len(out)):
         if _code(out[i]) != "call nes_stack_push_return_hl":
             continue
-
         k = i - 1
         while k >= 0 and not _code(out[k]):
             k -= 1
@@ -164,27 +150,70 @@ def _inline_byte_stack_helpers(out: list[str]) -> tuple[int, int]:
     return pushes, pops
 
 
-def _fuse_shadow_reloads(out: list[str]) -> int:
-    fused = 0
+def _direct_fixed_ppu_calls(out: list[str]) -> tuple[int, int]:
+    """Call fixed PPU register handlers directly instead of redispatching L.
 
-    # Emitter sequence for any operation whose Z/N result is still in A:
-    #   ldh [nes_z_shadow], a
-    #   ldh [nes_n_shadow], a
-    #   ; optional comments / blank lines
-    #   ldh a, [nes_z_shadow]   or   ldh a, [nes_n_shadow]
-    #   and a                   or   bit 7, a
-    #
-    # Both shadow stores preserve A, so the reload is redundant. Keep the
-    # shadow stores themselves: 6502 flags remain architecturally live after
-    # the branch and a later block may still consume them.
+    The Rust emitter already knows the exact $2000-$2007 register. Generated
+    code currently loads that constant into L and then calls a generic helper
+    which immediately compares L against every register number. RGBDS local
+    labels have stable fully-qualified names, so fixed accesses can enter the
+    same handler body directly. PROFILE_INC preserves the generic counters.
+    """
+
+    write_targets = {
+        0x00: "nes_ppu_cpu_write.ctrl",
+        0x01: "nes_ppu_cpu_write.mask",
+        0x03: "nes_ppu_cpu_write.oamaddr",
+        0x04: "nes_ppu_cpu_write.oamdata_write",
+        0x05: "nes_ppu_cpu_write.scroll",
+        0x06: "nes_ppu_cpu_write.addr",
+        0x07: "nes_ppu_write_data",
+    }
+    read_targets = {
+        0x02: "nes_ppu_cpu_read.status",
+        0x04: "nes_ppu_cpu_read.oamdata",
+        0x07: "nes_ppu_read_data",
+    }
+    l_re = re.compile(r"ld l, \$([0-9A-Fa-f]{2})")
+    writes = 0
+    reads = 0
+
     for i in range(len(out)):
-        load = _code(out[i])
-        if load not in {
-            "ldh a, [nes_z_shadow]",
-            "ldh a, [nes_n_shadow]",
-        }:
+        call = _code(out[i])
+        if call not in {"call nes_ppu_cpu_write", "call nes_ppu_cpu_read"}:
+            continue
+        k = i - 1
+        while k >= 0 and not _code(out[k]):
+            k -= 1
+        if k < 0:
+            continue
+        match = l_re.fullmatch(_code(out[k]))
+        if not match:
+            continue
+        reg = int(match.group(1), 16) & 0x07
+        targets = write_targets if call.endswith("write") else read_targets
+        target = targets.get(reg)
+        if target is None:
             continue
 
+        indent = out[k][: len(out[k]) - len(out[k].lstrip())]
+        counter = "nes_profile_ppu_write" if call.endswith("write") else "nes_profile_ppu_read"
+        out[k] = f"{indent}PROFILE_INC {counter}\n{indent}; fixed PPU register ${reg:02X}\n"
+        out[i] = f"{indent}call {target}\n"
+        if call.endswith("write"):
+            writes += 1
+        else:
+            reads += 1
+
+    return writes, reads
+
+
+def _fuse_shadow_reloads(out: list[str]) -> int:
+    fused = 0
+    for i in range(len(out)):
+        load = _code(out[i])
+        if load not in {"ldh a, [nes_z_shadow]", "ldh a, [nes_n_shadow]"}:
+            continue
         j = i + 1
         while j < len(out) and not _code(out[j]):
             j += 1
@@ -194,9 +223,8 @@ def _fuse_shadow_reloads(out: list[str]) -> int:
         if load.endswith("[nes_z_shadow]"):
             if test != "and a":
                 continue
-        else:
-            if test != "bit 7, a":
-                continue
+        elif test != "bit 7, a":
+            continue
 
         k = i - 1
         while k >= 0 and not _code(out[k]):
@@ -213,13 +241,10 @@ def _fuse_shadow_reloads(out: list[str]) -> int:
         shadow = "Z" if "nes_z_shadow" in load else "N"
         out[i] = f"{indent}; fused {shadow} branch: A already holds flag result\n"
         fused += 1
-
     return fused
 
 
 def _remove_redundant_zero_retests(out: list[str]) -> int:
-    """Drop `and a` when a nearby producer already set GB Z from the same A."""
-
     removed = 0
     producer_re = re.compile(
         r"(?:inc a|dec a|and (?:\$[0-9A-Fa-f]{2}|[bcdehl])|"
@@ -229,11 +254,9 @@ def _remove_redundant_zero_retests(out: list[str]) -> int:
         r"(?:ldh \[(?:nes_a|nes_x|nes_y|nes_z_shadow|nes_n_shadow)\], a|"
         r"ld \[\$C[0-9A-Fa-f]{3}\], a)"
     )
-
     for i in range(len(out)):
         if _code(out[i]) != "and a":
             continue
-
         k = i - 1
         while k >= 0:
             code = _code(out[k])
@@ -246,32 +269,25 @@ def _remove_redundant_zero_retests(out: list[str]) -> int:
             break
         if k < 0 or not producer_re.fullmatch(_code(out[k])):
             continue
-
         indent = out[i][: len(out[i]) - len(out[i].lstrip())]
         out[i] = f"{indent}; fused zero test: producer already set GB Z\n"
         removed += 1
-
     return removed
 
 
 def _collapse_backward_branch_pairs(out: list[str]) -> int:
-    """Turn `jr !cond, :+ ; jr old_label ; :` into one conditional JR."""
-
     seen_labels: set[str] = set()
     collapsed = 0
     skip_re = re.compile(r"jr (z|nz), :\+")
     target_re = re.compile(r"jr (nes_[0-9A-Fa-f]{4})")
-
     for i in range(len(out)):
         code = _code(out[i])
         if code.startswith("nes_") and code.endswith(":"):
             seen_labels.add(code[:-1])
             continue
-
         match = skip_re.fullmatch(code)
         if not match:
             continue
-
         j = i + 1
         while j < len(out) and not _code(out[j]):
             j += 1
@@ -283,70 +299,47 @@ def _collapse_backward_branch_pairs(out: list[str]) -> int:
         target = target_match.group(1)
         if target not in seen_labels:
             continue
-
         k = j + 1
         while k < len(out) and not _code(out[k]):
             k += 1
         if k >= len(out) or _code(out[k]) != ":":
             continue
-
         inverse = "nz" if match.group(1) == "z" else "z"
         indent = out[i][: len(out[i]) - len(out[i].lstrip())]
         out[i] = f"{indent}jr {inverse}, {target}\n"
         out[j] = f"{indent}; fused backward conditional branch\n"
         collapsed += 1
-
     return collapsed
 
 
-def optimize_lines(lines: list[str]) -> tuple[list[str], int, int, int, int, int, int, int, int]:
+def optimize_lines(lines: list[str]) -> tuple[list[str], dict[str, int]]:
     out = list(lines)
-    compares = _inline_compare_helpers(out)
-    jsr_pushes = _inline_static_jsr_pushes(out)
-    rts_pops = _inline_rts_pops(out)
-    byte_pushes, byte_pops = _inline_byte_stack_helpers(out)
-    shadow_fused = _fuse_shadow_reloads(out)
-    zero_retests = _remove_redundant_zero_retests(out)
-    backedges = _collapse_backward_branch_pairs(out)
-    return (
-        out,
-        compares,
-        jsr_pushes,
-        rts_pops,
-        byte_pushes,
-        byte_pops,
-        shadow_fused,
-        zero_retests,
-        backedges,
-    )
+    stats: dict[str, int] = {}
+    stats["compares"] = _inline_compare_helpers(out)
+    stats["jsr_pushes"] = _inline_static_jsr_pushes(out)
+    stats["rts_pops"] = _inline_rts_pops(out)
+    stats["byte_pushes"], stats["byte_pops"] = _inline_byte_stack_helpers(out)
+    stats["ppu_writes"], stats["ppu_reads"] = _direct_fixed_ppu_calls(out)
+    stats["shadow_fused"] = _fuse_shadow_reloads(out)
+    stats["zero_retests"] = _remove_redundant_zero_retests(out)
+    stats["backedges"] = _collapse_backward_branch_pairs(out)
+    return out, stats
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("asm", type=Path)
     args = parser.parse_args()
-
     original = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    (
-        optimized,
-        compares,
-        jsr_pushes,
-        rts_pops,
-        byte_pushes,
-        byte_pops,
-        shadow_fused,
-        zero_retests,
-        backedges,
-    ) = optimize_lines(original)
+    optimized, s = optimize_lines(original)
     args.asm.write_text("".join(optimized), encoding="utf-8")
     print(
         "peephole: "
-        f"inlined {compares} compares, "
-        f"{jsr_pushes} static JSR pushes, {rts_pops} RTS pops, "
-        f"{byte_pushes}/{byte_pops} byte stack push/pops; "
-        f"fused {shadow_fused} Z/N reloads, "
-        f"removed {zero_retests} zero retests, "
-        f"collapsed {backedges} backward branches"
+        f"{s['compares']} cmp, {s['jsr_pushes']} JSR, {s['rts_pops']} RTS, "
+        f"{s['byte_pushes']}/{s['byte_pops']} byte stack, "
+        f"{s['ppu_writes']}/{s['ppu_reads']} fixed PPU write/read, "
+        f"{s['shadow_fused']} Z/N reloads, {s['zero_retests']} zero retests, "
+        f"{s['backedges']} backward branches"
     )
     return 0
 
