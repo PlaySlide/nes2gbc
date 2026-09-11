@@ -645,8 +645,10 @@ nes_apu_vol_to_nrx2:
     bit 4, a
     jr z, .envelope
     ; Constant volume: bits0-3 → NR volume, envelope period 0.
-    ; Floor quiet SFX (pipe/injury uses NES vol 1 — inaudible on GB otherwise).
+    ; Vol 0 must stay 0 — SMB music envelope ends in $90 (silence) for note gaps.
+    ; Floor only 1–3 (pipe/injury); never boost rests into legato.
     and $0F
+    jr z, .const_ok
     cp $04
     jr nc, .const_ok
     ld a, $06
