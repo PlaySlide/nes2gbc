@@ -791,29 +791,52 @@ nes_rti_pop_hl:
     ld l, c
     ret
 
-; Deliver a latched host VBlank as a translated NES NMI at compiler-selected
-; safe points. Input HL = NES PC to resume if interrupted.
+; Deliver a translated NES NMI at compiler-selected safe points.
+; Input HL = NES PC to resume if interrupted.
 ; Output A = 1 when caller should jump to the translated NMI handler.
+;
+; nes_host_vblank_pending is a drain counter set to (1+frame_skip) on host
+; VBlank. When frame_skip>0, turbo free-runs after the latch drains so NES
+; NMIs are not gated on the next host present.
 nes_poll_nmi_hl:
     ld a, [nes_host_vblank_pending]
     and a
-    ret z
+    jr nz, .have_pending
 
-    ; pending is a counter (1+frame_skip per host VBlank). Deliver one NMI per
-    ; successful poll so the main loop can drain skip>0 between host presents.
-    ; If NMI is already active, drop the whole queue (same as pre-skip) to avoid
-    ; back-to-back NMIs when a host VBlank lands mid-handler.
+    ; No host latch — unlocked turbo only when skip>0.
+    ld a, [nes_frame_skip]
+    and a
+    ret z
+    jr .try_deliver
+
+.have_pending:
     ld a, [nes_ppuctrl]
     bit 7, a
     jr z, .consume_drop
 
     ld a, [nes_nmi_active]
     and a
-    jr nz, .drop_all
+    ret nz                 ; keep remaining count for after this NMI returns
 
     ld a, [nes_host_vblank_pending]
     dec a
     ld [nes_host_vblank_pending], a
+    jr nz, .try_deliver
+    ; Last latched slot consumed: if skip>0, stay unlocked for free-run.
+    ld a, [nes_frame_skip]
+    and a
+    jr z, .try_deliver
+    ld a, $01
+    ld [nes_host_vblank_pending], a
+
+.try_deliver:
+    ld a, [nes_ppuctrl]
+    bit 7, a
+    jr z, .no_deliver
+
+    ld a, [nes_nmi_active]
+    and a
+    ret nz
 
     ld a, $01
     ld [nes_nmi_active], a
@@ -880,15 +903,11 @@ nes_poll_nmi_hl:
     ld a, $01
     ret
 
-.drop_all:
-    xor a
-    ld [nes_host_vblank_pending], a
-    ret
-
 .consume_drop:
     ld a, [nes_host_vblank_pending]
     dec a
     ld [nes_host_vblank_pending], a
+.no_deliver:
     xor a
     ret
 
