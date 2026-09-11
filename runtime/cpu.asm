@@ -791,52 +791,30 @@ nes_rti_pop_hl:
     ld l, c
     ret
 
-; Deliver a translated NES NMI at compiler-selected safe points.
-; Input HL = NES PC to resume if interrupted.
+; Deliver a latched host VBlank as a translated NES NMI at compiler-selected
+; safe points. Input HL = NES PC to resume if interrupted.
 ; Output A = 1 when caller should jump to the translated NMI handler.
 ;
-; nes_host_vblank_pending is a drain counter set to (1+frame_skip) on host
-; VBlank. When frame_skip>0, turbo free-runs after the latch drains so NES
-; NMIs are not gated on the next host present.
+; Host VBlank sets nes_host_vblank_pending = 1 + nes_frame_skip. Each successful
+; poll consumes one. Do NOT free-run when skip>0: poll points sit at loop heads,
+; so unlocked re-entry would NMI forever and never execute the wait-loop body.
+; If NMI is already active, keep the remaining count (do not wipe it).
 nes_poll_nmi_hl:
     ld a, [nes_host_vblank_pending]
     and a
-    jr nz, .have_pending
-
-    ; No host latch — unlocked turbo only when skip>0.
-    ld a, [nes_frame_skip]
-    and a
     ret z
-    jr .try_deliver
 
-.have_pending:
     ld a, [nes_ppuctrl]
     bit 7, a
     jr z, .consume_drop
 
     ld a, [nes_nmi_active]
     and a
-    ret nz                 ; keep remaining count for after this NMI returns
+    ret nz
 
     ld a, [nes_host_vblank_pending]
     dec a
     ld [nes_host_vblank_pending], a
-    jr nz, .try_deliver
-    ; Last latched slot consumed: if skip>0, stay unlocked for free-run.
-    ld a, [nes_frame_skip]
-    and a
-    jr z, .try_deliver
-    ld a, $01
-    ld [nes_host_vblank_pending], a
-
-.try_deliver:
-    ld a, [nes_ppuctrl]
-    bit 7, a
-    jr z, .no_deliver
-
-    ld a, [nes_nmi_active]
-    and a
-    ret nz
 
     ld a, $01
     ld [nes_nmi_active], a
@@ -907,7 +885,6 @@ nes_poll_nmi_hl:
     ld a, [nes_host_vblank_pending]
     dec a
     ld [nes_host_vblank_pending], a
-.no_deliver:
     xor a
     ret
 

@@ -449,8 +449,6 @@ nes_controller_latch:
     jr nc, .skip_check_down
     inc a
     ld [nes_frame_skip], a
-    ld a, $01
-    ld [nes_host_vblank_pending], a
 .skip_check_down:
     bit 3, c                ; Down
     jr z, .skip_chords_store
@@ -465,10 +463,6 @@ nes_controller_latch:
     jr z, .skip_chords_store
     dec a
     ld [nes_frame_skip], a
-    and a
-    jr z, .skip_chords_store
-    ld a, $01
-    ld [nes_host_vblank_pending], a
 .skip_chords_store:
     ld a, d
     ld [nes_skip_chord_prev], a
