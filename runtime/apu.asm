@@ -32,6 +32,8 @@ nes_apu_sweep_period_hi: ds 1
 nes_apu_sweep_start_lo: ds 1  ; period at bend origin (~1 octave cap)
 nes_apu_sweep_start_hi: ds 1
 nes_apu_sweep_active: ds 1   ; 1 while pulse1 software sweep running
+nes_apu_sweep_muted:  ds 1   ; silenced by sweep unit; no retrigger until $4003
+nes_apu_sweep_last:   ds 1   ; last $4001 (detect mid-note mode change)
 ; Pulse2 software sweep (fireworks/blast etc.)
 nes_apu_sweep2_div:    ds 1
 nes_apu_sweep2_period_lo: ds 1
@@ -47,7 +49,7 @@ SECTION "NES APU code", ROM0
 ; ---------------------------------------------------------------------------
 nes_apu_init:
     ld hl, nes_apu_regs
-    ld b, $18 + 23         ; regs + prev/idx/lens/linear/lastvol/sweep1+2/frame_div
+    ld b, $18 + 25         ; regs + prev/idx/lens/linear/lastvol/sweep1+2/frame_div
     xor a
 .clear:
     ld [hli], a
@@ -149,11 +151,11 @@ nes_apu_update_pulse1:
     cp $00
     jr z, .do_vol_duty
     cp $01
-    jr z, .do_sweep
+    jp z, .do_sweep
     cp $02
-    jr z, .do_freq
+    jp z, .do_freq
     cp $03
-    jr z, .do_freq
+    jp z, .do_freq
     ret
 
 .do_vol_duty:
@@ -200,24 +202,40 @@ nes_apu_update_pulse1:
 .sweep_on:
     ; Reload divider from new sweep period bits always.
     ld a, [nes_apu_regs + $01]
+    ld b, a
     rrca
     rrca
     rrca
     rrca
     and $07
     ld [nes_apu_sweep_div], a
-    ; SMB rewrites $4001 mid-jump (parts 2/3). Keep working period — reseeding
-    ; from $4002/$4003 restarts the chirp and sends negate into the stratosphere.
     ld a, [nes_apu_sweep_active]
     and a
-    jr z, .sweep_first
-    ; New bend origin at current period so part 2/3 only travel ~1 octave.
+    jr z, .sweep_inactive
+    ; Mid-note $4001 (jump parts / death $94 every frame): keep period.
+    ; Only refresh bend origin when negate/shift actually change.
+    ld a, [nes_apu_sweep_last]
+    ld c, a
+    ld a, b
+    ld [nes_apu_sweep_last], a
+    xor c
+    and $0F
+    ret z
     ld a, [nes_apu_sweep_period_lo]
     ld [nes_apu_sweep_start_lo], a
     ld a, [nes_apu_sweep_period_hi]
     ld [nes_apu_sweep_start_hi], a
     ret
-.sweep_first:
+.sweep_inactive:
+    ; After sweep-unit mute, death music keeps writing $94 — do NOT retrigger
+    ; (that was the machine gun). Wait for $4003 length/freq reload.
+    ld a, [nes_apu_sweep_muted]
+    and a
+    ret nz
+    ld a, b
+    ld [nes_apu_sweep_last], a
+    xor a
+    ld [nes_apu_sweep_muted], a
     ld a, $01
     ld [nes_apu_sweep_active], a
     jp nes_apu_retrigger_p1
@@ -242,6 +260,15 @@ nes_apu_update_pulse1:
     ret
 
 nes_apu_retrigger_p1:
+    xor a
+    ld [nes_apu_sweep_muted], a
+    ld a, [nes_apu_regs + $01]
+    ld [nes_apu_sweep_last], a
+    bit 7, a
+    jr z, .retrig_seed
+    ld a, $01
+    ld [nes_apu_sweep_active], a
+.retrig_seed:
     ld a, [nes_apu_regs + $02]
     ld c, a
     ld a, [nes_apu_regs + $03]
@@ -614,6 +641,7 @@ nes_apu_update_status:
     ldh [rNR12], a
     ld [nes_apu_len_p1], a
     ld [nes_apu_sweep_active], a
+    ld [nes_apu_sweep_muted], a
     ld a, $10
     ld [nes_apu_last_nr12_p1], a
 .p2:
@@ -832,11 +860,12 @@ nes_apu_frame_tick:
     ld a, $10
     ld [nes_apu_last_nr12_p2], a
 .tri:
-    ; Linear counter ~240Hz when $4008 bit7 clear (4 clocks / VBlank).
+    ; Linear ~120Hz (2 / VBlank). Full 240Hz made overworld bass super-staccato;
+    ; underground still gets gaps, just a bit longer.
     ld a, [nes_apu_regs + $08]
     bit 7, a
     jr nz, .tri_len
-    ld b, 4
+    ld b, 2
 .lin_clk:
     ld a, [nes_apu_linear_tri]
     and a
@@ -884,6 +913,9 @@ nes_apu_clock_sweep_p1:
     ld a, [nes_apu_regs + $15]
     and $01
     ret z
+    ld a, [nes_apu_sweep_active]
+    and a
+    ret z                         ; post-mute freeze until $4003
     ld a, [nes_apu_regs + $01]
     bit 7, a
     ret z
@@ -975,33 +1007,12 @@ nes_apu_clock_sweep_p1:
     cp $08
     jp c, .mute
 .chk_span:
-    ; Cap pitch bend to ~1 octave from bend origin (stops 8-octave lasers).
+    ; Rising sweep only: mute if period < start/2 (jump stratosphere).
+    ; Falling sweeps (death $94, jump parts 1–2) use NES overflow mute alone —
+    ; a 1-octave fall cap was cutting death into machine-gun fragments.
     ld a, [nes_apu_regs + $01]
     bit 3, a
-    jr nz, .cap_rise
-    ; Falling sweep: mute if period > 2× start
-    ld a, [nes_apu_sweep_start_lo]
-    add a
-    ld e, a
-    ld a, [nes_apu_sweep_start_hi]
-    adc a
-    ld d, a
-    and $F8
-    jr z, .cmp_fall
-    ld de, $07FF
-.cmp_fall:
-    ld a, h
-    cp d
-    jr c, .ok_period
-    jr nz, .mute_span
-    ld a, l
-    cp e
-    jr c, .ok_period
     jr z, .ok_period
-.mute_span:
-    jp .mute
-.cap_rise:
-    ; Rising sweep: mute if period < start/2
     ld a, [nes_apu_sweep_start_lo]
     ld e, a
     ld a, [nes_apu_sweep_start_hi]
@@ -1010,11 +1021,11 @@ nes_apu_clock_sweep_p1:
     rr e
     ld a, h
     cp d
-    jr c, .mute_span
+    jp c, .mute
     jr nz, .ok_period
     ld a, l
     cp e
-    jr c, .mute_span
+    jp c, .mute
 .ok_period:
     ld a, l
     ld [nes_apu_sweep_period_lo], a
@@ -1035,13 +1046,14 @@ nes_apu_mute_p1_locked:
     xor a
     ldh [rNR12], a
     ld [nes_apu_sweep_active], a
+    ld a, $01
+    ld [nes_apu_sweep_muted], a
     ; Keep a non-zero high nibble in last_nr12 so the next $4000 envelope
     ; tick is NOT treated as silence→audible (which would restart jump).
+    ; Do NOT clear $4001 bit7 — death music rewrites $94 every frame; clearing
+    ; enable made each rewrite look like a fresh sweep and machine-gunned.
     ld a, $10
     ld [nes_apu_last_nr12_p1], a
-    ld a, [nes_apu_regs + $01]
-    and $7F
-    ld [nes_apu_regs + $01], a
     ret
 
 ; Pulse2 software sweep (fireworks/blast). Same rules as pulse1, ~1 octave cap.
