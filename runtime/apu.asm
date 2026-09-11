@@ -193,11 +193,12 @@ nes_apu_update_pulse1:
     ld a, [nes_apu_regs + $01]
     bit 7, a
     jr nz, .sweep_on
-    ; Sweep off ($7F etc.): mute only if an SFX sweep was actually running.
-    ; Music writes $7F on square1 harmony every note — must NOT silence the channel.
-    ld a, [nes_apu_sweep_active]
-    and a
-    jp nz, nes_apu_mute_p1_locked
+    ; Sweep off ($7F): stop the sweep unit only. Do NOT silence NR12 —
+    ; death music Dumps $7F then writes $94 every frame; muting here made
+    ; death silent. Jump/SFX end via $4015 or period mute instead.
+    xor a
+    ld [nes_apu_sweep_active], a
+    ld [nes_apu_sweep_muted], a
     ret
 .sweep_on:
     ; Reload divider from new sweep period bits always.
@@ -274,6 +275,23 @@ nes_apu_retrigger_p1:
     ld a, [nes_apu_regs + $03]
     and $07
     ld b, a
+    ; Bump/fireball (negate or shift<4): start 1 octave lower. Jump uses shift 7.
+    ld a, [nes_apu_regs + $01]
+    bit 7, a
+    jr z, .have_timer
+    bit 3, a
+    jr nz, .oct_down
+    ld a, [nes_apu_regs + $01]
+    and $07
+    cp $04
+    jr nc, .have_timer
+.oct_down:
+    sla c
+    rl b
+    ld a, b
+    and $07
+    ld b, a
+.have_timer:
     ld a, c
     ld [nes_apu_sweep_period_lo], a
     ld [nes_apu_sweep_start_lo], a
@@ -440,6 +458,7 @@ nes_apu_update_triangle:
     ; $400B also reloads the linear counter from $4008 (NES reload flag).
     ld a, [nes_apu_regs + $08]
     and $7F
+    call nes_apu_scale_linear
     ld [nes_apu_linear_tri], a
 .no_preload:
     ld a, [nes_apu_regs + $15]
@@ -461,11 +480,12 @@ nes_apu_update_triangle:
     ret
 
 .do_linear:
-    ; Load working linear counter from $4008. Vol 0 / reload 0 → silence
-    ; (underground bass rests on linear expiry, not only on next note).
+    ; Load working linear counter from $4008. Vol 0 / reload 0 → silence.
     ld a, [nes_apu_regs + $08]
     and $7F
+    call nes_apu_scale_linear
     ld [nes_apu_linear_tri], a
+    and a
     jr z, .lin_mute
     ld a, $80
     ldh [rNR30], a
@@ -860,24 +880,18 @@ nes_apu_frame_tick:
     ld a, $10
     ld [nes_apu_last_nr12_p2], a
 .tri:
-    ; Linear ~120Hz (2 / VBlank). Full 240Hz made overworld bass super-staccato;
-    ; underground still gets gaps, just a bit longer.
+    ; Linear ~60Hz (1 / VBlank). Faster clocks made bass staccato everywhere;
+    ; $4008=0 and length expiry still create rests.
     ld a, [nes_apu_regs + $08]
     bit 7, a
     jr nz, .tri_len
-    ld b, 2
-.lin_clk:
     ld a, [nes_apu_linear_tri]
     and a
     jr z, .tri_len
     dec a
     ld [nes_apu_linear_tri], a
-    jr nz, .lin_next
+    jr nz, .tri_len
     ldh [rNR30], a                ; A=0 — gap before next bass note
-    jr .tri_len
-.lin_next:
-    dec b
-    jr nz, .lin_clk
 .tri_len:
     ld a, [nes_apu_regs + $08]
     bit 7, a
@@ -1007,9 +1021,8 @@ nes_apu_clock_sweep_p1:
     cp $08
     jp c, .mute
 .chk_span:
-    ; Rising sweep only: mute if period < start/2 (jump stratosphere).
-    ; Falling sweeps (death $94, jump parts 1–2) use NES overflow mute alone —
-    ; a 1-octave fall cap was cutting death into machine-gun fragments.
+    ; Rising sweep: mute if period < start/4 (~2 octaves). start/2 killed
+    ; fireball (shift 1 halves every step) in one frame.
     ld a, [nes_apu_regs + $01]
     bit 3, a
     jr z, .ok_period
@@ -1017,6 +1030,8 @@ nes_apu_clock_sweep_p1:
     ld e, a
     ld a, [nes_apu_sweep_start_hi]
     ld d, a
+    srl d
+    rr e
     srl d
     rr e
     ld a, h
@@ -1205,6 +1220,14 @@ nes_apu_clock_sweep_p2:
     ld [nes_apu_regs + $05], a
     ret
 
+; Double triangle linear reload (cap 127) so $1F notes sustain through typical
+; note lengths at our ~60Hz linear clock without going fully legato forever.
+nes_apu_scale_linear:
+    add a
+    ret nc
+    ld a, $7F
+    ret
+
 ; Official NES length counter table (bits 3-7 of $4003/$4007/$400B/$400F).
 nes_apu_length_table:
     db 10,254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14
@@ -1212,6 +1235,6 @@ nes_apu_length_table:
 
 ; NES noise period index 0..F → rough NR43 encoding (lower = higher pitch).
 nes_apu_noise_nr43:
-    ; Brighter table — kill/kick/fireball noise was ~1 octave too dull.
-    db $F7, $F3, $E3, $D3, $C3, $B3, $A3, $93
-    db $83, $73, $63, $53, $43, $33, $23, $13
+    ; One octave up from prior table (stage percussion was dull).
+    db $E7, $E3, $D3, $C3, $B3, $A3, $93, $83
+    db $73, $63, $53, $43, $33, $23, $13, $03
