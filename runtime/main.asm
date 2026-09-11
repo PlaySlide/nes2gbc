@@ -140,6 +140,22 @@ nes_gbc_vblank_isr:
     jp .done
 
 .commit_ready:
+    ; Host render frameskip: when skip>0, fully present only 1 of (skip+1)
+    ; host frames. Skipped presents still latch pending below so NES can run
+    ; ahead — without free-running NMIs (that starved the display).
+    ld a, [nes_frame_skip]
+    and a
+    jr z, .commit_present
+    ld a, [nes_render_phase]
+    and a
+    jr z, .commit_reload_phase
+    dec a
+    ld [nes_render_phase], a
+    jp .scroll_done
+.commit_reload_phase:
+    ld a, [nes_frame_skip]
+    ld [nes_render_phase], a
+.commit_present:
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_COMMIT
     ld [nes_diag_event_flags], a
@@ -525,6 +541,7 @@ Start:
     ld [nes_view_select_prev], a
     ld [nes_frame_skip], a
     ld [nes_skip_chord_prev], a
+    ld [nes_render_phase], a
     ld [nes_turbo_yield], a
     ld [nes_bg_pattern_committed], a
     ld [nes_nametable_stage_used], a
