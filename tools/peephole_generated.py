@@ -16,6 +16,45 @@ def _code(line: str) -> str:
     return line.split(";", 1)[0].strip()
 
 
+def _inline_compare_helpers(out: list[str]) -> int:
+    """Inline the exact release semantics of nes_compare_a_e.
+
+    The earlier broad CMP experiment changed register/liveness behavior along
+    with inlining and regressed games. This prototype intentionally does not:
+    it leaves A holding the subtraction result exactly like the runtime helper
+    and publishes C/Z/N in the same order. PROFILE builds retain the helper so
+    the existing compare counter remains meaningful.
+    """
+
+    inlined = 0
+    for i in range(len(out)):
+        if _code(out[i]) != "call nes_compare_a_e":
+            continue
+        indent = out[i][: len(out[i]) - len(out[i].lstrip())]
+        out[i] = (
+            "IF DEF(NES2GBC_PROFILE)\n"
+            f"{indent}call nes_compare_a_e\n"
+            "ELSE\n"
+            f"{indent}; inlined exact nes_compare_a_e\n"
+            f"{indent}ld d, a\n"
+            f"{indent}sub e\n"
+            f"{indent}ld c, a\n"
+            f"{indent}ld a, d\n"
+            f"{indent}cp e\n"
+            f"{indent}ld a, $00\n"
+            f"{indent}jr c, :+\n"
+            f"{indent}inc a\n"
+            ":\n"
+            f"{indent}ldh [nes_c_shadow], a\n"
+            f"{indent}ld a, c\n"
+            f"{indent}ldh [nes_z_shadow], a\n"
+            f"{indent}ldh [nes_n_shadow], a\n"
+            "ENDC\n"
+        )
+        inlined += 1
+    return inlined
+
+
 def _fuse_shadow_reloads(out: list[str]) -> int:
     fused = 0
 
@@ -50,9 +89,8 @@ def _fuse_shadow_reloads(out: list[str]) -> int:
             if test != "bit 7, a":
                 continue
 
-        # Require the exact final two flag publications from emit_update_nz;
-        # no helper, load, arithmetic op, or other possible A clobber may sit
-        # between publication and the branch reload.
+        # Require the exact final two flag publications from emit_update_nz or
+        # the inlined compare helper; no possible A clobber may intervene.
         k = i - 1
         while k >= 0 and not _code(out[k]):
             k -= 1
@@ -72,13 +110,55 @@ def _fuse_shadow_reloads(out: list[str]) -> int:
     return fused
 
 
+def _remove_redundant_zero_retests(out: list[str]) -> int:
+    """Drop `and a` when a nearby producer already set GB Z from the same A.
+
+    This catches DEX/DEY/INX/INY and immediate logical-result branches. We walk
+    backward only across stores that provably preserve LR35902 flags, then
+    require a producer whose hardware Z flag is exactly `(A == 0)`.
+    """
+
+    removed = 0
+    producer_re = re.compile(
+        r"(?:inc a|dec a|and (?:\$[0-9A-Fa-f]{2}|[bcdehl])|"
+        r"or (?:\$[0-9A-Fa-f]{2}|[bcdehl])|xor (?:\$[0-9A-Fa-f]{2}|[bcdehl]))"
+    )
+    flag_preserving_store_re = re.compile(
+        r"(?:ldh \[(?:nes_a|nes_x|nes_y|nes_z_shadow|nes_n_shadow)\], a|"
+        r"ld \[\$C[0-9A-Fa-f]{3}\], a)"
+    )
+
+    for i in range(len(out)):
+        if _code(out[i]) != "and a":
+            continue
+
+        k = i - 1
+        while k >= 0:
+            code = _code(out[k])
+            if not code:
+                k -= 1
+                continue
+            if flag_preserving_store_re.fullmatch(code):
+                k -= 1
+                continue
+            break
+        if k < 0 or not producer_re.fullmatch(_code(out[k])):
+            continue
+
+        indent = out[i][: len(out[i]) - len(out[i].lstrip())]
+        out[i] = f"{indent}; fused zero test: producer already set GB Z\n"
+        removed += 1
+
+    return removed
+
+
 def _collapse_backward_branch_pairs(out: list[str]) -> int:
     """Turn `jr !cond, :+ ; jr old_label ; :` into one conditional JR.
 
     We only do this when `old_label` has already appeared in the assembly. The
     original second instruction is already a linked `jr`, so its backward target
     is in range; moving the conditional JR two bytes earlier makes a backward
-    displacement *less* negative and therefore cannot create a range failure.
+    displacement less negative and therefore cannot create a range failure.
     This targets exactly the hot loop-backedge shape without guessing linker
     distances for forward branches or cross-bank transfers.
     """
@@ -125,11 +205,13 @@ def _collapse_backward_branch_pairs(out: list[str]) -> int:
     return collapsed
 
 
-def optimize_lines(lines: list[str]) -> tuple[list[str], int, int]:
+def optimize_lines(lines: list[str]) -> tuple[list[str], int, int, int, int]:
     out = list(lines)
+    compares = _inline_compare_helpers(out)
     shadow_fused = _fuse_shadow_reloads(out)
+    zero_retests = _remove_redundant_zero_retests(out)
     backedges = _collapse_backward_branch_pairs(out)
-    return out, shadow_fused, backedges
+    return out, compares, shadow_fused, zero_retests, backedges
 
 
 def main() -> int:
@@ -138,11 +220,13 @@ def main() -> int:
     args = parser.parse_args()
 
     original = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    optimized, shadow_fused, backedges = optimize_lines(original)
+    optimized, compares, shadow_fused, zero_retests, backedges = optimize_lines(original)
     args.asm.write_text("".join(optimized), encoding="utf-8")
     print(
         "peephole: "
+        f"inlined {compares} compares, "
         f"fused {shadow_fused} immediate Z/N shadow reloads, "
+        f"removed {zero_retests} redundant zero retests, "
         f"collapsed {backedges} backward conditional branches"
     )
     return 0
