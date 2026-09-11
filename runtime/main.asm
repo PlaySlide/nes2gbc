@@ -103,6 +103,29 @@ nes_gbc_vblank_isr:
     ld [nes_view_armed_y], a
 
 .early_split_apply:
+    ; The first vertical-mirroring split arrives before $9C00 has been turned
+    ; into the synthesized 512px playfield. Keep presenting the known-good top
+    ; map while that hidden surface is prepared; otherwise the old stitch code
+    ; disabled LCD for four host frames and produced the large white startup
+    ; flash seen in 1111/1112/1113.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .early_split_arm
+    ld a, [nes_hstitch_valid]
+    cp $01
+    jr z, .early_split_arm
+
+    call nes_video_apply_split_top_map
+    ldh a, [nes_split_armed_top_x]
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_top_y]
+    ldh [rSCY], a
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    jp .early_split_done
+
+.early_split_arm:
     call nes_video_apply_split_top_map
     ldh a, [nes_split_armed_top_x]
     ldh [rSCX], a
@@ -178,6 +201,22 @@ nes_gbc_vblank_isr:
 .bg_publish:
     ; Preserve the proven background publication order.
     call nes_video_flush_nametable_queue_atomic
+
+    ; On first activation of the SMB-style vertical stitch, build $9C00 while
+    ; it is still hidden behind the fixed $9800 top map. The helper deliberately
+    ; leaves hstitch_valid=$02 until the end of this ISR so no later control
+    ; commit can expose the new map halfway through the current scanout.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .bg_stitch_update
+    ldh a, [nes_split_active]
+    and a
+    jr z, .bg_stitch_update
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .bg_stitch_update
+    call nes_gbc_prepare_initial_hstitch
+.bg_stitch_update:
     call nes_video_update_horizontal_stitch
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
@@ -250,6 +289,14 @@ nes_gbc_vblank_isr:
     ldh a, [nes_split_active]
     and a
     jr z, .ctrl_done
+
+    ; hstitch_valid=$02 means this ISR just prepared the first stitched map with
+    ; LCD still running. Keep that completed map hidden until the next VBlank,
+    ; when the normal line-32 split can expose it from the top of a clean frame.
+    ld a, [nes_hstitch_valid]
+    cp $02
+    jr z, .ctrl_reassert_top
+
     ldh a, [rSTAT]
     bit 6, a
     jr nz, .ctrl_reassert_top
@@ -298,6 +345,20 @@ nes_gbc_vblank_isr:
     ; single-scroll vertical nametable seam.
     xor a
     ldh [nes_seam_active], a
+
+    ; If the hidden initial stitched map was completed during this ISR, make it
+    ; eligible for the *next* VBlank only. The current frame stays entirely on
+    ; the top/backing map instead of changing map ownership halfway down screen.
+    ld a, [nes_hstitch_valid]
+    cp $02
+    jr nz, .scroll_split_ready
+    ld a, $01
+    ld [nes_hstitch_valid], a
+    call nes_video_apply_split_top_map
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+.scroll_split_ready:
 
     ; The raster trigger was armed at ISR entry. Do not switch back to the top
     ; map here if publication has already overrun line 32; that was the source
@@ -453,6 +514,69 @@ nes_diag_snapshot_frame:
 
     xor a
     ld [nes_diag_event_flags], a
+    ret
+
+; Build the first SMB-style horizontal stitch without ever clearing LCDC.7.
+; $9800 remains on screen for the whole operation, while the future $9C00
+; playfield is filled row-by-row in legal VRAM windows. The work still costs a
+; few host frames, but they now repeat the previous good frame instead of
+; becoming a conspicuous white flash.
+nes_gbc_prepare_initial_hstitch:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_FULL_REBUILD
+    ld [nes_diag_event_flags], a
+
+    ld a, [nes_hstitch_full_rebuilds]
+    inc a
+    ld [nes_hstitch_full_rebuilds], a
+    ld a, $01
+    ld [nes_hstitch_seen], a
+
+    ; Match nes_video_update_horizontal_stitch's coarse world key exactly:
+    ; ((PPUCTRL.bit0 XOR carry) << 5) | (effective_x >> 3).
+    ldh a, [nes_split_bottom_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    ld c, a
+    ld b, $00
+    jr nc, .prepare_no_page_carry
+    inc b
+.prepare_no_page_carry:
+
+    ldh a, [nes_split_bottom_ctrl]
+    and $01
+    xor b
+    and $01
+    swap a
+    add a
+    ld b, a
+    ld a, c
+    srl a
+    srl a
+    srl a
+    or b
+    ld [nes_hstitch_key], a
+
+    xor a
+    ld [nes_hstitch_copy_start], a
+.prepare_columns:
+    ld a, [nes_hstitch_copy_start]
+    call nes_video_refresh_stitch_column
+    ld a, [nes_hstitch_copy_start]
+    inc a
+    ld [nes_hstitch_copy_start], a
+    cp $20
+    jr c, .prepare_columns
+
+    xor a
+    ldh [rVBK], a
+    ld [nes_hstitch_dirty], a
+
+    ; 2 = fully built but intentionally hidden for the remainder of this ISR.
+    ; .scroll_split converts it to the ordinary ready value 1 before RETI.
+    ld a, $02
+    ld [nes_hstitch_valid], a
     ret
 
 Start:
