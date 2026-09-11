@@ -12,6 +12,11 @@ DEF NES_DIAG_EVENT_BG_BANK_REWRITE EQU $20
 DEF NES_DIAG_EVENT_PALETTE_COMMIT  EQU $40
 DEF NES_DIAG_EVENT_CTRL_COMMIT     EQU $80
 
+; NES $0000-$07FF (and mirrors through $1FFF) live here. Generated code and
+; cpu.asm address this region directly; do not allocate host vars into it.
+SECTION "NES internal RAM", WRAM0[$C000]
+nes_cpu_ram: ds $0800
+
 SECTION "NES renderer diagnostic ring", WRAM0[$C800]
 nes_diag_ring: ds $10
 
@@ -194,10 +199,19 @@ nes_fault_kind:            ds 1   ; $FFFE, $01 = nes_unimplemented
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
 
-SECTION "Host native stack reserve", WRAM0[$CBA0]
+; Host frame-skip debug controls. Parked at the deep end of the native stack
+; reserve (SP grows down from $D000, so $CBA0 is touched last). Never place
+; these in $C000-$C7FF — that mirror is NES internal RAM (see cpu.asm).
+SECTION "NES frame skip state", WRAM0[$CBA0]
+nes_frame_skip:        ds 1 ; 0=full presents; 1..7 = present 1 of (skip+1) host frames
+nes_skip_chord_prev:   ds 1 ; bit0=Sel+Up held, bit1=Sel+Down held
+nes_render_phase:      ds 1 ; counts down skipped presents; 0 = present this host VB
+nes_turbo_yield:       ds 1 ; after NMI, one poll miss so wait-loop body runs
+
+SECTION "Host native stack reserve", WRAM0[$CBA4]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA0-$CFFF leaves 1120 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $0460
+; $CBA4-$CFFF leaves 1116 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $045C
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32

@@ -781,6 +781,9 @@ nes_brk_hl:
 nes_rti_pop_hl:
     xor a
     ld [nes_nmi_active], a
+    ; One poll miss after NMI so wait-loop bodies run between turbo frames.
+    ld a, $01
+    ld [nes_turbo_yield], a
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -794,23 +797,35 @@ nes_rti_pop_hl:
 ; Deliver a latched host VBlank as a translated NES NMI at compiler-selected
 ; safe points. Input HL = NES PC to resume if interrupted.
 ; Output A = 1 when caller should jump to the translated NMI handler.
+;
+; Host VBlank sets pending = 1 + frame_skip. No free-run when pending is empty:
+; that starved presents and looked frozen until skip returned to 0.
+; RTI sets nes_turbo_yield so the next poll misses once (wait-loop body runs
+; between multi-NMI drains). Busy-NMI keeps pending but returns A=0.
 nes_poll_nmi_hl:
+    ld a, [nes_turbo_yield]
+    and a
+    jr z, .no_yield
+    xor a
+    ld [nes_turbo_yield], a
+    ret
+
+.no_yield:
     ld a, [nes_host_vblank_pending]
     and a
     ret z
 
-    ; Consume the host event. If NES NMI is disabled or already active, this
-    ; frame is intentionally dropped instead of creating back-to-back NMIs.
-    xor a
-    ld [nes_host_vblank_pending], a
-
     ld a, [nes_ppuctrl]
     bit 7, a
-    jr z, .no_nmi
+    jr z, .consume_drop
 
     ld a, [nes_nmi_active]
     and a
-    jr nz, .no_nmi
+    jr nz, .busy_keep_pending
+
+    ld a, [nes_host_vblank_pending]
+    dec a
+    ld [nes_host_vblank_pending], a
 
     ld a, $01
     ld [nes_nmi_active], a
@@ -877,7 +892,16 @@ nes_poll_nmi_hl:
     ld a, $01
     ret
 
-.no_nmi:
+.busy_keep_pending:
+    ; Leave pending intact for after this NMI returns, but A must be 0 so the
+    ; poll stub does not treat this as "enter NMI" (that nested forever).
+    xor a
+    ret
+
+.consume_drop:
+    ld a, [nes_host_vblank_pending]
+    dec a
+    ld [nes_host_vblank_pending], a
     xor a
     ret
 
