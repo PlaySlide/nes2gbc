@@ -178,7 +178,6 @@ nes_gbc_vblank_isr:
 .bg_publish:
     ; Preserve the proven background publication order.
     call nes_video_flush_nametable_queue_atomic
-    call nes_gbc_try_fast_initial_hstitch
     call nes_video_update_horizontal_stitch
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
@@ -317,103 +316,6 @@ nes_gbc_vblank_isr:
     pop bc
     pop af
     reti
-
-; Fast path for the one initial SMB stitch state proven by the .mvl traces:
-; mapper 0, 32 KiB PRG, vertical mirroring, first stitch activation, coarse
-; world key 0. At that exact point the desired 30-row stitched surface is
-; byte-for-byte the already-correct $9800 map in both VRAM banks. Copy it
-; directly instead of recomputing 960 tile/palette cells one at a time.
-nes_gbc_try_fast_initial_hstitch:
-    ld a, [nes_hstitch_valid]
-    and a
-    ret nz
-    ld a, [nes_mapper]
-    and a
-    ret nz
-    ld a, [nes_mirroring]
-    cp $01
-    ret nz
-    ld a, [nes_prg_16k_mirror]
-    and a
-    ret nz
-    ldh a, [nes_split_active]
-    and a
-    ret z
-
-    ; Compute the same 0..63 coarse world key as
-    ; nes_video_update_horizontal_stitch and accept only key 0.
-    ldh a, [nes_split_bottom_x]
-    ld b, a
-    ldh a, [nes_view_x]
-    add b
-    ld c, a
-    ld b, $00
-    jr nc, .key_no_carry
-    inc b
-.key_no_carry:
-    ldh a, [nes_split_bottom_ctrl]
-    and $01
-    xor b
-    and $01
-    swap a
-    add a
-    ld b, a
-    ld a, c
-    srl a
-    srl a
-    srl a
-    or b
-    ret nz
-
-    ; Keep the old full-rebuild diagnostics/state accounting. Only the inner
-    ; implementation changes from per-cell reconstruction to an exact map copy.
-    ld a, [nes_diag_event_flags]
-    or NES_DIAG_EVENT_FULL_REBUILD
-    ld [nes_diag_event_flags], a
-    ld a, [nes_hstitch_full_rebuilds]
-    inc a
-    ld [nes_hstitch_full_rebuilds], a
-    xor a
-    ld [nes_hstitch_key], a
-
-    ; This is still the proven LCD-off publication boundary. The copy is only
-    ; 960 bytes per bank and does no palette derivation or VRAM-mode waiting.
-    ldh a, [rLCDC]
-    ld [nes_saved_lcdc], a
-    and $7F
-    ldh [rLCDC], a
-
-    xor a
-    ldh [rVBK], a
-    ld hl, $9800
-    ld de, $9C00
-    ld bc, $03C0
-    call nes_video_copy
-
-    ld a, $01
-    ldh [rVBK], a
-    ld hl, $9800
-    ld de, $9C00
-    ld bc, $03C0
-    call nes_video_copy
-
-    ; Match the scratch/result state left by the original 32-column rebuild.
-    xor a
-    ldh [rVBK], a
-    ld [nes_hstitch_dirty], a
-    ld [nes_hstitch_copy_len], a
-    ldh a, [nes_split_bottom_ctrl]
-    and $10
-    srl a
-    ld [nes_hstitch_copy_skip], a
-    ld a, $20
-    ld [nes_hstitch_copy_start], a
-    ld a, $01
-    ld [nes_hstitch_valid], a
-
-    ld a, [nes_saved_lcdc]
-    ldh [rLCDC], a
-    ret
 
 nes_gbc_stat_isr:
     push af
