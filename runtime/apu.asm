@@ -20,6 +20,7 @@ nes_apu_len_p1:     ds 1
 nes_apu_len_p2:     ds 1
 nes_apu_len_tri:    ds 1
 nes_apu_len_noi:    ds 1
+nes_apu_linear_tri: ds 1   ; working triangle linear counter
 ; Last written NRx2 (GB volume is write-only; track silence→audible).
 nes_apu_last_nr12_p1: ds 1
 nes_apu_last_nr12_p2: ds 1
@@ -46,7 +47,7 @@ SECTION "NES APU code", ROM0
 ; ---------------------------------------------------------------------------
 nes_apu_init:
     ld hl, nes_apu_regs
-    ld b, $18 + 22         ; regs + prev/idx/lens/lastvol/sweep1+2/frame_div
+    ld b, $18 + 23         ; regs + prev/idx/lens/linear/lastvol/sweep1+2/frame_div
     xor a
 .clear:
     ld [hli], a
@@ -409,6 +410,10 @@ nes_apu_update_triangle:
     ld a, [nes_apu_regs + $0B]
     ld hl, nes_apu_len_tri
     call nes_apu_load_length
+    ; $400B also reloads the linear counter from $4008 (NES reload flag).
+    ld a, [nes_apu_regs + $08]
+    and $7F
+    ld [nes_apu_linear_tri], a
 .no_preload:
     ld a, [nes_apu_regs + $15]
     and $04
@@ -429,9 +434,11 @@ nes_apu_update_triangle:
     ret
 
 .do_linear:
-    ; NR32 from linear reload; keep DAC on if reload nonzero.
+    ; Load working linear counter from $4008. Vol 0 / reload 0 → silence
+    ; (underground bass rests on linear expiry, not only on next note).
     ld a, [nes_apu_regs + $08]
     and $7F
+    ld [nes_apu_linear_tri], a
     jr z, .lin_mute
     ld a, $80
     ldh [rNR30], a
@@ -461,8 +468,8 @@ nes_apu_update_triangle:
     ldh [rNR30], a
     ld a, $FF
     ldh [rNR31], a
-    ld a, [nes_apu_regs + $08]
-    and $7F
+    ld a, [nes_apu_linear_tri]
+    and a
     jr z, .vol_mute
     ld a, $20
     jr .vol_write
@@ -624,6 +631,7 @@ nes_apu_update_status:
     xor a
     ldh [rNR30], a
     ld [nes_apu_len_tri], a
+    ld [nes_apu_linear_tri], a
 .noi:
     bit 3, c
     ret nz
@@ -824,6 +832,24 @@ nes_apu_frame_tick:
     ld a, $10
     ld [nes_apu_last_nr12_p2], a
 .tri:
+    ; Linear counter ~240Hz when $4008 bit7 clear (4 clocks / VBlank).
+    ld a, [nes_apu_regs + $08]
+    bit 7, a
+    jr nz, .tri_len
+    ld b, 4
+.lin_clk:
+    ld a, [nes_apu_linear_tri]
+    and a
+    jr z, .tri_len
+    dec a
+    ld [nes_apu_linear_tri], a
+    jr nz, .lin_next
+    ldh [rNR30], a                ; A=0 — gap before next bass note
+    jr .tri_len
+.lin_next:
+    dec b
+    jr nz, .lin_clk
+.tri_len:
     ld a, [nes_apu_regs + $08]
     bit 7, a
     jr nz, .noi
