@@ -179,11 +179,9 @@ nes_apu_update_pulse1:
     ld a, b
     and $F0
     ret z
-    ; During an active NES sweep, volume table ticks must not retrigger
-    ; (that restarts the chirp from the bottom forever after a mute).
-    ld a, [nes_apu_regs + $01]
-    bit 7, a
-    ret nz
+    ; Note: do NOT block silence→audible while sweep is on. Flagpole dumps
+    ; $4001 before $4000; blocking left NR12 silent with no trigger.
+    ; Jump restart-after-mute is prevented by last_nr12=$10 poison instead.
     jp nes_apu_retrigger_p1
 
 .do_sweep:
@@ -211,24 +209,31 @@ nes_apu_update_pulse1:
     rrca
     and $07
     ld [nes_apu_sweep_div], a
-    ; True 0→1 enable (flagpole $BC after music $7F): always start, clear mute.
     ld a, [nes_apu_sweep_last]
     ld c, a                       ; C = previous $4001
     bit 7, a
     ld a, b
     ld [nes_apu_sweep_last], a
     jr nz, .sweep_was_on
+    ; 0→1 enable: arm sweep from current timer, do NOT retrigger here —
+    ; $4000/$4003 follow and must apply volume (flagpole order is $4001 then $4000).
+.sweep_arm:
     xor a
     ld [nes_apu_sweep_muted], a
     ld a, $01
     ld [nes_apu_sweep_active], a
-    jp nes_apu_retrigger_p1
+    ld a, [nes_apu_regs + $02]
+    ld [nes_apu_sweep_period_lo], a
+    ld [nes_apu_sweep_start_lo], a
+    ld a, [nes_apu_regs + $03]
+    and $07
+    ld [nes_apu_sweep_period_hi], a
+    ld [nes_apu_sweep_start_hi], a
+    ret
 .sweep_was_on:
     ld a, [nes_apu_sweep_active]
     and a
     jr z, .sweep_inactive
-    ; Mid-note rewrite (jump parts / death $94): keep period; refresh origin
-    ; only when negate/shift change.
     ld a, b
     xor c
     and $0F
@@ -239,8 +244,7 @@ nes_apu_update_pulse1:
     ld [nes_apu_sweep_start_hi], a
     ret
 .sweep_inactive:
-    ; Enabled in shadow but frozen after period-mute: death keeps writing $94.
-    ; Stay quiet until $4003 (retrigger clears muted).
+    ; Period-muted but enable still on (death $94 spam): stay quiet until $4003.
     ret
 
 .do_freq:
@@ -277,6 +281,24 @@ nes_apu_retrigger_p1:
     ld a, [nes_apu_regs + $03]
     and $07
     ld b, a
+    ; Head-bump ($93, falling, shift 3) ~2 octaves sharp vs NES — drop timer×4.
+    ; Jump uses shift 7; fireball/flagpole are negate (skip).
+    ld a, [nes_apu_regs + $01]
+    bit 7, a
+    jr z, .have_timer
+    bit 3, a
+    jr nz, .have_timer
+    and $07
+    cp $04
+    jr nc, .have_timer
+    sla c
+    rl b
+    sla c
+    rl b
+    ld a, b
+    and $07
+    ld b, a
+.have_timer:
     ld a, c
     ld [nes_apu_sweep_period_lo], a
     ld [nes_apu_sweep_start_lo], a
@@ -1008,11 +1030,14 @@ nes_apu_clock_sweep_p1:
     cp $08
     jp c, .mute
 .chk_span:
-    ; Rising sweep: mute if period < start/4 (~2 octaves). start/2 killed
-    ; fireball (shift 1 halves every step) in one frame.
+    ; Rising sweep octave cap only for gentler shifts (jump). Fireball shift 1
+    ; halves every step — cap made it a click; use NES period < 8 only.
     ld a, [nes_apu_regs + $01]
     bit 3, a
     jr z, .ok_period
+    and $07
+    cp $03
+    jr c, .ok_period
     ld a, [nes_apu_sweep_start_lo]
     ld e, a
     ld a, [nes_apu_sweep_start_hi]
