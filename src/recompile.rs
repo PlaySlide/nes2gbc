@@ -267,15 +267,33 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     emit_pc_dispatch(&mut out, options.reset);
     writeln!(out).unwrap();
 
-    for addr in &selected {
-        let block = graph.blocks.get(addr).expect("selected block must exist");
-        let bank = banks[addr];
+    let selected_list: Vec<u16> = selected.iter().copied().collect();
+    // Defer fallthrough jumps so consecutive same-bank blocks can share a
+    // SECTION and fall through in place instead of paying `jp nes_XXXX`.
+    let mut pending_fallthrough: Option<(u16 /*target*/, u16 /*from_bank*/)> = None;
 
-        writeln!(
-            out,
-            "SECTION \"NES block {addr:04X}\", ROMX, BANK[{bank}]"
-        )
-        .unwrap();
+    for (idx, addr) in selected_list.iter().copied().enumerate() {
+        let block = graph.blocks.get(&addr).expect("selected block must exist");
+        let bank = banks[&addr];
+
+        let continue_fallthrough = matches!(
+            pending_fallthrough,
+            Some((target, from_bank)) if target == addr && from_bank == bank
+        );
+        if continue_fallthrough {
+            pending_fallthrough = None;
+        } else {
+            if let Some((target, from_bank)) = pending_fallthrough.take() {
+                emit_known_target(&mut out, target, from_bank, &banks);
+                writeln!(out).unwrap();
+            }
+            writeln!(
+                out,
+                "SECTION \"NES block {addr:04X}\", ROMX, BANK[{bank}]"
+            )
+            .unwrap();
+        }
+
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
@@ -361,10 +379,22 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                     .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                     .and_then(|edge| edge.target)
                 {
-                    emit_known_target(&mut out, target, bank, &banks);
+                    let next = selected_list.get(idx + 1).copied();
+                    if next == Some(target) && banks.get(&target) == Some(&bank) {
+                        // Next emitted block is this fallthrough and shares our
+                        // bank — keep the section open and fall through.
+                        pending_fallthrough = Some((target, bank));
+                    } else {
+                        emit_known_target(&mut out, target, bank, &banks);
+                    }
                 }
             }
         }
+        writeln!(out).unwrap();
+    }
+
+    if let Some((target, from_bank)) = pending_fallthrough.take() {
+        emit_known_target(&mut out, target, from_bank, &banks);
         writeln!(out).unwrap();
     }
 
@@ -556,5 +586,25 @@ mod tests {
         assert!(asm.contains("SECTION \"NES dispatch table 0\", ROMX[$4000], BANK[32]"));
         assert!(asm.contains("db BANK(nes_8000), $00"));
         assert!(asm.contains("dw nes_8000"));
+    }
+
+    #[test]
+    fn fallthrough_chains_share_section_without_jp() {
+        // LDA #$00 / BEQ +1 / RTS / RTS → $8000 falls through into $8004.
+        let mut prg = vec![0xEA; 0x8000];
+        prg[0..6].copy_from_slice(&[0xA9, 0x00, 0xF0, 0x01, 0x60, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg(
+            &graph,
+            EmitOptions {
+                reset: 0x8000,
+                max_blocks: Some(8),
+                debug_trace: false,
+            },
+        );
+        assert!(asm.contains("SECTION \"NES block 8000\", ROMX, BANK["));
+        assert!(asm.contains("nes_8004:"));
+        assert!(!asm.contains("SECTION \"NES block 8004\""));
+        assert!(!asm.contains("jp nes_8004"));
     }
 }
