@@ -33,6 +33,7 @@ generate:
 		if [ "$(TRACE)" != "1" ]; then python3 tools/mirror_indexed_prg_tables.py runtime/generated.asm "$(ROM)"; fi; \
 		python3 tools/index_math_generated.py runtime/generated.asm; \
 		python3 tools/inline_ppustatus_generated.py runtime/generated.asm; \
+		python3 tools/specialize_sprite0_poll.py runtime/generated.asm; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 
