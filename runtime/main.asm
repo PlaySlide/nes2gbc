@@ -393,7 +393,7 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
     cp $03
     jr z, .prep_ready
     cp $02
-    jr z, .prep_columns
+    jp z, .prep_columns
     and a
     jr z, .prep_begin_check_map
     xor a
@@ -404,7 +404,7 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
     ; boundary, so queue publication and the first real split begin together.
     ld a, [nes_nmi_active]
     and a
-    jr nz, .prep_hold
+    jp nz, .prep_hold
     ld a, $01
     ld [nes_hstitch_valid], a
     xor a
