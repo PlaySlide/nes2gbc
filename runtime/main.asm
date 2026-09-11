@@ -11,6 +11,12 @@ SECTION "Header Entry", ROM0[$0100]
     nop
     jp Start
 
+; C817 is the remaining free byte beside the hidden-map change counter at C816.
+; Remember whether the current proven SMB stitch already consumed its one extra
+; duplicate-NMI grace. This prevents the host-side grace from relatching forever.
+SECTION "SMB split grace state", WRAM0[$C817]
+nes_split_retire_grace_used: ds 1
+
 SECTION "Runtime", ROM0[$0150]
 nes_gbc_vblank_isr:
     push af
@@ -28,11 +34,22 @@ nes_gbc_vblank_isr:
     ; Ice Climber, but the SMB video logs show that this creates a 4-17 frame
     ; hole where the physical backing map (future pipes/clouds) is exposed.
     ;
-    ; Give an already-valid stitched renderer exactly one more NES-NMI chance:
-    ; relatch the split only while BG+OBJ rendering is still enabled, and seed
-    ; the duplicate streak at 2. A third duplicate will therefore retire it
-    ; normally, while the next genuine distinct pair resets the streak to zero.
+    ; Give an already-valid stitched renderer exactly one more NES-NMI chance.
+    ; The one-shot flag remains set if a third duplicate really retires it; a
+    ; later genuine distinct split has duplicate_streak=0 and clears the flag.
     ldh a, [nes_split_active]
+    and a
+    jr z, .split_grace_consider
+
+    ld a, [nes_split_duplicate_streak]
+    and a
+    jr nz, .split_grace_done
+    xor a
+    ld [nes_split_retire_grace_used], a
+    jr .split_grace_done
+
+.split_grace_consider:
+    ld a, [nes_split_retire_grace_used]
     and a
     jr nz, .split_grace_done
     ld a, [nes_hstitch_valid]
@@ -46,6 +63,7 @@ nes_gbc_vblank_isr:
     cp $18
     jr nz, .split_grace_done
     ld a, $01
+    ld [nes_split_retire_grace_used], a
     ldh [nes_split_active], a
     ld a, $02
     ld [nes_split_duplicate_streak], a
@@ -540,6 +558,7 @@ Start:
     ld [nes_ntdiag_last_lo], a
     ld [nes_ntdiag_commit_serial], a
     ld [nes_split_duplicate_streak], a
+    ld [nes_split_retire_grace_used], a
     ldh [nes_reset_count], a
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
