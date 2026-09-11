@@ -525,6 +525,7 @@ Start:
     ld [nes_view_select_prev], a
     ld [nes_frame_skip], a
     ld [nes_skip_chord_prev], a
+    ld [nes_turbo_yield], a
     ld [nes_bg_pattern_committed], a
     ld [nes_nametable_stage_used], a
     ld [nes_generic_map_rebuild_dirty], a

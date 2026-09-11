@@ -203,13 +203,14 @@ nes_gbc_oam_shadow: ds $00A0
 ; reserve (SP grows down from $D000, so $CBA0 is touched last). Never place
 ; these in $C000-$C7FF — that mirror is NES internal RAM (see cpu.asm).
 SECTION "NES frame skip state", WRAM0[$CBA0]
-nes_frame_skip:        ds 1 ; extra NES frames per host VBlank (0..7)
+nes_frame_skip:        ds 1 ; 0=host-synced; >0=turbo (free-run NMIs)
 nes_skip_chord_prev:   ds 1 ; bit0=Sel+Up held, bit1=Sel+Down held
+nes_turbo_yield:       ds 1 ; after an NMI, force one poll miss so loop body runs
 
-SECTION "Host native stack reserve", WRAM0[$CBA2]
+SECTION "Host native stack reserve", WRAM0[$CBA3]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA2-$CFFF leaves 1118 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $045E
+; $CBA3-$CFFF leaves 1117 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $045D
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32

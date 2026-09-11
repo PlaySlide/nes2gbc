@@ -781,6 +781,9 @@ nes_brk_hl:
 nes_rti_pop_hl:
     xor a
     ld [nes_nmi_active], a
+    ; One poll miss after NMI so wait-loop bodies run between turbo frames.
+    ld a, $01
+    ld [nes_turbo_yield], a
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -791,18 +794,34 @@ nes_rti_pop_hl:
     ld l, c
     ret
 
-; Deliver a latched host VBlank as a translated NES NMI at compiler-selected
-; safe points. Input HL = NES PC to resume if interrupted.
+; Deliver a translated NES NMI at compiler-selected safe points.
+; Input HL = NES PC to resume if interrupted.
 ; Output A = 1 when caller should jump to the translated NMI handler.
 ;
-; Host VBlank sets nes_host_vblank_pending = 1 + nes_frame_skip. Each successful
-; poll consumes one. If NMI is already active, keep the remaining count but
-; return A=0 — returning nonzero makes generated stubs nest another NMI.
+; skip=0: host VBlank latches pending=1 (synced).
+; skip>0: turbo — after the latch drains, free-run NMIs as fast as the CPU
+; allows. Poll points sit at wait-loop heads, so RTI sets nes_turbo_yield and the next poll misses once; that lets the
+; loop body run before the next NMI (otherwise turbo only nests NMIs).
+; If NMI is already active, keep pending but return A=0 (nonzero A nests).
 nes_poll_nmi_hl:
+    ld a, [nes_turbo_yield]
+    and a
+    jr z, .no_yield
+    xor a
+    ld [nes_turbo_yield], a
+    ret
+
+.no_yield:
     ld a, [nes_host_vblank_pending]
     and a
-    ret z
+    jr nz, .have_pending
 
+    ld a, [nes_frame_skip]
+    and a
+    ret z
+    jr .try_deliver
+
+.have_pending:
     ld a, [nes_ppuctrl]
     bit 7, a
     jr z, .consume_drop
@@ -814,6 +833,15 @@ nes_poll_nmi_hl:
     ld a, [nes_host_vblank_pending]
     dec a
     ld [nes_host_vblank_pending], a
+
+.try_deliver:
+    ld a, [nes_ppuctrl]
+    bit 7, a
+    jr z, .no_deliver
+
+    ld a, [nes_nmi_active]
+    and a
+    jr nz, .busy_keep_pending
 
     ld a, $01
     ld [nes_nmi_active], a
@@ -890,6 +918,7 @@ nes_poll_nmi_hl:
     ld a, [nes_host_vblank_pending]
     dec a
     ld [nes_host_vblank_pending], a
+.no_deliver:
     xor a
     ret
 
