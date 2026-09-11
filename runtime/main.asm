@@ -70,7 +70,7 @@ nes_gbc_vblank_isr:
 .split_grace_done:
 
     ; Before the first SMB stitched surface is ever exposed, spend otherwise
-    ; withheld host frames constructing it in hidden $9C00.  A handled step
+    ; withheld host frames constructing it in hidden $9C00. A handled step
     ; deliberately leaves the previous completed frame completely untouched:
     ; no new split, no new scroll, and no LCD shutdown.
     call nes_gbc_prepare_initial_hstitch_hidden_step
@@ -216,7 +216,7 @@ nes_gbc_vblank_isr:
     xor a
     ldh [nes_ctrl_dirty], a
 
-    ; Commit PPUCTRL.4 only from a completed NES frame.  Ignore transient
+    ; Commit PPUCTRL.4 only from a completed NES frame. Ignore transient
     ; mid-NMI toggles that return to the already-published bank.
     ld a, [nes_ppuctrl]
     and $10
@@ -332,11 +332,11 @@ nes_gbc_vblank_isr:
 
 ; First-stitch preparation that never changes the currently presented frame.
 ; valid=2 means hidden $9C00 is being built; valid=3 means it is complete but
-; intentionally held for one more host boundary.  valid=1 remains the ordinary
+; intentionally held for one more host boundary. valid=1 remains the ordinary
 ; live stitched state used everywhere else.
 ;
 ; Return A=1 while this helper owns the host frame and the caller must RETI
-; without publishing new scroll/control state.  Return A=0 for the normal path.
+; without publishing new scroll/control state. Return A=0 for the normal path.
 nes_gbc_prepare_initial_hstitch_hidden_step:
     ; Only the already-observed SMB hardware shape uses this experiment.
     ld a, [nes_hstitch_seen]
@@ -372,7 +372,7 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
     jr nz, .prep_split_active
 
     ; If the candidate split disappears before handoff, abandon the hidden
-    ; surface.  It has never been displayed, so cancellation is harmless.
+    ; surface. It has never been displayed, so cancellation is harmless.
     ld a, [nes_hstitch_valid]
     cp $02
     jr z, .prep_cancel
@@ -400,7 +400,7 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
     ret
 
 .prep_ready:
-    ; A completed translated NMI must remain frozen until the *next* host
+    ; A completed translated NMI must remain frozen until the next host
     ; boundary, so queue publication and the first real split begin together.
     ld a, [nes_nmi_active]
     and a
@@ -420,7 +420,7 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
     ret
 
 .prep_begin:
-    ; Freeze the seam geometry at the first proven split.  Later coarse motion
+    ; Freeze the seam geometry at the first proven split. Later coarse motion
     ; is reconciled by the ordinary catch-up path after the hidden map is live.
     ldh a, [nes_split_bottom_x]
     ld b, a
@@ -460,7 +460,7 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
 
 .prep_columns:
     ; Four authoritative columns per host VBlank leaves CPU time for the
-    ; translated NMI to continue between preparations.  Unlike the previous
+    ; translated NMI to continue between preparations. Unlike the previous
     ; staged experiment, the old frame never scrolls while this work happens.
     ld a, $04
     ld [nes_hstitch_target_key], a
@@ -606,8 +606,6 @@ nes_diag_snapshot_frame:
     ldh a, [nes_ctrl_dirty]
     and a
     jr z, .diag_state_scroll
-    set 6, b
-.diag_state_ctrl:
     set 6, b
 .diag_state_scroll:
     ldh a, [nes_scroll_dirty]
