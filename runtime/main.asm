@@ -22,6 +22,35 @@ nes_gbc_vblank_isr:
     ; work done by this VBlank is attributed to the frame about to be shown.
     call nes_diag_snapshot_frame
 
+    ; A proven SMB split occasionally emits two duplicate-only scroll NMIs in a
+    ; row even though gameplay has not left the stitched presentation. The PPU
+    ; recognizer deliberately retires a generic split after two duplicates for
+    ; Ice Climber, but the SMB video logs show that this creates a 4-17 frame
+    ; hole where the physical backing map (future pipes/clouds) is exposed.
+    ;
+    ; Give an already-valid stitched renderer exactly one more NES-NMI chance:
+    ; relatch the split only while BG+OBJ rendering is still enabled, and seed
+    ; the duplicate streak at 2. A third duplicate will therefore retire it
+    ; normally, while the next genuine distinct pair resets the streak to zero.
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .split_grace_done
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .split_grace_done
+    ld a, [nes_hstitch_seen]
+    and a
+    jr z, .split_grace_done
+    ld a, [nes_ppumask]
+    and $18
+    cp $18
+    jr nz, .split_grace_done
+    ld a, $01
+    ldh [nes_split_active], a
+    ld a, $02
+    ld [nes_split_duplicate_streak], a
+.split_grace_done:
+
     ; Arm the HUD/playfield raster state before any potentially long
     ; completed-frame publication. The long BG path below temporarily allows
     ; only STAT to nest so this armed split can still fire exactly at LYC.
@@ -169,7 +198,33 @@ nes_gbc_vblank_isr:
     ld [nes_bg_pattern_committed], a
     call nes_video_toggle_bg_pattern_bank
 .ctrl_bank_done:
+    ; While a raster split owns map selection, a global PPUCTRL commit must not
+    ; transiently seize LCDC.3 after STAT already switched to the playfield.
+    ; nes_video_update_ctrl clears/recomputes both sprite-size and map bits;
+    ; during an active split update only sprite-size bit 2 and preserve the live
+    ; map bit. This removes the one-scanline $9C00->$9800->$9C00 ghosts seen in
+    ; the post-fix video logs.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .ctrl_update_global
+
+    ldh a, [rLCDC]
+    and $FB
+    ld b, a
+    ld a, [nes_ppuctrl]
+    bit 5, a
+    jr z, .ctrl_update_split_store
+    ld a, b
+    or $04
+    ld b, a
+.ctrl_update_split_store:
+    ld a, b
+    ldh [rLCDC], a
+    jr .ctrl_update_done
+
+.ctrl_update_global:
     call nes_video_update_ctrl
+.ctrl_update_done:
 
     ; A completed PPUCTRL commit may change LCDC's map bit. During a captured
     ; raster split, restore whichever half of the split currently owns scanout:
