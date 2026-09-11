@@ -69,6 +69,19 @@ nes_gbc_vblank_isr:
     ld [nes_split_duplicate_streak], a
 .split_grace_done:
 
+    ; Before the first SMB stitched surface is ever exposed, spend otherwise
+    ; withheld host frames constructing it in hidden $9C00. A handled step
+    ; deliberately leaves the previous completed frame completely untouched:
+    ; no new split, no new scroll, and no LCD shutdown.
+    call nes_gbc_prepare_initial_hstitch_hidden_step
+    and a
+    jr z, .initial_hstitch_prep_done
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    jp .done
+.initial_hstitch_prep_done:
+
     ; Arm the HUD/playfield raster state before any potentially long
     ; completed-frame publication. The long BG path below temporarily allows
     ; only STAT to nest so this armed split can still fire exactly at LYC.
@@ -176,15 +189,9 @@ nes_gbc_vblank_isr:
     nop
 
 .bg_publish:
-    ; Preserve the proven background publication order. On the very first
-    ; SMB stitch, prepare a few hidden $9C00 columns per completed host frame
-    ; instead of blanking LCDC for one monolithic 32-column rebuild.
+    ; Preserve the proven background publication order.
     call nes_video_flush_nametable_queue_atomic
-    call nes_gbc_prepare_initial_hstitch_step
-    and a
-    jr nz, .bg_stitch_done
     call nes_video_update_horizontal_stitch
-.bg_stitch_done:
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
     ; before LYC, the still-armed STAT source will fire normally after RETI.
@@ -209,7 +216,7 @@ nes_gbc_vblank_isr:
     xor a
     ldh [nes_ctrl_dirty], a
 
-    ; Commit PPUCTRL.4 only from a completed NES frame.  Ignore transient
+    ; Commit PPUCTRL.4 only from a completed NES frame. Ignore transient
     ; mid-NMI toggles that return to the already-published bank.
     ld a, [nes_ppuctrl]
     and $10
@@ -259,22 +266,6 @@ nes_gbc_vblank_isr:
     ldh a, [rSTAT]
     bit 6, a
     jr nz, .ctrl_reassert_top
-
-    ; While the initial SMB stitch is still being prepared, the line-32 split
-    ; uses the real physical $9800 page for both halves. Do not expose $9C00
-    ; until all 32 authoritative tile+palette columns are complete.
-    ld a, [nes_mirroring]
-    cp $01
-    jr nz, .ctrl_reassert_bottom
-    ld a, [nes_hstitch_seen]
-    and a
-    jr nz, .ctrl_reassert_bottom
-    ld a, [nes_hstitch_valid]
-    cp $01
-    jr z, .ctrl_reassert_bottom
-    call nes_video_apply_split_top_map
-    jr .ctrl_done
-.ctrl_reassert_bottom:
     call nes_video_apply_split_bottom_map
     jr .ctrl_done
 .ctrl_reassert_top:
@@ -339,15 +330,15 @@ nes_gbc_vblank_isr:
     pop af
     reti
 
-; Incremental first-stitch preparation for SMB's proven NROM-256 / vertical
-; mirroring shape. nes_hstitch_valid=$02 means "$9C00 is being built but must
-; remain hidden"; $01 keeps its original meaning of a completed live stitch.
+; First-stitch preparation that never changes the currently presented frame.
+; valid=2 means hidden $9C00 is being built; valid=3 means it is complete but
+; intentionally held for one more host boundary. valid=1 remains the ordinary
+; live stitched state used everywhere else.
 ;
-; Return A=1 while preparation owns this host commit so the caller skips the
-; ordinary full-rebuild path. Return A=0 otherwise; on completion this lets the
-; normal updater reconcile key 0 with whatever small coarse scroll delta accrued.
-nes_gbc_prepare_initial_hstitch_step:
-    ; Only SMB's already-proven first stitched presentation may enter this path.
+; Return A=1 while this helper owns the host frame and the caller must RETI
+; without publishing new scroll/control state. Return A=0 for the normal path.
+nes_gbc_prepare_initial_hstitch_hidden_step:
+    ; Only the already-observed SMB hardware shape uses this experiment.
     ld a, [nes_hstitch_seen]
     and a
     jr z, .prep_shape_mapper
@@ -380,31 +371,57 @@ nes_gbc_prepare_initial_hstitch_step:
     and a
     jr nz, .prep_split_active
 
-    ; If the candidate split vanished while preparation was in flight, throw
-    ; away the progress marker. $9C00 is still hidden so no live state regresses.
+    ; If the candidate split disappears before handoff, abandon the hidden
+    ; surface. It has never been displayed, so cancellation is harmless.
     ld a, [nes_hstitch_valid]
     cp $02
-    jr nz, .prep_split_inactive_return
+    jr z, .prep_cancel
+    cp $03
+    jr z, .prep_cancel
+    xor a
+    ret
+
+.prep_cancel:
     xor a
     ld [nes_hstitch_valid], a
     ld [nes_hstitch_copy_start], a
     ld [nes_hstitch_dirty], a
-.prep_split_inactive_return:
-    xor a
     ret
 
 .prep_split_active:
     ld a, [nes_hstitch_valid]
+    cp $03
+    jr z, .prep_ready
     cp $02
-    jr z, .prep_columns
+    jp z, .prep_columns
     and a
-    jr z, .prep_check_initial_key
+    jr z, .prep_begin_check_map
     xor a
     ret
 
-.prep_check_initial_key:
-    ; Only the observed first key-0 activation uses this staged path. Any other
-    ; initial geometry falls straight through to the old authoritative rebuild.
+.prep_ready:
+    ; A completed translated NMI must remain frozen until the next host
+    ; boundary, so queue publication and the first real split begin together.
+    ld a, [nes_nmi_active]
+    and a
+    jp nz, .prep_hold
+    ld a, $01
+    ld [nes_hstitch_valid], a
+    xor a
+    ret
+
+.prep_begin_check_map:
+    ; $9C00 is only hidden if the currently presented physical map is $9800.
+    ; Fall back to the old authoritative rebuild for any other geometry.
+    ldh a, [rLCDC]
+    and $08
+    jr z, .prep_begin
+    xor a
+    ret
+
+.prep_begin:
+    ; Freeze the seam geometry at the first proven split. Later coarse motion
+    ; is reconciled by the ordinary catch-up path after the hidden map is live.
     ldh a, [nes_split_bottom_x]
     ld b, a
     ldh a, [nes_view_x]
@@ -426,17 +443,9 @@ nes_gbc_prepare_initial_hstitch_step:
     srl a
     srl a
     or b
-    and a
-    jr z, .prep_begin
-    xor a
-    ret
-
-.prep_begin:
-    ; Start hidden key-0 construction. Using valid=$02 makes queued NT writes
-    ; stitch-aware during preparation, so physical NT1 updates cannot overwrite
-    ; columns already synthesized from authoritative NT0 state.
-    xor a
     ld [nes_hstitch_key], a
+
+    xor a
     ld [nes_hstitch_copy_start], a
     ld [nes_hstitch_dirty], a
     ld a, $02
@@ -450,9 +459,9 @@ nes_gbc_prepare_initial_hstitch_step:
     ld [nes_hstitch_full_rebuilds], a
 
 .prep_columns:
-    ; Four columns per completed NES frame keeps each host ISR short enough for
-    ; gameplay to continue, unlike the previous 32-column live rebuild that
-    ; monopolized roughly seven host frames and caused the visible mountain jump.
+    ; Four authoritative columns per host VBlank leaves CPU time for the
+    ; translated NMI to continue between preparations. Unlike the previous
+    ; staged experiment, the old frame never scrolls while this work happens.
     ld a, $04
     ld [nes_hstitch_target_key], a
 .prep_column_loop:
@@ -463,21 +472,24 @@ nes_gbc_prepare_initial_hstitch_step:
     ld a, [nes_hstitch_copy_start]
     inc a
     ld [nes_hstitch_copy_start], a
+    cp $20
+    jr nc, .prep_complete
 
     ld a, [nes_hstitch_target_key]
     dec a
     ld [nes_hstitch_target_key], a
     jr nz, .prep_column_loop
 
+.prep_hold:
     ld a, $01
     ret
 
 .prep_complete:
     xor a
     ld [nes_hstitch_dirty], a
-    ld a, $01
+    ld a, $03
     ld [nes_hstitch_valid], a
-    xor a
+    ld a, $01
     ret
 
 nes_gbc_stat_isr:
@@ -492,24 +504,7 @@ nes_gbc_stat_isr:
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_STAT_SPLIT
     ld [nes_diag_event_flags], a
-
-    ; During the hidden first-stitch preparation, keep the lower playfield on
-    ; physical $9800 but still apply the real bottom scroll. At key 0 that map is
-    ; the correct NES page, so gameplay can move normally while $9C00 is built.
-    ld a, [nes_mirroring]
-    cp $01
-    jr nz, .stat_apply_bottom_map
-    ld a, [nes_hstitch_seen]
-    and a
-    jr nz, .stat_apply_bottom_map
-    ld a, [nes_hstitch_valid]
-    cp $01
-    jr z, .stat_apply_bottom_map
-    call nes_video_apply_split_top_map
-    jr .stat_apply_bottom_scroll
-.stat_apply_bottom_map:
     call nes_video_apply_split_bottom_map
-.stat_apply_bottom_scroll:
 
     ldh a, [nes_split_armed_x]
     ld b, a
@@ -530,7 +525,7 @@ nes_gbc_stat_isr:
     jr z, .disable_stat
 
     ; Synthetic NES Y=240 seam: switch to the vertically adjacent logical
-    ; nametable and compensate for the CGB's extra 16 pixel rows.
+    ; nametable and compensate for the CGB map's extra 16 pixel rows.
     ldh a, [nes_seam_bottom_ctrl]
     call nes_video_apply_map_select_a
     ldh a, [nes_seam_bottom_y]
