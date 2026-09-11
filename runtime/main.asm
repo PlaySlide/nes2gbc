@@ -11,6 +11,12 @@ SECTION "Header Entry", ROM0[$0100]
     nop
     jp Start
 
+; C817 is the remaining free byte beside the hidden-map change counter at C816.
+; Remember whether the current proven SMB stitch already consumed its one extra
+; duplicate-NMI grace. This prevents the host-side grace from relatching forever.
+SECTION "SMB split grace state", WRAM0[$C817]
+nes_split_retire_grace_used: ds 1
+
 SECTION "Runtime", ROM0[$0150]
 nes_gbc_vblank_isr:
     push af
@@ -23,10 +29,50 @@ nes_gbc_vblank_isr:
     call nes_diag_snapshot_frame
     call nes_apu_frame_tick
 
+    ; A proven SMB split occasionally emits two duplicate-only scroll NMIs in a
+    ; row even though gameplay has not left the stitched presentation. The PPU
+    ; recognizer deliberately retires a generic split after two duplicates for
+    ; Ice Climber, but the SMB video logs show that this creates a 4-17 frame
+    ; hole where the physical backing map (future pipes/clouds) is exposed.
+    ;
+    ; Give an already-valid stitched renderer exactly one more NES-NMI chance.
+    ; The one-shot flag remains set if a third duplicate really retires it; a
+    ; later genuine distinct split has duplicate_streak=0 and clears the flag.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .split_grace_consider
+
+    ld a, [nes_split_duplicate_streak]
+    and a
+    jr nz, .split_grace_done
+    xor a
+    ld [nes_split_retire_grace_used], a
+    jr .split_grace_done
+
+.split_grace_consider:
+    ld a, [nes_split_retire_grace_used]
+    and a
+    jr nz, .split_grace_done
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .split_grace_done
+    ld a, [nes_hstitch_seen]
+    and a
+    jr z, .split_grace_done
+    ld a, [nes_ppumask]
+    and $18
+    cp $18
+    jr nz, .split_grace_done
+    ld a, $01
+    ld [nes_split_retire_grace_used], a
+    ldh [nes_split_active], a
+    ld a, $02
+    ld [nes_split_duplicate_streak], a
+.split_grace_done:
+
     ; Arm the HUD/playfield raster state before any potentially long
-    ; completed-frame publication.  Do not enable nested interrupts here: if
-    ; publication runs past LYC, the STAT request simply remains pending and
-    ; fires immediately after this VBlank ISR returns.
+    ; completed-frame publication. The long BG path below temporarily allows
+    ; only STAT to nest so this armed split can still fire exactly at LYC.
     ldh a, [nes_split_active]
     and a
     jp z, .early_split_done
@@ -118,9 +164,28 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
+    ; SMB's stitched BG publication can run well past the line-32 HUD split.
+    ; While a game-authored split is armed, allow only STAT to preempt this
+    ; long section. Mask VBlank itself so this ISR cannot recursively re-enter
+    ; if publication crosses another host frame. EI takes effect after the NOP.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .bg_publish
+    ld a, $02
+    ld [rIE], a
+    ei
+    nop
+
+.bg_publish:
     ; Preserve the proven background publication order.
     call nes_video_flush_nametable_queue_atomic
     call nes_video_update_horizontal_stitch
+
+    ; Resume ordinary non-nested VBlank work. If BG publication completed
+    ; before LYC, the still-armed STAT source will fire normally after RETI.
+    di
+    ld a, $03
+    ld [rIE], a
 
     ldh a, [nes_palette_dirty]
     and a
@@ -152,17 +217,46 @@ nes_gbc_vblank_isr:
     ld [nes_bg_pattern_committed], a
     call nes_video_toggle_bg_pattern_bank
 .ctrl_bank_done:
-    call nes_video_update_ctrl
+    ; While a raster split owns map selection, a global PPUCTRL commit must not
+    ; transiently seize LCDC.3 after STAT already switched to the playfield.
+    ; nes_video_update_ctrl clears/recomputes both sprite-size and map bits;
+    ; during an active split update only sprite-size bit 2 and preserve the live
+    ; map bit. This removes the one-scanline $9C00->$9800->$9C00 ghosts seen in
+    ; the post-fix video logs.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .ctrl_update_global
 
-    ; A completed PPUCTRL commit may select the playfield nametable globally.
-    ; During a captured raster split that must not survive into scanline 0:
-    ; the HUD/top map was armed at VBlank entry and the STAT ISR owns the later
-    ; switch to the playfield map. Reassert only the top map here after the
-    ; control commit so intermittent ctrl_dirty frames cannot render $9C00
-    ; across the HUD region.
+    ldh a, [rLCDC]
+    and $FB
+    ld b, a
+    ld a, [nes_ppuctrl]
+    bit 5, a
+    jr z, .ctrl_update_split_store
+    ld a, b
+    or $04
+    ld b, a
+.ctrl_update_split_store:
+    ld a, b
+    ldh [rLCDC], a
+    jr .ctrl_update_done
+
+.ctrl_update_global:
+    call nes_video_update_ctrl
+.ctrl_update_done:
+
+    ; A completed PPUCTRL commit may change LCDC's map bit. During a captured
+    ; raster split, restore whichever half of the split currently owns scanout:
+    ; top/HUD while LYC is still armed, bottom/playfield after STAT consumed it.
     ldh a, [nes_split_active]
     and a
     jr z, .ctrl_done
+    ldh a, [rSTAT]
+    bit 6, a
+    jr nz, .ctrl_reassert_top
+    call nes_video_apply_split_bottom_map
+    jr .ctrl_done
+.ctrl_reassert_top:
     call nes_video_apply_split_top_map
 .ctrl_done:
 
@@ -465,6 +559,7 @@ Start:
     ld [nes_ntdiag_last_lo], a
     ld [nes_ntdiag_commit_serial], a
     ld [nes_split_duplicate_streak], a
+    ld [nes_split_retire_grace_used], a
     ldh [nes_reset_count], a
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
