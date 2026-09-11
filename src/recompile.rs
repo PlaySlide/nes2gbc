@@ -305,7 +305,14 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             writeln!(out, ":").unwrap();
         }
 
-        for instruction in &block.instructions {
+        let mut pending: Vec<IrOp> = Vec::new();
+        let flush_pending = |out: &mut String, pending: &mut Vec<IrOp>| {
+            if !pending.is_empty() {
+                out.push_str(&lr35902::emit_ops(pending));
+                pending.clear();
+            }
+        };
+        let write_insn_comment = |out: &mut String, instruction: &crate::cpu6502::DecodedInstruction| {
             writeln!(
                 out,
                 "    ; ${:04X}: ${:02X} {:?} {:?}",
@@ -315,14 +322,25 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 instruction.def.mode
             )
             .unwrap();
+        };
 
+        for instruction in &block.instructions {
             match ir::lower_instruction(*instruction) {
                 Ok(ops) => {
-                    if !emit_static_control(&mut out, &ops, bank, &banks) {
-                        out.push_str(&lr35902::emit_ops(&ops));
+                    // Probe without writing: static control (branch/jmp) clobbers A.
+                    let mut probe = String::new();
+                    if emit_static_control(&mut probe, &ops, bank, &banks) {
+                        flush_pending(&mut out, &mut pending);
+                        write_insn_comment(&mut out, instruction);
+                        let _ = emit_static_control(&mut out, &ops, bank, &banks);
+                    } else {
+                        write_insn_comment(&mut out, instruction);
+                        pending.extend(ops);
                     }
                 }
                 Err(err) => {
+                    flush_pending(&mut out, &mut pending);
+                    write_insn_comment(&mut out, instruction);
                     writeln!(out, "    ; TODO {err}").unwrap();
                     writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
                     writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
@@ -333,6 +351,7 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 }
             }
         }
+        flush_pending(&mut out, &mut pending);
 
         if let Some(last) = block.instructions.last() {
             if is_branch(last.def.mnemonic) || !terminal_mnemonic(last.def.mnemonic) {
