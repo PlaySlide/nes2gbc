@@ -180,7 +180,14 @@ nes_apu_update_pulse1:
     ldh [rNR10], a
     ld a, [nes_apu_regs + $01]
     bit 7, a
-    jp z, nes_apu_mute_p1_locked
+    jr nz, .sweep_on
+    ; Sweep off ($7F etc.): mute only if an SFX sweep was actually running.
+    ; Music writes $7F on square1 harmony every note — must NOT silence the channel.
+    ld a, [nes_apu_sweep_active]
+    and a
+    jp nz, nes_apu_mute_p1_locked
+    ret
+.sweep_on:
     ; Reload divider from new sweep period bits always.
     ld a, [nes_apu_regs + $01]
     rrca
