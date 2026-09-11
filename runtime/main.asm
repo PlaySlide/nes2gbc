@@ -668,6 +668,7 @@ Start:
     ld [nes_controller_strobe], a
     ld [nes_controller_shift], a
     ld [nes_host_vblank_pending], a
+    ld [nes_vram_unlocked], a
     ld [nes_nmi_active], a
     ld [nes_oam_dirty], a
     ld [nes_current_code_bank], a

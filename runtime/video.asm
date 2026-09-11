@@ -227,7 +227,9 @@ ENDC
     ldh [rLCDC], a
 
 .flush_keep_lcd:
+    ; Prefer unlocked VRAM writes while this host VBlank still owns the bus.
     ld a, $01
+    ld [nes_vram_unlocked], a
     ldh [rSVBK], a
     ld de, nes_nametable_queue
 
@@ -365,6 +367,8 @@ ENDC
     jp .loop
 
 .done:
+    xor a
+    ld [nes_vram_unlocked], a
 IF DEF(NES2GBC_DEBUG_TRACE)
     ld a, [nes_ntdiag_commit_serial]
     inc a
@@ -441,6 +445,17 @@ nes_video_rebuild_generic_maps_atomic:
 ; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
 ; entire frame waiting for LY>=144 for every translated NES PPU write.
 nes_video_wait_vram:
+    ; Host publish can set nes_vram_unlocked while still in VBlank. Skip the
+    ; STAT poll until scanout resumes (LY < 144), then fall back to waiting.
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, .locked
+    ldh a, [rLY]
+    cp 144
+    ret nc
+    xor a
+    ld [nes_vram_unlocked], a
+.locked:
     ldh a, [rLCDC]
     bit 7, a
     ret z
@@ -1810,13 +1825,12 @@ nes_video_refresh_stitch_column:
     ld [nes_hstitch_copy_skip], a
 
     ld a, $01
+    ld [nes_vram_unlocked], a
     ldh [rSVBK], a
 
     ; Rebuild this stitched column row-by-row from authoritative NES state.
-    ; Tile ID and palette attribute are published together for each cell.
-    ; The old two-pass implementation could reuse a destination cell for a new
-    ; world tile while leaving its previous question/coin palette attached
-    ; until a later attribute pass or full rebuild.
+    ; Tile ID and palette are published together. One VRAM wait covers both
+    ; VBK writes for the row; unlocked mode skips waits while LY stays in VB.
     ld a, [nes_hstitch_copy_len]
     and a
     jr z, .tile_source0
@@ -1832,7 +1846,6 @@ nes_video_refresh_stitch_column:
     ld b, $1E                    ; 30 NES tile rows
 
 .tile_loop:
-    ; Publish tile ID.
     ld a, [hl]
     ld c, a
     call nes_video_wait_vram
@@ -1841,8 +1854,6 @@ nes_video_refresh_stitch_column:
     ld a, c
     ld [de], a
 
-    ; Derive this exact tile's palette directly from authoritative NES
-    ; attribute RAM, then combine it with the captured playfield pattern bank.
     push bc
     push de
     push hl
@@ -1854,14 +1865,13 @@ nes_video_refresh_stitch_column:
     pop hl
     pop de
 
-    call nes_video_wait_vram
+    ; Same accessibility window as the tile-id write above.
     ld a, $01
     ldh [rVBK], a
     ld a, c
     ld [de], a
     pop bc
 
-    ; Advance source and destination by one tile row.
     ld a, l
     add $20
     ld l, a
@@ -1878,6 +1888,7 @@ nes_video_refresh_stitch_column:
     jr nz, .tile_loop
 
     xor a
+    ld [nes_vram_unlocked], a
     ldh [rVBK], a
     ret
 
