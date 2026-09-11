@@ -27,6 +27,7 @@ nes_gbc_vblank_isr:
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
     call nes_diag_snapshot_frame
+    call nes_apu_frame_tick
 
     ; A proven SMB split occasionally emits two duplicate-only scroll NMIs in a
     ; row even though gameplay has not left the stitched presentation. The PPU
@@ -792,6 +793,7 @@ Start:
     call nes_generated_init
     call nes_generated_follow_init
     call nes_video_init
+    call nes_apu_init
     ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
     call nes_profile_reset
 
@@ -808,6 +810,7 @@ Start:
     jp nes_reset
 
 INCLUDE "io.asm"
+INCLUDE "apu.asm"
 INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"

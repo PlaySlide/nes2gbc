@@ -487,6 +487,9 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     0x4011 => {
                         writeln!(out, "    ld a, [nes_dac]").unwrap();
                     }
+                    0x4015 => {
+                        writeln!(out, "    call nes_apu_read_status").unwrap();
+                    }
                     0x4016 => {
                         writeln!(out, "    call nes_controller_read").unwrap();
                     }
@@ -522,9 +525,14 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
                         writeln!(out, "    call nes_controller_write").unwrap();
                     }
+                    0x4000..=0x4013 | 0x4015 | 0x4017 => {
+                        writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                        writeln!(out, "    ld e, a").unwrap();
+                        writeln!(out, "    ld l, ${:02X}", addr as u8).unwrap();
+                        writeln!(out, "    call nes_apu_write").unwrap();
+                    }
                     _ => {
-                        // Other fixed APU writes are not emulated yet, so emit
-                        // literally nothing rather than loading a value only to drop it.
+                        // Other fixed IO writes are not emulated yet.
                     }
                 }
             }
@@ -552,13 +560,17 @@ mod tests {
     }
 
     #[test]
-    fn ignored_fixed_apu_writes_emit_nothing() {
+    fn fixed_apu_writes_call_nes_apu_write() {
         let asm = emit_ops(&[
             IrOp::WriteIo { addr: 0x4000, src: Register::A },
             IrOp::WriteIo { addr: 0x4004, src: Register::X },
             IrOp::WriteIo { addr: 0x400C, src: Register::Y },
         ]);
-        assert!(asm.is_empty());
+        assert!(asm.contains("ld l, $00"));
+        assert!(asm.contains("ld l, $04"));
+        assert!(asm.contains("ld l, $0C"));
+        assert!(asm.contains("call nes_apu_write"));
+        assert!(!asm.contains("call nes_cpu_write"));
     }
 
     #[test]
