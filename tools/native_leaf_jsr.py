@@ -104,7 +104,6 @@ def parse_blocks(lines: list[str]) -> dict[int, Block]:
 
 
 def instruction_segment_end(block: Block, insn_index: int) -> int:
-    line_i = block.insns[insn_index][0]
     if insn_index + 1 < len(block.insns):
         return block.insns[insn_index + 1][0]
     return block.end_i
@@ -213,7 +212,7 @@ def make_clone(lines: list[str], block: Block) -> list[str]:
     return clone
 
 
-def rewrite_call(lines: list[str], site: CallSite) -> list[str]:
+def rewrite_call(site: CallSite) -> list[str]:
     hi = (site.pushed_return >> 8) & 0xFF
     lo = site.pushed_return & 0xFF
     ind = "    "
@@ -281,15 +280,20 @@ def main() -> int:
         used[bank] += size
         leaves_in_bank[bank] += 1
 
+    # Freeze clone text against the original line layout. Rewriting a caller can
+    # change line counts before a later callee, so stored block indexes must not
+    # be consulted after callsite edits begin.
+    clone_text = {target: make_clone(lines, blocks[target]) for target in selected}
     selected_sites = [c for c in calls if c.target in selected]
-    # Rewrite from the bottom upward so stored line indexes remain valid.
-    for site in sorted(selected_sites, key=lambda s: s.comment_i, reverse=True):
-        lines[site.comment_i + 1 : site.end_i] = rewrite_call(lines, site)
 
-    # Append private clones after all ordinary generated regions.  Original leaf
+    # Rewrite from the bottom upward so stored callsite indexes remain valid.
+    for site in sorted(selected_sites, key=lambda s: s.comment_i, reverse=True):
+        lines[site.comment_i + 1 : site.end_i] = rewrite_call(site)
+
+    # Append private clones after all ordinary generated regions. Original leaf
     # blocks remain unchanged for dispatch-table/dynamic entry.
     for target in sorted(selected):
-        lines.extend(make_clone(lines, blocks[target]))
+        lines.extend(clone_text[target])
 
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
