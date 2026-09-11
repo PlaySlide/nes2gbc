@@ -505,7 +505,6 @@ nes_diag_snapshot_frame:
     and a
     jr z, .diag_state_dirty
     set 2, b
-.diag_state_valid:
 .diag_state_dirty:
     ld a, [nes_hstitch_dirty]
     and a
