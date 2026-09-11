@@ -28,6 +28,7 @@ nes_apu_last_nr12_noi: ds 1
 nes_apu_sweep_div:    ds 1
 nes_apu_sweep_period_lo: ds 1
 nes_apu_sweep_period_hi: ds 1
+nes_apu_sweep_active: ds 1   ; 1 while pulse1 software sweep running
 ; Frame sequencer divider (host VBlank ticks).
 nes_apu_frame_div:  ds 1
 
@@ -36,7 +37,7 @@ SECTION "NES APU code", ROM0
 ; ---------------------------------------------------------------------------
 nes_apu_init:
     ld hl, nes_apu_regs
-    ld b, $18 + 13         ; regs + prev/idx/lens/lastvol/sweep/frame_div
+    ld b, $18 + 14         ; regs + prev/idx/lens/lastvol/sweep/active/frame_div
     xor a
 .clear:
     ld [hli], a
@@ -180,13 +181,7 @@ nes_apu_update_pulse1:
     ld a, [nes_apu_regs + $01]
     bit 7, a
     jp z, nes_apu_mute_p1_locked
-    ; Sweep enabled: seed working period + divider, then trigger so the
-    ; note starts even when $4000 came while last_nr12 was locked.
-    ld a, [nes_apu_regs + $02]
-    ld [nes_apu_sweep_period_lo], a
-    ld a, [nes_apu_regs + $03]
-    and $07
-    ld [nes_apu_sweep_period_hi], a
+    ; Reload divider from new sweep period bits always.
     ld a, [nes_apu_regs + $01]
     rrca
     rrca
@@ -194,6 +189,13 @@ nes_apu_update_pulse1:
     rrca
     and $07
     ld [nes_apu_sweep_div], a
+    ; SMB rewrites $4001 mid-jump (parts 2/3). Keep working period — reseeding
+    ; from $4002/$4003 restarts the chirp and sends negate into the stratosphere.
+    ld a, [nes_apu_sweep_active]
+    and a
+    ret nz
+    ld a, $01
+    ld [nes_apu_sweep_active], a
     jp nes_apu_retrigger_p1
 
 .do_freq:
@@ -218,10 +220,24 @@ nes_apu_update_pulse1:
 nes_apu_retrigger_p1:
     ld a, [nes_apu_regs + $02]
     ld c, a
-    ld [nes_apu_sweep_period_lo], a
     ld a, [nes_apu_regs + $03]
     and $07
     ld b, a
+    ; Negate sweep SFX (bump/squash/fireball-hit): start 1 octave lower.
+    ld a, [nes_apu_regs + $01]
+    bit 7, a
+    jr z, .have_timer
+    bit 3, a
+    jr z, .have_timer
+    sla c
+    rl b
+    ld a, b
+    and $07
+    ld b, a
+.have_timer:
+    ld a, c
+    ld [nes_apu_sweep_period_lo], a
+    ld a, b
     ld [nes_apu_sweep_period_hi], a
     call nes_apu_timer_to_period
     ld a, e
@@ -730,7 +746,8 @@ nes_apu_load_length:
 ; (quarter frames); two decrements per VBlank is a usable approximation.
 ; ---------------------------------------------------------------------------
 nes_apu_frame_tick:
-    ; 3× sweep steps/VBlank: same period sequence, ~3× shorter (jump ~500ms→~170ms).
+    ; 4× sweep steps/VBlank — shorten rising tails without changing step size.
+    call nes_apu_clock_sweep_p1
     call nes_apu_clock_sweep_p1
     call nes_apu_clock_sweep_p1
     call nes_apu_clock_sweep_p1
@@ -822,14 +839,14 @@ nes_apu_clock_sweep_p1:
     ld l, a
     ld a, [nes_apu_sweep_period_hi]
     ld h, a
-    ; NES: channel muted while period < 8
+    ; Mute while period < 32 — stop rising chirps before ultrasound.
     ld a, h
     and a
-    jr nz, .period_ge8
+    jr nz, .period_ge32
     ld a, l
-    cp $08
+    cp $20
     jp c, .mute
-.period_ge8:
+.period_ge32:
     ; DE = HL >> shift
     ld a, l
     ld e, a
@@ -877,12 +894,12 @@ nes_apu_clock_sweep_p1:
     ld h, a
     jp c, .mute
 .store:
-    ; Mute if period < 8
+    ; Mute if period < 32
     ld a, h
     and a
     jr nz, .ok_period
     ld a, l
-    cp $08
+    cp $20
     jp c, .mute
 .ok_period:
     ld a, l
@@ -903,6 +920,7 @@ nes_apu_clock_sweep_p1:
 nes_apu_mute_p1_locked:
     xor a
     ldh [rNR12], a
+    ld [nes_apu_sweep_active], a
     ; Keep a non-zero high nibble in last_nr12 so the next $4000 envelope
     ; tick is NOT treated as silence→audible (which would restart jump).
     ld a, $10
