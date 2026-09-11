@@ -176,9 +176,15 @@ nes_gbc_vblank_isr:
     nop
 
 .bg_publish:
-    ; Preserve the proven background publication order.
+    ; Preserve the proven background publication order. On the very first
+    ; SMB stitch, prepare a few hidden $9C00 columns per completed host frame
+    ; instead of blanking LCDC for one monolithic 32-column rebuild.
     call nes_video_flush_nametable_queue_atomic
+    call nes_gbc_prepare_initial_hstitch_step
+    and a
+    jr nz, .bg_stitch_done
     call nes_video_update_horizontal_stitch
+.bg_stitch_done:
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
     ; before LYC, the still-armed STAT source will fire normally after RETI.
@@ -253,6 +259,22 @@ nes_gbc_vblank_isr:
     ldh a, [rSTAT]
     bit 6, a
     jr nz, .ctrl_reassert_top
+
+    ; While the initial SMB stitch is still being prepared, the line-32 split
+    ; uses the real physical $9800 page for both halves. Do not expose $9C00
+    ; until all 32 authoritative tile+palette columns are complete.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .ctrl_reassert_bottom
+    ld a, [nes_hstitch_seen]
+    and a
+    jr nz, .ctrl_reassert_bottom
+    ld a, [nes_hstitch_valid]
+    cp $01
+    jr z, .ctrl_reassert_bottom
+    call nes_video_apply_split_top_map
+    jr .ctrl_done
+.ctrl_reassert_bottom:
     call nes_video_apply_split_bottom_map
     jr .ctrl_done
 .ctrl_reassert_top:
@@ -317,6 +339,123 @@ nes_gbc_vblank_isr:
     pop af
     reti
 
+; Incremental first-stitch preparation for SMB's proven NROM-256 / vertical
+; mirroring shape. nes_hstitch_valid=$02 means "$9C00 is being built but must
+; remain hidden"; $01 keeps its original meaning of a completed live stitch.
+;
+; Return A=1 while preparation owns this host commit so the caller skips the
+; ordinary full-rebuild path. Return A=0 otherwise; on completion this lets the
+; normal updater reconcile key 0 with whatever small coarse scroll delta accrued.
+nes_gbc_prepare_initial_hstitch_step:
+    ld a, [nes_hstitch_seen]
+    and a
+    jr nz, .prep_not_handled
+
+    ld a, [nes_mapper]
+    and a
+    jr nz, .prep_cancel
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .prep_cancel
+    ld a, [nes_prg_16k_mirror]
+    and a
+    jr nz, .prep_cancel
+    ldh a, [nes_split_active]
+    and a
+    jr z, .prep_cancel
+
+    ld a, [nes_hstitch_valid]
+    cp $02
+    jr z, .prep_columns
+    and a
+    jr nz, .prep_not_handled
+
+    ; Only the observed first key-0 activation uses this staged path. Any other
+    ; initial geometry falls straight through to the old authoritative rebuild.
+    ldh a, [nes_split_bottom_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    ld c, a
+    ld b, $00
+    jr nc, .prep_key_no_carry
+    inc b
+.prep_key_no_carry:
+    ldh a, [nes_split_bottom_ctrl]
+    and $01
+    xor b
+    and $01
+    swap a
+    add a
+    ld b, a
+    ld a, c
+    srl a
+    srl a
+    srl a
+    or b
+    and a
+    jr nz, .prep_not_handled
+
+    ; Start hidden key-0 construction. Using valid=$02 makes queued NT writes
+    ; stitch-aware during preparation, so physical NT1 updates cannot overwrite
+    ; columns already synthesized from authoritative NT0 state.
+    xor a
+    ld [nes_hstitch_key], a
+    ld [nes_hstitch_copy_start], a
+    ld [nes_hstitch_dirty], a
+    ld a, $02
+    ld [nes_hstitch_valid], a
+
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_FULL_REBUILD
+    ld [nes_diag_event_flags], a
+    ld a, [nes_hstitch_full_rebuilds]
+    inc a
+    ld [nes_hstitch_full_rebuilds], a
+
+.prep_columns:
+    ; Four columns per completed NES frame keeps each host ISR short enough for
+    ; gameplay to continue, unlike the previous 32-column live rebuild that
+    ; monopolized roughly seven host frames and caused the visible mountain jump.
+    ld a, $04
+    ld [nes_hstitch_target_key], a
+.prep_column_loop:
+    ld a, [nes_hstitch_copy_start]
+    cp $20
+    jr nc, .prep_complete
+    call nes_video_refresh_stitch_column
+    ld a, [nes_hstitch_copy_start]
+    inc a
+    ld [nes_hstitch_copy_start], a
+
+    ld a, [nes_hstitch_target_key]
+    dec a
+    ld [nes_hstitch_target_key], a
+    jr nz, .prep_column_loop
+
+    ld a, $01
+    ret
+
+.prep_complete:
+    xor a
+    ld [nes_hstitch_dirty], a
+    ld a, $01
+    ld [nes_hstitch_valid], a
+    xor a
+    ret
+
+.prep_cancel:
+    ld a, [nes_hstitch_valid]
+    cp $02
+    jr nz, .prep_not_handled
+    xor a
+    ld [nes_hstitch_valid], a
+    ld [nes_hstitch_copy_start], a
+    ld [nes_hstitch_dirty], a
+.prep_not_handled:
+    xor a
+    ret
+
 nes_gbc_stat_isr:
     push af
     push bc
@@ -329,7 +468,24 @@ nes_gbc_stat_isr:
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_STAT_SPLIT
     ld [nes_diag_event_flags], a
+
+    ; During the hidden first-stitch preparation, keep the lower playfield on
+    ; physical $9800 but still apply the real bottom scroll. At key 0 that map is
+    ; the correct NES page, so gameplay can move normally while $9C00 is built.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .stat_apply_bottom_map
+    ld a, [nes_hstitch_seen]
+    and a
+    jr nz, .stat_apply_bottom_map
+    ld a, [nes_hstitch_valid]
+    cp $01
+    jr z, .stat_apply_bottom_map
+    call nes_video_apply_split_top_map
+    jr .stat_apply_bottom_scroll
+.stat_apply_bottom_map:
     call nes_video_apply_split_bottom_map
+.stat_apply_bottom_scroll:
 
     ldh a, [nes_split_armed_x]
     ld b, a
