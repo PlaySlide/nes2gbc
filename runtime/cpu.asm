@@ -796,9 +796,8 @@ nes_rti_pop_hl:
 ; Output A = 1 when caller should jump to the translated NMI handler.
 ;
 ; Host VBlank sets nes_host_vblank_pending = 1 + nes_frame_skip. Each successful
-; poll consumes one. Do NOT free-run when skip>0: poll points sit at loop heads,
-; so unlocked re-entry would NMI forever and never execute the wait-loop body.
-; If NMI is already active, keep the remaining count (do not wipe it).
+; poll consumes one. If NMI is already active, keep the remaining count but
+; return A=0 — returning nonzero makes generated stubs nest another NMI.
 nes_poll_nmi_hl:
     ld a, [nes_host_vblank_pending]
     and a
@@ -810,7 +809,7 @@ nes_poll_nmi_hl:
 
     ld a, [nes_nmi_active]
     and a
-    ret nz
+    jr nz, .busy_keep_pending
 
     ld a, [nes_host_vblank_pending]
     dec a
@@ -879,6 +878,12 @@ nes_poll_nmi_hl:
     ldh [nes_p], a
 
     ld a, $01
+    ret
+
+.busy_keep_pending:
+    ; Leave pending intact for after this NMI returns, but A must be 0 so the
+    ; poll stub does not treat this as "enter NMI" (that nested forever).
+    xor a
     ret
 
 .consume_drop:
