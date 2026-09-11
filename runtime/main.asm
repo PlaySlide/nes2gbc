@@ -23,9 +23,8 @@ nes_gbc_vblank_isr:
     call nes_diag_snapshot_frame
 
     ; Arm the HUD/playfield raster state before any potentially long
-    ; completed-frame publication.  Do not enable nested interrupts here: if
-    ; publication runs past LYC, the STAT request simply remains pending and
-    ; fires immediately after this VBlank ISR returns.
+    ; completed-frame publication. The long BG path below temporarily allows
+    ; only STAT to nest so this armed split can still fire exactly at LYC.
     ldh a, [nes_split_active]
     and a
     jp z, .early_split_done
@@ -117,9 +116,28 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
+    ; SMB's stitched BG publication can run well past the line-32 HUD split.
+    ; While a game-authored split is armed, allow only STAT to preempt this
+    ; long section. Mask VBlank itself so this ISR cannot recursively re-enter
+    ; if publication crosses another host frame. EI takes effect after the NOP.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .bg_publish
+    ld a, $02
+    ld [rIE], a
+    ei
+    nop
+
+.bg_publish:
     ; Preserve the proven background publication order.
     call nes_video_flush_nametable_queue_atomic
     call nes_video_update_horizontal_stitch
+
+    ; Resume ordinary non-nested VBlank work. If BG publication completed
+    ; before LYC, the still-armed STAT source will fire normally after RETI.
+    di
+    ld a, $03
+    ld [rIE], a
 
     ldh a, [nes_palette_dirty]
     and a
@@ -156,11 +174,13 @@ nes_gbc_vblank_isr:
     ; A completed PPUCTRL commit may select the playfield nametable globally.
     ; During a captured raster split that must not survive into scanline 0:
     ; the HUD/top map was armed at VBlank entry and the STAT ISR owns the later
-    ; switch to the playfield map. Reassert only the top map here after the
-    ; control commit so intermittent ctrl_dirty frames cannot render $9C00
-    ; across the HUD region.
+    ; switch to the playfield map. If nested STAT already consumed this frame's
+    ; LYC event, do NOT switch the display back to the HUD map afterward.
     ldh a, [nes_split_active]
     and a
+    jr z, .ctrl_done
+    ldh a, [rSTAT]
+    bit 6, a
     jr z, .ctrl_done
     call nes_video_apply_split_top_map
 .ctrl_done:
