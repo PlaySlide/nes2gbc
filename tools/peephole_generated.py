@@ -55,6 +55,90 @@ def _inline_compare_helpers(out: list[str]) -> int:
     return inlined
 
 
+def _inline_static_jsr_pushes(out: list[str]) -> int:
+    """Inline the exact two-byte 6502 JSR return-address push.
+
+    Static JSRs already know the stacked return value at compile time. The
+    runtime helper calls the one-byte stack helper twice; doing the same writes
+    directly saves several CALL/RET pairs while preserving the virtual stack
+    byte-for-byte, including $0100-page wrap. PROFILE keeps the helper path so
+    its existing counter remains accurate.
+    """
+
+    inlined = 0
+    ret_re = re.compile(r"ld hl, \$([0-9A-Fa-f]{4})")
+    for i in range(1, len(out)):
+        if _code(out[i]) != "call nes_stack_push_return_hl":
+            continue
+
+        k = i - 1
+        while k >= 0 and not _code(out[k]):
+            k -= 1
+        if k < 0:
+            continue
+        match = ret_re.fullmatch(_code(out[k]))
+        if not match:
+            continue
+
+        ret = int(match.group(1), 16)
+        hi = (ret >> 8) & 0xFF
+        lo = ret & 0xFF
+        indent = out[k][: len(out[k]) - len(out[k].lstrip())]
+        out[k] = (
+            "IF DEF(NES2GBC_PROFILE)\n"
+            f"{indent}ld hl, ${ret:04X}\n"
+            f"{indent}call nes_stack_push_return_hl\n"
+            "ELSE\n"
+            f"{indent}; inline static 6502 JSR return push\n"
+            f"{indent}ldh a, [nes_sp]\n"
+            f"{indent}ld l, a\n"
+            f"{indent}ld h, $C1\n"
+            f"{indent}ld a, ${hi:02X}\n"
+            f"{indent}ld [hl], a\n"
+            f"{indent}dec l\n"
+            f"{indent}ld a, ${lo:02X}\n"
+            f"{indent}ld [hl], a\n"
+            f"{indent}dec l\n"
+            f"{indent}ld a, l\n"
+            f"{indent}ldh [nes_sp], a\n"
+            "ENDC\n"
+        )
+        out[i] = f"{indent}; static JSR push inlined above\n"
+        inlined += 1
+    return inlined
+
+
+def _inline_rts_pops(out: list[str]) -> int:
+    """Inline the exact virtual-stack pop used by translated RTS."""
+
+    inlined = 0
+    for i in range(len(out)):
+        if _code(out[i]) != "call nes_stack_pop_return_hl":
+            continue
+        indent = out[i][: len(out[i]) - len(out[i].lstrip())]
+        out[i] = (
+            "IF DEF(NES2GBC_PROFILE)\n"
+            f"{indent}call nes_stack_pop_return_hl\n"
+            "ELSE\n"
+            f"{indent}; inline 6502 RTS return pop\n"
+            f"{indent}ldh a, [nes_sp]\n"
+            f"{indent}inc a\n"
+            f"{indent}ld l, a\n"
+            f"{indent}ld h, $C1\n"
+            f"{indent}ld a, [hl]\n"
+            f"{indent}ld c, a\n"
+            f"{indent}inc l\n"
+            f"{indent}ld a, l\n"
+            f"{indent}ldh [nes_sp], a\n"
+            f"{indent}ld a, [hl]\n"
+            f"{indent}ld h, a\n"
+            f"{indent}ld l, c\n"
+            "ENDC\n"
+        )
+        inlined += 1
+    return inlined
+
+
 def _fuse_shadow_reloads(out: list[str]) -> int:
     fused = 0
 
@@ -89,8 +173,9 @@ def _fuse_shadow_reloads(out: list[str]) -> int:
             if test != "bit 7, a":
                 continue
 
-        # Require the exact final two flag publications from emit_update_nz or
-        # the inlined compare helper; no possible A clobber may intervene.
+        # Require the exact final two flag publications from emit_update_nz;
+        # no helper, load, arithmetic op, or other possible A clobber may sit
+        # between publication and the branch reload.
         k = i - 1
         while k >= 0 and not _code(out[k]):
             k -= 1
@@ -205,13 +290,15 @@ def _collapse_backward_branch_pairs(out: list[str]) -> int:
     return collapsed
 
 
-def optimize_lines(lines: list[str]) -> tuple[list[str], int, int, int, int]:
+def optimize_lines(lines: list[str]) -> tuple[list[str], int, int, int, int, int, int]:
     out = list(lines)
     compares = _inline_compare_helpers(out)
+    jsr_pushes = _inline_static_jsr_pushes(out)
+    rts_pops = _inline_rts_pops(out)
     shadow_fused = _fuse_shadow_reloads(out)
     zero_retests = _remove_redundant_zero_retests(out)
     backedges = _collapse_backward_branch_pairs(out)
-    return out, compares, shadow_fused, zero_retests, backedges
+    return out, compares, jsr_pushes, rts_pops, shadow_fused, zero_retests, backedges
 
 
 def main() -> int:
@@ -220,14 +307,23 @@ def main() -> int:
     args = parser.parse_args()
 
     original = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    optimized, compares, shadow_fused, zero_retests, backedges = optimize_lines(original)
+    (
+        optimized,
+        compares,
+        jsr_pushes,
+        rts_pops,
+        shadow_fused,
+        zero_retests,
+        backedges,
+    ) = optimize_lines(original)
     args.asm.write_text("".join(optimized), encoding="utf-8")
     print(
         "peephole: "
         f"inlined {compares} compares, "
-        f"fused {shadow_fused} immediate Z/N shadow reloads, "
-        f"removed {zero_retests} redundant zero retests, "
-        f"collapsed {backedges} backward conditional branches"
+        f"{jsr_pushes} static JSR pushes, {rts_pops} RTS pops; "
+        f"fused {shadow_fused} Z/N reloads, "
+        f"removed {zero_retests} zero retests, "
+        f"collapsed {backedges} backward branches"
     )
     return 0
 
