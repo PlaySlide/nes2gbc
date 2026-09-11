@@ -140,14 +140,42 @@ fn flag_mask(flag: Flag) -> u8 {
     }
 }
 
+fn approx_code_bytes(asm: &str) -> usize {
+    // Overestimate so backward `jr` range checks stay conservative.
+    asm.lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with(';')
+                && !l.starts_with("IF ")
+                && !l.starts_with("ENDC")
+                && !l.starts_with("SECTION")
+                && !l.ends_with(':')
+        })
+        .map(|_| 2usize)
+        .sum()
+}
+
 fn emit_static_target(
     out: &mut String,
     target: u16,
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
+    section_offs: Option<&BTreeMap<u16, usize>>,
+    section_pc: usize,
 ) -> bool {
     match banks.get(&target).copied() {
         Some(bank) if bank == current_bank => {
+            if let Some(offs) = section_offs {
+                if let Some(&target_off) = offs.get(&target) {
+                    // `jr` is 2 bytes; offset is from the following instruction.
+                    let delta = target_off as isize - (section_pc + 2) as isize;
+                    if (-128..128).contains(&delta) {
+                        writeln!(out, "    jr nes_{target:04X}").unwrap();
+                        return true;
+                    }
+                }
+            }
             writeln!(out, "    jp nes_{target:04X}").unwrap();
             true
         }
@@ -166,6 +194,8 @@ fn emit_static_control(
     ops: &[IrOp],
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
+    section_offs: Option<&BTreeMap<u16, usize>>,
+    section_pc: usize,
 ) -> bool {
     if ops.len() != 1 {
         return false;
@@ -195,18 +225,18 @@ fn emit_static_control(
                     writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                 }
             }
-            emit_static_target(out, target, current_bank, banks);
+            emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             writeln!(out, ":").unwrap();
             true
         }
         IrOp::Jump(target) if banks.contains_key(&target) => {
-            emit_static_target(out, target, current_bank, banks);
+            emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             true
         }
         IrOp::Call { target, return_addr } if banks.contains_key(&target) => {
             writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
             writeln!(out, "    call nes_stack_push_return_hl").unwrap();
-            emit_static_target(out, target, current_bank, banks);
+            emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             true
         }
         _ => false,
@@ -218,8 +248,10 @@ fn emit_known_target(
     target: u16,
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
+    section_offs: Option<&BTreeMap<u16, usize>>,
+    section_pc: usize,
 ) {
-    if !emit_static_target(out, target, current_bank, banks) {
+    if !emit_static_target(out, target, current_bank, banks, section_offs, section_pc) {
         emit_pc_dispatch(out, target);
     }
 }
@@ -261,9 +293,9 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
     writeln!(out, "nes_reset:").unwrap();
-    writeln!(out, "    ldh a, [nes_reset_count]").unwrap();
+    writeln!(out, "    ld a, [nes_reset_count]").unwrap();
     writeln!(out, "    inc a").unwrap();
-    writeln!(out, "    ldh [nes_reset_count], a").unwrap();
+    writeln!(out, "    ld [nes_reset_count], a").unwrap();
     emit_pc_dispatch(&mut out, options.reset);
     writeln!(out).unwrap();
 
@@ -271,6 +303,8 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     // Defer fallthrough jumps so consecutive same-bank blocks can share a
     // SECTION and fall through in place instead of paying `jp nes_XXXX`.
     let mut pending_fallthrough: Option<(u16 /*target*/, u16 /*from_bank*/)> = None;
+    let mut section_offs: BTreeMap<u16, usize> = BTreeMap::new();
+    let mut section_pc: usize = 0;
 
     for (idx, addr) in selected_list.iter().copied().enumerate() {
         let block = graph.blocks.get(&addr).expect("selected block must exist");
@@ -284,7 +318,15 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             pending_fallthrough = None;
         } else {
             if let Some((target, from_bank)) = pending_fallthrough.take() {
-                emit_known_target(&mut out, target, from_bank, &banks);
+                // Section is closing; range for jr no longer matters after reset.
+                emit_known_target(
+                    &mut out,
+                    target,
+                    from_bank,
+                    &banks,
+                    Some(&section_offs),
+                    section_pc,
+                );
                 writeln!(out).unwrap();
             }
             writeln!(
@@ -292,28 +334,35 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 "SECTION \"NES block {addr:04X}\", ROMX, BANK[{bank}]"
             )
             .unwrap();
+            section_offs.clear();
+            section_pc = 0;
         }
 
+        section_offs.insert(block.start, section_pc);
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
         writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
         writeln!(out, "    call nes_profile_trace_pc").unwrap();
         writeln!(out, "ENDC").unwrap();
+        // Profile-trace body is stripped in release; do not charge section_pc.
 
         if options.debug_trace {
             // Keep an exact current NES-PC breadcrumb even when optimized direct
             // jumps bypass the dynamic dispatcher.
+            let before = out.len();
             writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
             writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
             writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
             writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+            section_pc += approx_code_bytes(&out[before..]);
         }
 
         if poll_points.contains(&block.start) {
             // Usually there is no pending frame, so loop safe-points pay only
-            // a WRAM byte test instead of a helper call and live LY polling.
-            writeln!(out, "    ld a, [nes_host_vblank_pending]").unwrap();
+            // an HRAM byte test instead of a helper call and live LY polling.
+            let before = out.len();
+            writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jr z, :+").unwrap();
             writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
@@ -321,15 +370,10 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
             writeln!(out, ":").unwrap();
+            section_pc += approx_code_bytes(&out[before..]);
         }
 
         let mut pending: Vec<IrOp> = Vec::new();
-        let flush_pending = |out: &mut String, pending: &mut Vec<IrOp>| {
-            if !pending.is_empty() {
-                out.push_str(&lr35902::emit_ops(pending));
-                pending.clear();
-            }
-        };
         let write_insn_comment = |out: &mut String, instruction: &crate::cpu6502::DecodedInstruction| {
             writeln!(
                 out,
@@ -347,29 +391,55 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 Ok(ops) => {
                     // Probe without writing: static control (branch/jmp) clobbers A.
                     let mut probe = String::new();
-                    if emit_static_control(&mut probe, &ops, bank, &banks) {
-                        flush_pending(&mut out, &mut pending);
+                    if emit_static_control(&mut probe, &ops, bank, &banks, None, 0) {
+                        if !pending.is_empty() {
+                            let before = out.len();
+                            out.push_str(&lr35902::emit_ops(&pending));
+                            section_pc += approx_code_bytes(&out[before..]);
+                            pending.clear();
+                        }
                         write_insn_comment(&mut out, instruction);
-                        let _ = emit_static_control(&mut out, &ops, bank, &banks);
+                        let before = out.len();
+                        let _ = emit_static_control(
+                            &mut out,
+                            &ops,
+                            bank,
+                            &banks,
+                            Some(&section_offs),
+                            section_pc,
+                        );
+                        section_pc += approx_code_bytes(&out[before..]);
                     } else {
                         write_insn_comment(&mut out, instruction);
                         pending.extend(ops);
                     }
                 }
                 Err(err) => {
-                    flush_pending(&mut out, &mut pending);
+                    if !pending.is_empty() {
+                        let before = out.len();
+                        out.push_str(&lr35902::emit_ops(&pending));
+                        section_pc += approx_code_bytes(&out[before..]);
+                        pending.clear();
+                    }
                     write_insn_comment(&mut out, instruction);
+                    let before = out.len();
                     writeln!(out, "    ; TODO {err}").unwrap();
                     writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
                     writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
                     writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
                     writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
                     writeln!(out, "    jp nes_unimplemented").unwrap();
+                    section_pc += approx_code_bytes(&out[before..]);
                     break;
                 }
             }
         }
-        flush_pending(&mut out, &mut pending);
+        if !pending.is_empty() {
+            let before = out.len();
+            out.push_str(&lr35902::emit_ops(&pending));
+            section_pc += approx_code_bytes(&out[before..]);
+            pending.clear();
+        }
 
         if let Some(last) = block.instructions.last() {
             if is_branch(last.def.mnemonic) || !terminal_mnemonic(last.def.mnemonic) {
@@ -385,7 +455,16 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                         // bank — keep the section open and fall through.
                         pending_fallthrough = Some((target, bank));
                     } else {
-                        emit_known_target(&mut out, target, bank, &banks);
+                        let before = out.len();
+                        emit_known_target(
+                            &mut out,
+                            target,
+                            bank,
+                            &banks,
+                            Some(&section_offs),
+                            section_pc,
+                        );
+                        section_pc += approx_code_bytes(&out[before..]);
                     }
                 }
             }
@@ -394,7 +473,16 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     }
 
     if let Some((target, from_bank)) = pending_fallthrough.take() {
-        emit_known_target(&mut out, target, from_bank, &banks);
+        let before = out.len();
+        emit_known_target(
+            &mut out,
+            target,
+            from_bank,
+            &banks,
+            Some(&section_offs),
+            section_pc,
+        );
+        let _ = approx_code_bytes(&out[before..]);
         writeln!(out).unwrap();
     }
 

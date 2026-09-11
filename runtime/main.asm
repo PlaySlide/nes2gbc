@@ -331,7 +331,7 @@ nes_gbc_vblank_isr:
     ; This host frame was presented from a completed NES state, so it may
     ; also become the next translated NES NMI event.
     ld a, $01
-    ld [nes_host_vblank_pending], a
+    ldh [nes_host_vblank_pending], a
 .done:
     pop hl
     pop de
@@ -667,7 +667,7 @@ Start:
     ld [nes_dac], a
     ld [nes_controller_strobe], a
     ld [nes_controller_shift], a
-    ld [nes_host_vblank_pending], a
+    ldh [nes_host_vblank_pending], a
     ld [nes_vram_unlocked], a
     ld [nes_nmi_active], a
     ld [nes_oam_dirty], a
@@ -740,7 +740,7 @@ Start:
     ld [nes_ntdiag_commit_serial], a
     ld [nes_split_duplicate_streak], a
     ld [nes_split_retire_grace_used], a
-    ldh [nes_reset_count], a
+    ld [nes_reset_count], a
     ldh [nes_fault_hram], a
     ldh [nes_last_indirect_lo], a
     ldh [nes_last_indirect_hi], a
