@@ -171,17 +171,18 @@ nes_gbc_vblank_isr:
 .ctrl_bank_done:
     call nes_video_update_ctrl
 
-    ; A completed PPUCTRL commit may select the playfield nametable globally.
-    ; During a captured raster split that must not survive into scanline 0:
-    ; the HUD/top map was armed at VBlank entry and the STAT ISR owns the later
-    ; switch to the playfield map. If nested STAT already consumed this frame's
-    ; LYC event, do NOT switch the display back to the HUD map afterward.
+    ; A completed PPUCTRL commit may change LCDC's map bit. During a captured
+    ; raster split, restore whichever half of the split currently owns scanout:
+    ; top/HUD while LYC is still armed, bottom/playfield after STAT consumed it.
     ldh a, [nes_split_active]
     and a
     jr z, .ctrl_done
     ldh a, [rSTAT]
     bit 6, a
-    jr z, .ctrl_done
+    jr nz, .ctrl_reassert_top
+    call nes_video_apply_split_bottom_map
+    jr .ctrl_done
+.ctrl_reassert_top:
     call nes_video_apply_split_top_map
 .ctrl_done:
 
