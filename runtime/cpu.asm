@@ -799,18 +799,20 @@ nes_poll_nmi_hl:
     and a
     ret z
 
-    ; Consume the host event. If NES NMI is disabled or already active, this
-    ; frame is intentionally dropped instead of creating back-to-back NMIs.
-    xor a
-    ld [nes_host_vblank_pending], a
-
+    ; pending is a counter (1+frame_skip per host VBlank). Deliver one NMI per
+    ; successful poll; keep the remainder when already inside an NMI so skip>0
+    ; can queue multiple NES frames. If NMI is disabled, drop one count.
     ld a, [nes_ppuctrl]
     bit 7, a
-    jr z, .no_nmi
+    jr z, .consume_drop
 
     ld a, [nes_nmi_active]
     and a
-    jr nz, .no_nmi
+    ret nz
+
+    ld a, [nes_host_vblank_pending]
+    dec a
+    ld [nes_host_vblank_pending], a
 
     ld a, $01
     ld [nes_nmi_active], a
@@ -877,7 +879,10 @@ nes_poll_nmi_hl:
     ld a, $01
     ret
 
-.no_nmi:
+.consume_drop:
+    ld a, [nes_host_vblank_pending]
+    dec a
+    ld [nes_host_vblank_pending], a
     xor a
     ret
 

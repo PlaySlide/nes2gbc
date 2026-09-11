@@ -191,6 +191,12 @@ nes_fault_zp06_snapshot:   ds 1   ; $FFFC, computed indirect target low
 nes_fault_zp07_snapshot:   ds 1   ; $FFFD, computed indirect target high
 nes_fault_kind:            ds 1   ; $FFFE, $01 = nes_unimplemented
 
+; Host frame-skip debug controls (Select+Up / Select+Down).
+; Unfixed WRAM0 so we do not collide with palette / profile / APU layouts.
+SECTION "NES frame skip state", WRAM0
+nes_frame_skip:        ds 1 ; extra NES frames per host VBlank (0..7)
+nes_skip_chord_prev:   ds 1 ; bit0=Sel+Up held, bit1=Sel+Down held
+
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
 

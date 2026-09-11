@@ -353,10 +353,12 @@ nes_controller_latch:
     cpl
     and $0F
     ld b, a
+    ld e, a                 ; raw actions (Select needed after chords)
 
     ; Camera chords are edge-triggered and consumed so the NES game never
     ; sees them. Select+A toggles Follow/Manual. Select+B cycles visible follow
     ; targets. In Manual, Select+Start cycles TL -> TR -> BL -> BR -> Center.
+    ; Select+Up/Down adjusts frame skip (handled after directions are read).
     bit 2, b
     jr z, .view_chord_released
 
@@ -423,6 +425,52 @@ nes_controller_latch:
     cpl
     and $0F
     ld c, a
+
+    ; Select+Up / Select+Down: edge-triggered frame-skip adjust (0..7).
+    ; A/B/Start chords win when held with Select; Up/Down are consumed so NES
+    ; never sees the host debug chord.
+    bit 2, e
+    jr z, .skip_chords_idle
+    ld a, e
+    and $0B                 ; A, B, or Start with Select?
+    jr nz, .skip_chords_idle
+
+    ld d, 0                 ; new skip-chord held mask
+    bit 2, c                ; Up
+    jr z, .skip_check_down
+    set 0, d
+    res 2, c                ; consume Up
+    res 2, b                ; consume Select
+    ld a, [nes_skip_chord_prev]
+    bit 0, a
+    jr nz, .skip_check_down
+    ld a, [nes_frame_skip]
+    cp 7
+    jr nc, .skip_check_down
+    inc a
+    ld [nes_frame_skip], a
+.skip_check_down:
+    bit 3, c                ; Down
+    jr z, .skip_chords_store
+    set 1, d
+    res 3, c
+    res 2, b
+    ld a, [nes_skip_chord_prev]
+    bit 1, a
+    jr nz, .skip_chords_store
+    ld a, [nes_frame_skip]
+    and a
+    jr z, .skip_chords_store
+    dec a
+    ld [nes_frame_skip], a
+.skip_chords_store:
+    ld a, d
+    ld [nes_skip_chord_prev], a
+    jr .skip_chords_done
+.skip_chords_idle:
+    xor a
+    ld [nes_skip_chord_prev], a
+.skip_chords_done:
 
     bit 2, c
     jr z, .no_up

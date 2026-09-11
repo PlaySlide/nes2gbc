@@ -307,8 +307,10 @@ nes_gbc_vblank_isr:
 .scroll_done:
 
     ; This host frame was presented from a completed NES state, so it may
-    ; also become the next translated NES NMI event.
-    ld a, $01
+    ; also become the next translated NES NMI event(s). pending = 1 + skip
+    ; so Select+Up can run multiple NES frames per host present.
+    ld a, [nes_frame_skip]
+    inc a
     ld [nes_host_vblank_pending], a
 .done:
     pop hl
@@ -521,6 +523,8 @@ Start:
     ld [nes_view_follow_candidate_y], a
     ld [nes_view_follow_slot], a
     ld [nes_view_select_prev], a
+    ld [nes_frame_skip], a
+    ld [nes_skip_chord_prev], a
     ld [nes_bg_pattern_committed], a
     ld [nes_nametable_stage_used], a
     ld [nes_generic_map_rebuild_dirty], a
