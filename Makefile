@@ -14,6 +14,7 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE=1     # light runtime counters'
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE_TRACE=1 # expensive rolling block trace'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
+	@echo '  make gbc ROM="path/to/game.nes" PEEPHOLE=0      # disable generated-asm perf pass'
 	@echo '  make test'
 
 generate:
