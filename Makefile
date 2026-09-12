@@ -14,7 +14,6 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE=1     # light runtime counters'
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE_TRACE=1 # expensive rolling block trace'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
-	@echo '  make gbc ROM="path/to/game.nes" PEEPHOLE=0      # disable generated-asm perf pass'
 	@echo '  make test'
 
 generate:
@@ -44,6 +43,7 @@ generate:
 		python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
 		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
+		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 
