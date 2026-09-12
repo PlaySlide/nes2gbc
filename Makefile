@@ -33,6 +33,7 @@ generate:
 		python3 tools/trim_indexed_ram_bus.py runtime/generated.asm; \
 		if [ "$(TRACE)" != "1" ]; then python3 tools/mirror_indexed_prg_tables.py runtime/generated.asm "$(ROM)"; fi; \
 		python3 tools/index_math_generated.py runtime/generated.asm; \
+		python3 tools/remove_index_flag_scaffolding.py runtime/generated.asm; \
 		python3 tools/inline_ppustatus_generated.py runtime/generated.asm; \
 		python3 tools/specialize_sprite0_poll.py runtime/generated.asm; \
 		python3 tools/fuse_sprite0_branch.py runtime/generated.asm; \
