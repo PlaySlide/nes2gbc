@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Cache one hot direct NES zero-page byte in a spare host register per block.
+"""Cache hot direct NES zero-page bytes in spare host registers per block.
 
 This pass runs after the proven block-local X/Y cache. It only uses whichever of
 LR35902 B/C is still completely unused by the translated block, so existing X/Y
-caches keep priority.
+caches keep priority. The first version cached only one ZP byte per block; this
+version may use both B and C when both remain free and two independent candidates
+are profitable.
 
 Only direct host addresses $C000-$C0FF are candidates. A block is rejected if it
 contains an ordinary helper CALL or any indirect host-memory access through
-HL/DE/BC, because such an access could alias the cached zero-page byte. Canonical
+HL/DE/BC, because such an access could alias a cached zero-page byte. Canonical
 NES RAM remains authoritative: stores still write WRAM and then refresh the host
 cache. Both GBC interrupt handlers preserve BC, and translated NES NMI delivery
-occurs at block-entry poll points, so an NMI return re-enters and reseeds the
+occurs at block-entry poll points, so an NMI return re-enters and reseeds every
 cache.
 
-LR35902 M-cycle estimate:
+LR35902 M-cycle estimate, independently per cached byte:
     direct absolute load:  ld a,[$C0xx] = 4
     cached load:           ld a,b/c     = 1
     one-time seed:         absolute load + ld r,a = 5
@@ -134,8 +136,9 @@ def saving(loads: int, stores: int) -> int:
     return 3 * loads - 5 - stores
 
 
-def optimize(lines: list[str]) -> tuple[int, int, int]:
+def optimize(lines: list[str]) -> tuple[int, int, int, int]:
     cached_blocks = 0
+    cached_bytes = 0
     replaced_loads = 0
     mirrored_stores = 0
 
@@ -159,18 +162,26 @@ def optimize(lines: list[str]) -> tuple[int, int, int]:
         if not candidates:
             continue
 
-        # Keep this pass deliberately small: cache only the single hottest ZP
-        # byte in a block, leaving any second spare register available to future
-        # local optimizations.
+        # Each cached byte is independent. Use at most the number of genuinely
+        # spare B/C registers, ordered by estimated cycle saving.
         candidates.sort(reverse=True)
-        _gain, addr, _loads, _stores = candidates[0]
-        reg = free_regs[0]
-        host = 0xC000 + addr
+        chosen = candidates[: len(free_regs)]
+        assignment = {
+            addr: reg
+            for (_gain, addr, _loads, _stores), reg in zip(chosen, free_regs)
+        }
+        if not assignment:
+            continue
 
-        seed = [
-            f"    ld a, [${host:04X}]\n",
-            f"    ld {reg}, a ; block-local NES ZP ${addr:02X} cache\n",
-        ]
+        seed: list[str] = []
+        for addr, reg in assignment.items():
+            host = 0xC000 + addr
+            seed.extend(
+                [
+                    f"    ld a, [${host:04X}]\n",
+                    f"    ld {reg}, a ; block-local NES ZP ${addr:02X} cache\n",
+                ]
+            )
         lines[block.start + 1 : block.start + 1] = seed
         delta = len(seed)
         start = block.start + 1 + delta
@@ -180,21 +191,30 @@ def optimize(lines: list[str]) -> tuple[int, int, int]:
         while i < end:
             c = code(lines[i])
             lm = ZP_LOAD_RE.fullmatch(c)
-            if lm and int(lm.group(1), 16) == addr:
-                ind = indent_of(lines[i])
-                lines[i] = f"{ind}ld a, {reg} ; cached NES ZP ${addr:02X}\n"
-                replaced_loads += 1
-            else:
-                sm = ZP_STORE_RE.fullmatch(c)
-                if sm and int(sm.group(1), 16) == addr and sm.group(2).lower() == "a":
+            if lm:
+                addr = int(lm.group(1), 16)
+                reg = assignment.get(addr)
+                if reg is not None:
+                    ind = indent_of(lines[i])
+                    lines[i] = f"{ind}ld a, {reg} ; cached NES ZP ${addr:02X}\n"
+                    replaced_loads += 1
+                    i += 1
+                    continue
+
+            sm = ZP_STORE_RE.fullmatch(c)
+            if sm and sm.group(2).lower() == "a":
+                addr = int(sm.group(1), 16)
+                reg = assignment.get(addr)
+                if reg is not None:
                     ind = indent_of(lines[i])
                     lines[i] = lines[i] + f"{ind}ld {reg}, a ; refresh NES ZP ${addr:02X} cache\n"
                     mirrored_stores += 1
             i += 1
 
         cached_blocks += 1
+        cached_bytes += len(assignment)
 
-    return cached_blocks, replaced_loads, mirrored_stores
+    return cached_blocks, cached_bytes, replaced_loads, mirrored_stores
 
 
 def main() -> int:
@@ -203,10 +223,10 @@ def main() -> int:
     args = p.parse_args()
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    blocks_n, loads_n, stores_n = optimize(lines)
+    blocks_n, bytes_n, loads_n, stores_n = optimize(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
-        f"zp-cache: cached one hot ZP byte in {blocks_n} blocks, "
+        f"zp-cache: cached {bytes_n} hot ZP bytes across {blocks_n} blocks, "
         f"replaced {loads_n} absolute loads, mirrored {stores_n} stores"
     )
     return 0
