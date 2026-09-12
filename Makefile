@@ -43,6 +43,7 @@ generate:
 		python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
+		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 
