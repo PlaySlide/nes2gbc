@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Widen only generated NES-label JRs that are not provably still in range.
+"""Normalize generated NES-label jumps after size-changing peepholes.
 
 The Rust emitter decides whether a same-section target fits JR before the
 post-generation peephole passes run. Some of those passes expand code, so an
-originally valid JR can become too distant. The old safety pass widened every
-such JR unconditionally.
+originally valid JR can become too distant. Conversely, many generated JPs are
+still close enough to use the smaller/faster JR after all other rewrites finish.
 
-This version keeps an existing JR only when a conservative post-peephole proof
-shows that it must still fit. It never creates a new JR.
-
-Proof rules are deliberately pessimistic:
+This pass uses one conservative proof for both directions:
 
 * source and target must still be in the exact same RGBDS SECTION;
 * every recognized LR35902 instruction between them is charged the architectural
   maximum of three bytes, regardless of its real encoding;
 * labels/comments/blank lines cost zero;
-* any unrecognized line in the span makes the proof fail and the JR is widened;
+* any unrecognized line in the span makes the proof fail;
 * forward displacement must be <= +127;
-* backward distance, including the two-byte JR itself, must be <= 128 bytes.
+* backward distance, including the hypothetical two-byte JR itself, must be
+  <= 128 bytes.
 
-Thus a preserved JR is safe even if every instruction in its span takes the
-largest possible LR35902 encoding. Anything ambiguous retains the previous
-range-independent JP behavior.
+Existing JRs are preserved only when the proof succeeds; otherwise they widen
+to JP exactly as before. Existing direct JPs to generated NES labels shrink to
+JR only when the same proof succeeds. Thus every newly-created or preserved JR
+is safe even if every instruction in its span takes the largest possible
+LR35902 encoding.
 """
 
 from __future__ import annotations
@@ -33,6 +33,9 @@ from pathlib import Path
 
 STATIC_JR_RE = re.compile(
     r"^(?P<indent>\s*)jr (?:(?P<cond>z|nz|c|nc), )?(?P<target>nes_[0-9A-Fa-f]{4})(?P<tail>\s*(?:;.*)?)$"
+)
+STATIC_JP_RE = re.compile(
+    r"^(?P<indent>\s*)jp (?:(?P<cond>z|nz|c|nc), )?(?P<target>nes_[0-9A-Fa-f]{4})(?P<tail>\s*(?:;.*)?)$"
 )
 NES_LABEL_RE = re.compile(
     r"^\s*(?P<label>nes_[0-9A-Fa-f]{4}):\s*(?:;.*)?$"
@@ -67,7 +70,7 @@ def max_line_bytes(line: str) -> int | None:
         return 3
 
     # Data directives, macro invocations, conditionals, etc. are intentionally
-    # not guessed at. Their presence forces widening for any JR spanning them.
+    # not guessed at. Their presence forces the short-jump proof to fail.
     return None
 
 
@@ -96,6 +99,7 @@ def provably_in_range(
     section_ids: list[int],
     labels: dict[str, tuple[int, int]],
 ) -> bool:
+    """Prove a hypothetical two-byte JR from source_i can reach target."""
     found = labels.get(target)
     if found is None:
         return False
@@ -131,32 +135,49 @@ def provably_in_range(
     return total + 2 <= 128
 
 
-def widen(lines: list[str]) -> tuple[list[str], int, int]:
+def normalize(lines: list[str]) -> tuple[list[str], int, int, int]:
     out = list(lines)
     section_ids, labels = index_layout(lines)
-    widened = 0
-    kept = 0
+    kept_jr = 0
+    widened_jr = 0
+    shrunk_jp = 0
 
     for i, line in enumerate(lines):
         raw = line.rstrip("\n")
-        match = STATIC_JR_RE.fullmatch(raw)
-        if not match:
+
+        jr = STATIC_JR_RE.fullmatch(raw)
+        if jr:
+            target = jr.group("target")
+            if provably_in_range(lines, i, target, section_ids, labels):
+                kept_jr += 1
+                continue
+
+            cond = jr.group("cond")
+            prefix = "jp " if cond is None else f"jp {cond}, "
+            newline = "\n" if line.endswith("\n") else ""
+            out[i] = (
+                f"{jr.group('indent')}{prefix}{target}{jr.group('tail')}{newline}"
+            )
+            widened_jr += 1
             continue
 
-        target = match.group("target")
-        if provably_in_range(lines, i, target, section_ids, labels):
-            kept += 1
+        jp = STATIC_JP_RE.fullmatch(raw)
+        if not jp:
             continue
 
-        cond = match.group("cond")
-        prefix = "jp " if cond is None else f"jp {cond}, "
+        target = jp.group("target")
+        if not provably_in_range(lines, i, target, section_ids, labels):
+            continue
+
+        cond = jp.group("cond")
+        prefix = "jr " if cond is None else f"jr {cond}, "
         newline = "\n" if line.endswith("\n") else ""
         out[i] = (
-            f"{match.group('indent')}{prefix}{target}{match.group('tail')}{newline}"
+            f"{jp.group('indent')}{prefix}{target}{jp.group('tail')}{newline}"
         )
-        widened += 1
+        shrunk_jp += 1
 
-    return out, kept, widened
+    return out, kept_jr, widened_jr, shrunk_jp
 
 
 def main() -> int:
@@ -165,11 +186,11 @@ def main() -> int:
     args = parser.parse_args()
 
     original = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    optimized, kept, widened = widen(original)
+    optimized, kept_jr, widened_jr, shrunk_jp = normalize(original)
     args.asm.write_text("".join(optimized), encoding="utf-8")
     print(
-        f"peephole: kept {kept} proven in-range static generated JRs, "
-        f"widened {widened} after code expansion"
+        f"peephole: kept {kept_jr} proven in-range generated JRs, "
+        f"widened {widened_jr}, shrunk {shrunk_jp} proven in-range generated JPs"
     )
     return 0
 
