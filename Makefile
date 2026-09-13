@@ -25,6 +25,7 @@ generate:
 		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
+		python3 tools/repack_code_banks.py runtime/generated.asm; \
 		python3 tools/peephole_generated.py runtime/generated.asm; \
 		python3 tools/collapse_conditional_jp.py runtime/generated.asm; \
 		python3 tools/tighten_stack_generated.py runtime/generated.asm; \
