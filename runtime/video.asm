@@ -2405,30 +2405,109 @@ nes_video_fit_apply_scroll:
     ldh [rSTAT], a
     ret
 
-; Half-scale letterbox scroll. Map cols 16-31 mirror 0-15 so SCX=240 letterbox
-; never walks into blank tile 0. Sliding-origin windowing was rolled back:
-; it broke single-screen DK / Balloon Fight while helping SMB mid-scroll.
+; Half-scale letterbox scroll with a *guarded* 16-slot sliding window.
+; Map cols 16-31 mirror 0-15 so SCX=240 letterbox never walks into blank tile 0.
+;
+; Sliding is vertical-mirroring only (SMB-style 512px horizontal pair). Horizontal
+; / single-screen titles (DK, Balloon Fight) keep origin_mx=0 so publish stays on
+; the resident page — d4bc54c's unguarded slide mixed NT pages into identity slots.
 nes_video_fit_update_scroll_window:
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .slide_vert
+
+    ; Non-vertical: resident single-screen behavior (origin locked).
     xor a
     ld [nes_fit_origin_mx], a
-
-    ; Always refresh play_scx for the fit STAT playfield half.
     ldh a, [nes_split_active]
     and a
-    jr z, .scx_ppu
+    jr z, .nonsplit_scx
     ldh a, [nes_split_bottom_x]
-    jr .scx_half
-.scx_ppu:
+    jr .nonsplit_half
+.nonsplit_scx:
     ld a, [nes_ppu_scroll_x]
-.scx_half:
+.nonsplit_half:
     srl a
     sub 16
     ld [nes_fit_play_scx], a
+    jr .apply_host_regs
 
+.slide_vert:
+    ; Effective NES X in BC (0..511): scroll (+ view) and nametable bit 0.
+    ld a, [nes_ppu_scroll_x]
+    ld c, a
+    ld b, 0
+    ldh a, [nes_split_active]
+    and a
+    jr z, .eff_from_ctrl
+    ldh a, [nes_split_bottom_x]
+    ld c, a
+    ldh a, [nes_view_x]
+    add c
+    ld c, a
+    ld b, 0
+    jr nc, .eff_split_nt
+    inc b
+.eff_split_nt:
+    ldh a, [nes_split_bottom_ctrl]
+    and $01
+    xor b
+    ld b, a
+    jr .eff_ready
+.eff_from_ctrl:
+    ld a, [nes_ppuctrl]
+    and $01
+    ld b, a
+.eff_ready:
+    ; HL = effective NES X; half_x = X/2
+    ld a, c
+    ld l, a
+    ld a, b
+    ld h, a
+    srl h
+    rr l
+    ld a, l
+    and $07
+    ld e, a                    ; fine 0..7
+    ld a, l
+    srl a
+    srl a
+    srl a
+    and $1F
+    ld c, a                    ; new origin_mx
+
+    ld a, [nes_fit_origin_mx]
+    cp c
+    jr z, .scx_from_origin
+    ld a, c
+    ld [nes_fit_origin_mx], a
+    ; Origin moved: request recompose. If a chunk is already running, do not
+    ; reset the row cursor (starvation while SMB scrolls every few frames);
+    ; remaining rows pick up the new origin via publish.
+    ld a, [nes_fit_dirty]
+    and a
+    jr nz, .scx_from_origin
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+
+.scx_from_origin:
+    ; play_scx = (origin_mx & 15)*8 + fine - 16
+    ld a, [nes_fit_origin_mx]
+    and $0F
+    add a
+    add a
+    add a
+    add e
+    sub 16
+    ld [nes_fit_play_scx], a
+
+.apply_host_regs:
     ldh a, [nes_split_active]
     and a
     jr nz, .split_regs_done
-    ; Single-screen: host owns SCX/SCY directly.
+    ; Single-screen: host owns SCX/SCY. Split path: STAT uses nes_fit_play_scx.
     ld a, [nes_fit_play_scx]
     ldh [rSCX], a
     ld a, [nes_ppu_scroll_y]
@@ -2557,12 +2636,9 @@ nes_video_fit_sync_nametable_write:
     jp nc, nes_video_fit_sync_attribute_write
 
 .fit_tile:
-    ; Only the displayed physical page owns identity-slot CHR.
-    ld a, h
-    and $04
-    ld b, a
-    ld a, [nes_fit_vram_page]
-    cp b
+    ; Visible-window gate: origin==0 => resident page only (DK/BF); else accept
+    ; either physical NT when the world column falls in [origin, origin+16).
+    call nes_video_fit_hl_in_fit_window
     ret nz
 
     ; Bulk flood already scheduled: skip per-tile work (finish via chunked flush).
@@ -2586,11 +2662,7 @@ nes_video_fit_sync_nametable_write:
     jp nes_video_fit_publish_metatile_hl
 
 nes_video_fit_mark_dirty_if_resident:
-    ld a, h
-    and $04
-    ld b, a
-    ld a, [nes_fit_vram_page]
-    cp b
+    call nes_video_fit_hl_in_fit_window
     ret nz
     ld a, [nes_fit_dirty]
     and a
@@ -2599,6 +2671,47 @@ nes_video_fit_mark_dirty_if_resident:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ret
+
+; HL = NES NT WRAM addr. Z = column belongs in the current fit window (publish
+; it / mark dirty). NZ = outside the window (ignore).
+; origin_mx==0: resident-page gate only (single-screen / pre-slide).
+; origin_mx!=0: world column in [origin, origin+16) across either physical NT.
+nes_video_fit_hl_in_fit_window:
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr nz, .window
+    ld a, h
+    and $04
+    ld b, a
+    ld a, [nes_fit_vram_page]
+    cp b
+    jr z, .ok
+    or $01
+    ret
+.window:
+    ld a, l
+    and $1F
+    srl a
+    ld c, a
+    ld a, h
+    and $04
+    jr z, .world_p0
+    ld a, c
+    or $10
+    ld c, a
+.world_p0:
+    ld a, [nes_fit_origin_mx]
+    ld b, a
+    ld a, c
+    sub b
+    and $1F
+    cp 16
+    jr c, .ok
+    or $01
+    ret
+.ok:
+    xor a
     ret
 
 ; Kept for call sites that already have TL in HL (unused by dirty path).
@@ -2630,11 +2743,37 @@ nes_video_fit_publish_metatile_hl:
     ld a, [nes_fit_mt_tmp_h]
     ld h, a
 
+    ; world_mx = (phys_page?16:0) + (tile_x>>1)
     ld a, l
     and $1F
     srl a
+    ld c, a
+    ld a, h
+    and $04
+    jr z, .world_p0
+    ld a, c
+    or $10
+    ld c, a
+.world_p0:
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr z, .resident_mx
+    ; Sliding: nes_fit_mt_mx = window offset; publish adds origin.
+    ld b, a
+    ld a, c
+    sub b
+    and $1F
+    cp 16
+    ret nc
+    ld [nes_fit_mt_mx], a
+    jr .my_from_hl
+.resident_mx:
+    ; origin==0: local column on this physical page (must already be gated).
+    ld a, c
+    and $0F
     ld [nes_fit_mt_mx], a
 
+.my_from_hl:
     ld a, h
     and $03
     add a
@@ -2660,12 +2799,41 @@ nes_video_fit_publish_metatile_hl:
     ld [nes_fit_mt_page], a
     jp nes_video_fit_publish_at_mx_my
 
-; Compose + upload using nes_fit_mt_mx/my/page (resident-page local slots).
+; Compose + upload using nes_fit_mt_mx/my.
+; origin_mx==0: mx is resident-page local column; nes_fit_mt_page selects NT.
+; origin_mx!=0: mx is window offset; world=(origin+mx)&31 picks NT/column;
+;               CHR/map slot = world&15 (unique within any 16-wide window).
 nes_video_fit_publish_at_mx_my:
-    ; If quad not already filled (recompose path), load from NT.
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr z, .resident_xy
+
+    ; Sliding: derive page + NES tile X from world metatile X.
+    ld b, a
+    ld a, [nes_fit_mt_mx]
+    add b
+    and $1F
+    ld [nes_fit_mt_page], a    ; temp: world mx
+    and $0F
+    add a
+    ld c, a                    ; local NES tile X = (world&15)*2
+    ld a, [nes_fit_mt_page]
+    and $10
+    jr z, .slide_p0
+    ld a, $04
+    jr .slide_page_set
+.slide_p0:
+    xor a
+.slide_page_set:
+    ld [nes_fit_mt_page], a
+    jr .have_xy
+
+.resident_xy:
     ld a, [nes_fit_mt_mx]
     add a
     ld c, a
+
+.have_xy:
     ld a, [nes_fit_mt_my]
     add a
     ld b, a
@@ -2732,13 +2900,25 @@ nes_video_fit_publish_at_mx_my:
     ld [nes_fit_mt_tmp_h], a
     pop hl
 
-    ; tile id = 1+my*16+mx
+    ; tile id = 1+my*16+slot; slot = mx (resident) or world&15 (sliding)
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr z, .slot_resident
+    ld b, a
+    ld a, [nes_fit_mt_mx]
+    add b
+    and $0F
+    ld c, a
+    jr .slot_ready
+.slot_resident:
+    ld a, [nes_fit_mt_mx]
+    and $0F
+    ld c, a
+.slot_ready:
     ld a, [nes_fit_mt_my]
     swap a
     and $F0
-    ld b, a
-    ld a, [nes_fit_mt_mx]
-    or b
+    or c
     inc a
     ld [nes_fit_mt_tmp_l], a
     call nes_video_fit_upload_tile_a
@@ -2751,8 +2931,18 @@ nes_video_fit_publish_at_mx_my:
     ; samples blank tile 0 in the high half (identity init mirrors both).
     call nes_video_fit_vblank_ok
     jp z, nes_video_fit_defer_dirty
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr z, .map_slot_res
+    ld b, a
+    ld a, [nes_fit_mt_mx]
+    add b
+    and $0F
+    jr .map_slot_go
+.map_slot_res:
     ld a, [nes_fit_mt_mx]
     and $0F
+.map_slot_go:
     call nes_video_fit_map_addr_a
     call nes_video_fit_write_map_cell_de
     ld a, e
