@@ -24,6 +24,11 @@ return PC and specialize only the hottest subset. Unselected return PCs still
 fall through to `nes_dispatch_hl`, so this broadens coverage without weakening
 the exact-return guard or increasing its maximum size.
 
+Within the selected exact-return set, emit the hottest high-byte group first
+and then the hottest low-byte return inside that group. This changes only guard
+ordering: coverage, code-size limits, exact comparisons, and dynamic fallback
+remain unchanged.
+
 This pass runs after the one-block leaf pass, so already-specialized RTS sites
 are left alone. A per-bank expansion budget keeps the prototype from consuming
 translated-code headroom too aggressively.
@@ -205,22 +210,33 @@ def direct_jump(ret_pc: int, source_bank: int, label_bank: dict[int, int], ind: 
     ]
 
 
-def fast_dispatch(block: Block, returns: list[int], label_bank: dict[int, int]) -> str:
-    """Group exact-return guards by high byte to avoid repeated H compares."""
+def fast_dispatch(
+    block: Block,
+    returns: list[int],
+    weights: collections.Counter[int],
+    label_bank: dict[int, int],
+) -> str:
+    """Group by high byte, then order groups/returns by static JSR weight."""
     ind = "    "
     grouped: dict[int, list[int]] = collections.defaultdict(list)
     for ret in returns:
         grouped[(ret >> 8) & 0xFF].append(ret)
 
+    ordered_groups = sorted(
+        grouped.items(),
+        key=lambda item: (-sum(weights[ret] for ret in item[1]), item[0]),
+    )
+
     out: list[str] = [f"{ind}; guarded multi-block RTS return fast path\n"]
-    for hi_index, (hi, vals) in enumerate(sorted(grouped.items())):
+    for hi_index, (hi, vals) in enumerate(ordered_groups):
         next_hi = f"nes_rts_sub_{block.addr:04X}_hi_{hi_index}_next"
         out.extend([
             f"{ind}ld a, h\n",
             f"{ind}cp ${hi:02X}\n",
             f"{ind}jr nz, {next_hi}\n",
         ])
-        for lo_index, ret_pc in enumerate(sorted(vals)):
+        ordered_vals = sorted(vals, key=lambda ret: (-weights[ret], ret))
+        for lo_index, ret_pc in enumerate(ordered_vals):
             next_lo = f"nes_rts_sub_{block.addr:04X}_{hi_index}_{lo_index}_next"
             out.extend([
                 f"{ind}ld a, l\n",
@@ -286,7 +302,7 @@ def main() -> int:
         ordered = rank_returns(weighted_returns, args.max_returns)
         if not ordered:
             continue
-        text = fast_dispatch(block, ordered, label_bank)
+        text = fast_dispatch(block, ordered, weighted_returns, label_bank)
         covered_weight = sum(weighted_returns[ret] for ret in ordered)
         candidates.append((
             -covered_weight,
