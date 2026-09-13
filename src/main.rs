@@ -110,17 +110,42 @@ fn emit_follow_hint_init(asm: &mut String, follow_slot: Option<u8>) {
     asm.push_str("    ret\n");
 }
 
+fn emit_fit_screen_init(asm: &mut String, fit_screen: bool) {
+    asm.push_str("\n; Build-time half-scale fit-screen mode\n");
+    asm.push_str("SECTION \"Generated fit-screen metadata\", ROM0\n");
+    asm.push_str("nes_generated_fit_init:\n");
+    if fit_screen {
+        asm.push_str("    ld a, $01\n");
+        asm.push_str("    ld [nes_fit_screen], a\n");
+        asm.push_str("    ; Full NES frame mapped into GBC; no viewport crop / follow.\n");
+        asm.push_str("    xor a\n");
+        asm.push_str("    ldh [nes_view_x], a\n");
+        asm.push_str("    ldh [nes_view_y], a\n");
+        asm.push_str("    ld [nes_view_armed_x], a\n");
+        asm.push_str("    ld [nes_view_armed_y], a\n");
+        asm.push_str("    ld [nes_view_follow_enabled], a\n");
+        asm.push_str("    ld [nes_view_follow_valid], a\n");
+        asm.push_str("    ld a, $04\n");
+        asm.push_str("    ld [nes_view_mode], a\n");
+    } else {
+        asm.push_str("    xor a\n");
+        asm.push_str("    ld [nes_fit_screen], a\n");
+    }
+    asm.push_str("    ret\n");
+}
+
 fn main() -> ExitCode {
     let mut args = env::args_os();
     let program = args.next().unwrap_or_default();
     let Some(path) = args.next() else {
-        eprintln!("usage: {} <rom.nes> [--emit-asm output.asm] [--max-blocks N] [--debug-trace]", PathBuf::from(program).display());
+        eprintln!("usage: {} <rom.nes> [--emit-asm output.asm] [--max-blocks N] [--debug-trace] [--fit-screen]", PathBuf::from(program).display());
         return ExitCode::from(2);
     };
 
     let mut emit_asm: Option<PathBuf> = None;
     let mut max_blocks: Option<usize> = None;
     let mut debug_trace = false;
+    let mut fit_screen = false;
 
     let rest: Vec<_> = args.collect();
     let mut i = 0;
@@ -150,6 +175,9 @@ fn main() -> ExitCode {
             }
             "--debug-trace" => {
                 debug_trace = true;
+            }
+            "--fit-screen" => {
+                fit_screen = true;
             }
             other => {
                 eprintln!("error: unknown argument {other}");
@@ -259,6 +287,7 @@ fn main() -> ExitCode {
         }));
 
         emit_follow_hint_init(&mut asm, follow_slot);
+        emit_fit_screen_init(&mut asm, fit_screen);
 
         if let Err(err) = fs::write(&out_path, asm) {
             eprintln!("error writing {}: {err}", out_path.display());
@@ -272,7 +301,12 @@ fn main() -> ExitCode {
             eprintln!("error writing {}: {err}", chr_path.display());
             return ExitCode::FAILURE;
         }
-        let converted_chr = assets::convert_chr_to_gbc(cart.chr_rom);
+        let converted_chr = if fit_screen {
+            println!("Fit-screen: half-scale CHR (4x4 content in 8x8 GBC tiles)");
+            assets::convert_chr_to_gbc_fit_half(cart.chr_rom)
+        } else {
+            assets::convert_chr_to_gbc(cart.chr_rom)
+        };
         if let Err(err) = fs::write(&chr_gbc_path, converted_chr) {
             eprintln!("error writing {}: {err}", chr_gbc_path.display());
             return ExitCode::FAILURE;

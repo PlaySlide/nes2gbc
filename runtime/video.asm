@@ -1373,7 +1373,10 @@ nes_video_build_oam_shadow:
     ; Follow-camera tracking consumes raw NES OAM coordinates before viewport
     ; cropping so it can move the crop toward the player rather than merely
     ; following whichever sprites are already visible.
-    call nes_view_follow_update
+    ; Fit-screen mode already maps the full NES frame; skip follow/crop.
+    ld a, [nes_fit_screen]
+    and a
+    call z, nes_view_follow_update
 
     ld a, [nes_ppuctrl]
     ldh [nes_oam_ppuctrl_tmp], a
@@ -1390,6 +1393,11 @@ nes_video_build_oam_shadow:
     jp nc, .skip_three_source_bytes
     inc a
     ldh [nes_view_coord_tmp], a
+
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .fit_y
+
     ldh a, [nes_view_y]
     ld c, a
     ldh a, [nes_view_coord_tmp]
@@ -1399,16 +1407,33 @@ nes_video_build_oam_shadow:
     jp nc, .skip_three_source_bytes
     add $10
     ldh [nes_oam_proj_y_tmp], a
+    jr .y_ready
 
+.fit_y:
+    ; Half-scale + vertical letterbox: (144-120)/2 = 12.
+    ldh a, [nes_view_coord_tmp]
+    srl a
+    add 12
+    cp $90
+    jp nc, .skip_three_source_bytes
+    add $10
+    ldh [nes_oam_proj_y_tmp], a
+
+.y_ready:
     ; Save source tile and attributes.
     ld a, [hli]
     ldh [nes_view_sprite_tile_tmp], a
     ld a, [hli]
     ldh [nes_sprite_attr_tmp], a
 
-    ; Source X and viewport crop.
+    ; Source X.
     ld a, [hli]
     ldh [nes_view_coord_tmp], a
+
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .fit_x
+
     ldh a, [nes_view_x]
     ld c, a
     ldh a, [nes_view_coord_tmp]
@@ -1418,6 +1443,19 @@ nes_video_build_oam_shadow:
     jp nc, .next_source
     add $08
     ldh [nes_oam_proj_x_tmp], a
+    jr .x_ready
+
+.fit_x:
+    ; Half-scale + horizontal letterbox: (160-128)/2 = 16.
+    ldh a, [nes_view_coord_tmp]
+    srl a
+    add 16
+    cp $A0
+    jp nc, .next_source
+    add $08
+    ldh [nes_oam_proj_x_tmp], a
+
+.x_ready:
 
     ; Visible sprite: pack it into the next CGB OAM slot.
     ldh a, [nes_oam_proj_y_tmp]

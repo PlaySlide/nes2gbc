@@ -676,6 +676,8 @@ Start:
     xor a
     ; Follow camera is the default. Start centered until the first OAM
     ; projection acquires a plausible player sprite.
+    xor a
+    ld [nes_fit_screen], a
     ld a, $04
     ld [nes_view_mode], a
     ld a, $30
@@ -792,6 +794,7 @@ Start:
 
     call nes_generated_init
     call nes_generated_follow_init
+    call nes_generated_fit_init
     call nes_video_init
     ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
     call nes_profile_reset

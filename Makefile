@@ -3,6 +3,7 @@ MAX_BLOCKS ?=
 TRACE ?= 0
 PROFILE ?= 0
 PROFILE_TRACE ?= 0
+FIT_SCREEN ?= 0
 
 .PHONY: help generate gbc test clean
 
@@ -13,14 +14,15 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE=1     # light runtime counters'
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE_TRACE=1 # expensive rolling block trace'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
+	@echo '  make gbc ROM="path/to/game.nes" FIT_SCREEN=1  # half-scale full frame into 160x144'
 	@echo '  make test'
 
 generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,) $(if $(filter 1,$(FIT_SCREEN)),--fit-screen,); \
 	else \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,) $(if $(filter 1,$(FIT_SCREEN)),--fit-screen,); \
 	fi
 
 gbc: generate

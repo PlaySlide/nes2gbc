@@ -196,13 +196,17 @@ nes_gbc_oam_shadow: ds $00A0
 
 ; Set during host publish bursts while LY is still in VBlank. wait_vram
 ; treats this as a fast path and clears it if scanout resumes.
-SECTION "NES VRAM unlock", WRAM0[$CBA0]
+;; Build-time half-scale fit mode (CHR shrunk + OAM coords /2 + letterbox).
+SECTION "NES fit screen", WRAM0[$CBA0]
+nes_fit_screen:        ds 1
+
+SECTION "NES VRAM unlock", WRAM0[$CBA1]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBA1]
+SECTION "Host native stack reserve", WRAM0[$CBA2]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA1-$CFFF leaves 1119 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $045F
+; $CBA2-$CFFF leaves 1118 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $045E
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
