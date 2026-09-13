@@ -196,17 +196,28 @@ nes_gbc_oam_shadow: ds $00A0
 
 ; Set during host publish bursts while LY is still in VBlank. wait_vram
 ; treats this as a fast path and clears it if scanout resumes.
-;; Build-time half-scale fit mode (CHR shrunk + OAM coords /2 + letterbox).
+;; Fit-screen: soft half-res BG framebuffer + shrunk sprite CHR in bank 1.
+;; Soft BG: 16x15 GBC tiles (identity map tile id = 1+my*16+mx; tile 0 blank).
 SECTION "NES fit screen", WRAM0[$CBA0]
 nes_fit_screen:        ds 1
+nes_fit_sprite_pt:     ds 1  ; last uploaded sprite PT select (0 or $08)
+nes_fit_vram_page:     ds 1  ; physical NT page (0 or 4) currently in soft BG
+nes_fit_mx:            ds 1  ; half-res tile X 0..15
+nes_fit_my:            ds 1  ; half-res tile Y 0..14
+nes_fit_page:          ds 1  ; page being rendered (0 or 4)
+nes_fit_pal:           ds 1  ; NES BG palette 0..3 for current soft tile
+nes_fit_tmp_l:         ds 1
+nes_fit_tmp_h:         ds 1
+nes_fit_tile_scratch:  ds 16 ; GBC-format tile during soft render
+nes_fit_chr_quad:      ds 64 ; TL,TR,BL,BR raw NES CHR (16 bytes each)
 
-SECTION "NES VRAM unlock", WRAM0[$CBA1]
+SECTION "NES VRAM unlock", WRAM0[$CBF9]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBA2]
+SECTION "Host native stack reserve", WRAM0[$CBFA]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA2-$CFFF leaves 1118 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $045E
+; $CBFA-$CFFF leaves 1030 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $0406
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
@@ -235,3 +246,8 @@ nes_nametable_published_shadow: ds $800
 ; The retained queue entry still publishes the final authoritative WRAM byte.
 SECTION "NES nametable stage seen", WRAMX[$D800], BANK[6]
 nes_nametable_stage_seen: ds $100
+
+; Fit-screen soft BG framebuffer: 16x15 GBC tiles for the page in nes_fit_vram_page.
+; Bank 7 is free of NT/PRG/shadow traffic.
+SECTION "NES fit soft BG", WRAMX[$D000], BANK[7]
+nes_fit_soft_bg: ds 3840 ; 240 * 16

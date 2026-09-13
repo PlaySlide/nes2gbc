@@ -73,6 +73,11 @@ nes_video_init:
     ldh [rBGPD], a
     ldh [rBGPD], a
 
+    ; Fit-screen: install identity soft-BG maps, blank tile 0, letterbox scroll.
+    ld a, [nes_fit_screen]
+    and a
+    call nz, nes_video_fit_soft_init
+
     ; LCD on, BG on, unsigned tile IDs, map $9800.
     ld a, $91
     ldh [rLCDC], a
@@ -108,6 +113,10 @@ nes_upload_chr_bank:
     ldh [rLCDC], a
 
 .lcd_off:
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .fit_chr_upload
+
     ld a, [nes_chr_gbc_bank_base]
     ld b, a
     ld a, [nes_chr_bank]
@@ -130,7 +139,21 @@ nes_upload_chr_bank:
 
     xor a
     ldh [rVBK], a
+    jr .chr_upload_done
 
+.fit_chr_upload:
+    ; Bank 0 = soft BG tiles (identity). Bank 1 = active sprite PT (shrunk CHR).
+    ; Soft BG samples full NES CHR from ROM banks 3+, not this converted data.
+    ld a, [nes_chr_gbc_bank_base]
+    ld b, a
+    ld a, [nes_chr_bank]
+    add b
+    ld [$2000], a
+    call nes_video_fit_upload_sprite_chr_raw
+    ; CHR bank changed: rebuild soft BG from raw NES CHR while LCD is off.
+    call nes_video_fit_soft_rebuild_current_page
+
+.chr_upload_done:
     call nes_restore_code_bank
     ld a, [nes_saved_lcdc]
     ldh [rLCDC], a
@@ -518,6 +541,12 @@ nes_video_sync_nametable_write_if_changed:
 nes_video_sync_nametable_write:
     PROFILE_INC nes_profile_nametable_sync
     ld c, a
+
+    ; Fit-screen: software half-res BG path (no NT->GBC map publish / stitch).
+    ld a, [nes_fit_screen]
+    and a
+    ld a, c
+    jp nz, nes_video_fit_soft_sync_nt_write
 
     ; Attribute bytes start at offset $3C0 within each physical 1 KiB table.
     ld a, h
@@ -1490,6 +1519,14 @@ nes_video_build_oam_shadow:
     and $08
 
 .bank_ready:
+    ; Fit-screen: sprite CHR lives only in VRAM bank 1; force CGB attr bit 3.
+    ld c, a
+    ld a, [nes_fit_screen]
+    and a
+    ld a, c
+    jr z, .bank_store
+    or $08
+.bank_store:
     ldh [nes_sprite_bank_tmp], a
 
     ; Palette, CGB VRAM bank, priority, H flip, V flip.
@@ -1604,6 +1641,12 @@ nes_video_sync_oam:
 ; NES global select changes. Do not XOR: a single stale/mismatched attribute
 ; would otherwise remain permanently opposite to the rest of the map.
 nes_video_toggle_bg_pattern_bank:
+    ; Fit-screen soft BG always uses VRAM bank 0; PPUCTRL.4 changes mean
+    ; re-sample from the other NES pattern table, not attr bit flips.
+    ld a, [nes_fit_screen]
+    and a
+    jp nz, nes_video_fit_soft_rebuild_current_page
+
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_BG_BANK_REWRITE
     ld [nes_diag_event_flags], a
@@ -1681,6 +1724,10 @@ nes_video_update_mask:
 ; surface and synthesize the lower playfield into $9C00. Rebuild only when the
 ; coarse horizontal key changes or virtual nametable data changed.
 nes_video_update_horizontal_stitch:
+    ld a, [nes_fit_screen]
+    and a
+    ret nz
+
     ld a, [nes_mirroring]
     cp $01
     jr z, .vertical
@@ -2038,6 +2085,10 @@ nes_video_apply_map_select_a:
 ; 256 pixels. If the visible crop crosses NES Y=240, arm a one-shot STAT split
 ; that toggles the vertical nametable and adds 16 to SCY at the exact seam.
 nes_video_apply_single_scroll:
+    ld a, [nes_fit_screen]
+    and a
+    jp nz, nes_video_fit_apply_scroll
+
     ; Horizontal crop remains a simple 256-pixel wrap.
     ld a, [nes_ppu_scroll_x]
     ld b, a
@@ -2175,4 +2226,789 @@ nes_video_update_ctrl:
     ld a, b
 .write:
     ldh [rLCDC], a
+    ret
+
+; ---------------------------------------------------------------------------
+; Fit-screen software half-res BG framebuffer
+; ---------------------------------------------------------------------------
+; Goal: gapless 128x120 BG by construction (not metatile atlas / blit-on-miss).
+;
+; Memory:
+;   WRAMX bank 7 nes_fit_soft_bg[240*16] — current physical page's 16x15 tiles
+;   VRAM bank 0 tiles 1..240 — uploaded soft tiles (tile 0 reserved blank)
+;   VRAM bank 1 — shrunk sprite CHR (PPUCTRL-selected PT)
+;   BG maps $9800/$9C00 — fixed identity: cell (mx,my) -> tile 1+my*16+mx
+;     for mx=0..15, my=0..14; other cells tile 0. Attrs: palette only, bank 0.
+;
+; Sampling: each GBC pixel = prefer-nonzero 2x2 box filter over NES pixels,
+; reading full NES CHR from ROM banks (chr_bank+3), NOT shrunk GBC CHR.
+;
+; Scroll: SCX/SCY = (NES_scroll/2) - 16/12 with GB wrap (letterbox).
+; Dual NT: VRAM holds one physical page at a time (nes_fit_vram_page); rebuild
+; when the displayed base nametable changes. Stitch/follow disabled under fit.
+
+; Copy PPUCTRL-selected sprite PT from converted GBC CHR ROM into VRAM bank 1.
+; Caller owns LCD-off or safe VBlank window. Updates nes_fit_sprite_pt.
+nes_video_fit_upload_sprite_chr_raw:
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [nes_ppuctrl]
+    and $08
+    ld [nes_fit_sprite_pt], a
+    jr nz, .sprite_pt1
+    ld hl, $4000
+    jr .sprite_copy
+.sprite_pt1:
+    ld hl, $5000
+.sprite_copy:
+    ld de, $8000
+    ld bc, $1000
+    call nes_video_copy
+    xor a
+    ldh [rVBK], a
+    ret
+
+; VBlank/ctrl-commit: refresh sprite CHR if PPUCTRL bit 3 changed.
+nes_video_fit_sync_sprite_chr:
+    ld a, [nes_fit_screen]
+    and a
+    ret z
+    ld a, [nes_ppuctrl]
+    and $08
+    ld b, a
+    ld a, [nes_fit_sprite_pt]
+    cp b
+    ret z
+
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    bit 7, a
+    jr z, .lcd_off
+.wait_vblank:
+    ldh a, [rLY]
+    cp 144
+    jr c, .wait_vblank
+    ldh a, [rLCDC]
+    and $7F
+    ldh [rLCDC], a
+.lcd_off:
+    ld a, [nes_chr_gbc_bank_base]
+    ld b, a
+    ld a, [nes_chr_bank]
+    add b
+    ld [$2000], a
+    call nes_video_fit_upload_sprite_chr_raw
+    call nes_restore_code_bank
+    ld a, [nes_saved_lcdc]
+    ldh [rLCDC], a
+    ret
+
+; One-time / post-map-clear setup: blank tile 0, identity maps, clear soft BG,
+; letterbox scroll. Safe with LCD off (boot) or caller-owned window.
+nes_video_fit_soft_init:
+    ; Blank tile 0 in VRAM bank 0.
+    xor a
+    ldh [rVBK], a
+    ld hl, $8000
+    ld b, 16
+.clear_tile0:
+    ld [hli], a
+    dec b
+    jr nz, .clear_tile0
+
+    ; Identity tile maps on $9800 and $9C00; attrs bank 0 / palette 0.
+    call nes_video_fit_write_identity_map_9800
+    call nes_video_fit_write_identity_map_9c00
+
+    ; Clear soft BG WRAM and mark page 0 resident.
+    ld a, $07
+    ldh [rSVBK], a
+    ld hl, nes_fit_soft_bg
+    ld bc, 3840
+    call nes_video_fill_zero
+    ld a, $01
+    ldh [rSVBK], a
+
+    xor a
+    ld [nes_fit_vram_page], a
+
+    ; Initial letterbox (scroll 0).
+    xor a
+    sub 16
+    ldh [rSCX], a
+    xor a
+    sub 12
+    ldh [rSCY], a
+    ret
+
+nes_video_fit_write_identity_map_9800:
+    xor a
+    ldh [rVBK], a
+    ld de, $9800
+    jr nes_video_fit_write_identity_map_de
+
+nes_video_fit_write_identity_map_9c00:
+    xor a
+    ldh [rVBK], a
+    ld de, $9C00
+    ; fall through
+
+; DE = map base. Fill 32x32: rows 0..14 cols 0..15 = 1+my*16+mx, else 0.
+; Then attr map (VBK=1) cleared to 0 (bank 0, palette 0).
+nes_video_fit_write_identity_map_de:
+    ld b, 0 ; row
+.row:
+    ld c, 0 ; col
+.col:
+    ld a, b
+    cp 15
+    jr nc, .zero
+    ld a, c
+    cp 16
+    jr nc, .zero
+    ; tile = 1 + b*16 + c
+    ld a, b
+    swap a
+    and $F0
+    add c
+    inc a
+    jr .store
+.zero:
+    xor a
+.store:
+    ld [de], a
+    inc de
+    inc c
+    ld a, c
+    cp 32
+    jr c, .col
+    inc b
+    ld a, b
+    cp 32
+    jr c, .row
+
+    ; Clear CGB attributes for this map (same 32x32 region DE just passed).
+    ; DE landed at base+$400; subtract $400 to revisit.
+    ld a, d
+    sub $04
+    ld d, a
+    ld a, $01
+    ldh [rVBK], a
+    ld bc, $0400
+.attr_clear:
+    xor a
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .attr_clear
+    xor a
+    ldh [rVBK], a
+    ret
+
+; Half-scroll + letterbox. Rebuild soft BG if displayed physical page changed.
+nes_video_fit_apply_scroll:
+    ld a, [nes_ppuctrl]
+    call nes_video_apply_map_select_a
+
+    call nes_video_fit_displayed_page
+    ld b, a
+    ld a, [nes_fit_vram_page]
+    cp b
+    jr z, .scroll_regs
+    ld a, b
+    ld [nes_fit_vram_page], a
+    push bc
+    call nes_video_fit_soft_rebuild_current_page
+    pop bc
+
+.scroll_regs:
+    ; Letterbox by subtracting so origin content shifts into the centered view.
+    ld a, [nes_ppu_scroll_x]
+    srl a
+    sub 16
+    ldh [rSCX], a
+
+    ld a, [nes_ppu_scroll_y]
+    srl a
+    sub 12
+    ldh [rSCY], a
+
+    xor a
+    ldh [nes_seam_active], a
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    ret
+
+; A = physical page bit 0 or 4 for the PPUCTRL-selected base nametable.
+nes_video_fit_displayed_page:
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .vertical
+    ld a, [nes_ppuctrl]
+    and $02
+    add a ; 0 or 4
+    ret
+.vertical:
+    ld a, [nes_ppuctrl]
+    and $01
+    add a
+    add a ; 0 or 4
+    ret
+
+; Rebuild all 16x15 soft tiles for nes_fit_vram_page into WRAM + VRAM.
+; Prefer calling with LCD off (CHR upload); otherwise uses wait_vram per tile.
+nes_video_fit_soft_rebuild_current_page:
+    ld a, [nes_fit_vram_page]
+    ld [nes_fit_page], a
+    xor a
+    ld [nes_fit_my], a
+.yloop:
+    xor a
+    ld [nes_fit_mx], a
+.xloop:
+    call nes_video_fit_soft_render_tile
+    call nes_video_fit_soft_store_and_upload
+    ld a, [nes_fit_mx]
+    inc a
+    ld [nes_fit_mx], a
+    cp 16
+    jr c, .xloop
+    ld a, [nes_fit_my]
+    inc a
+    ld [nes_fit_my], a
+    cp 15
+    jr c, .yloop
+    ret
+
+; HL = physical NT addr, A/C = written byte. Fit soft-BG dirty path.
+nes_video_fit_soft_sync_nt_write:
+    ld c, a
+    ; Attribute?
+    ld a, h
+    and $03
+    cp $03
+    jr c, .tile
+    ld a, l
+    cp $C0
+    jr nc, .attribute
+
+.tile:
+    ; Only update VRAM/soft if this write is on the resident page.
+    ld a, h
+    and $04
+    ld b, a
+    ld a, [nes_fit_vram_page]
+    cp b
+    ret nz
+
+    ; mx = col/2, my = row/2. col = l&$1F, row = ((h&3)<<3) | (l>>5)
+    ld a, l
+    and $1F
+    srl a
+    ld [nes_fit_mx], a
+
+    ld a, h
+    and $03
+    add a
+    add a
+    add a
+    ld b, a
+    ld a, l
+    and $E0
+    swap a
+    srl a ; a = l>>5
+    or b
+    srl a
+    cp 15
+    ret nc
+    ld [nes_fit_my], a
+
+    ld a, h
+    and $04
+    ld [nes_fit_page], a
+    call nes_video_fit_soft_render_tile
+    jp nes_video_fit_soft_store_and_upload
+
+.attribute:
+    ld a, h
+    and $04
+    ld b, a
+    ld a, [nes_fit_vram_page]
+    cp b
+    ret nz
+    ld [nes_fit_page], a
+
+    ; attr index within table
+    ld a, l
+    sub $C0
+    ld c, a
+    and $07
+    ld e, a ; attr col 0..7
+    ld a, c
+    and $F8
+    srl a
+    srl a
+    srl a
+    ld d, a ; attr row 0..7
+
+    ; soft mx = attr_col*2 (+0,+1), my = attr_row*2 (+0,+1), clamp my<15
+    ld a, e
+    add a
+    ld [nes_fit_mx], a
+    ld a, d
+    add a
+    cp 15
+    jr c, .attr_my0
+    ld a, 14
+.attr_my0:
+    ld [nes_fit_my], a
+    call nes_video_fit_soft_render_tile
+    call nes_video_fit_soft_store_and_upload
+
+    ld a, [nes_fit_mx]
+    inc a
+    ld [nes_fit_mx], a
+    call nes_video_fit_soft_render_tile
+    call nes_video_fit_soft_store_and_upload
+
+    ld a, [nes_fit_mx]
+    dec a
+    ld [nes_fit_mx], a
+    ld a, [nes_fit_my]
+    inc a
+    cp 15
+    ret nc
+    ld [nes_fit_my], a
+    call nes_video_fit_soft_render_tile
+    call nes_video_fit_soft_store_and_upload
+
+    ld a, [nes_fit_mx]
+    inc a
+    ld [nes_fit_mx], a
+    call nes_video_fit_soft_render_tile
+    jp nes_video_fit_soft_store_and_upload
+
+; Render soft tile (nes_fit_mx/my/page) into nes_fit_tile_scratch + nes_fit_pal.
+; Uses full NES CHR from ROM (bank chr_bank+3). Clobbers most regs.
+nes_video_fit_soft_render_tile:
+    ld a, $01
+    ldh [rSVBK], a
+
+    call nes_video_fit_soft_tile_palette
+    ld [nes_fit_pal], a
+
+    ; Fetch TL,TR,BL,BR CHR into nes_fit_chr_quad
+    ld a, [nes_fit_mx]
+    add a
+    ld [nes_fit_tmp_l], a
+    ld a, [nes_fit_my]
+    add a
+    ld [nes_fit_tmp_h], a
+    ld de, nes_fit_chr_quad
+    call nes_video_fit_soft_fetch_chr_at_tx_ty
+
+    ld a, [nes_fit_tmp_l]
+    inc a
+    ld [nes_fit_tmp_l], a
+    ld de, nes_fit_chr_quad + 16
+    call nes_video_fit_soft_fetch_chr_at_tx_ty
+
+    ld a, [nes_fit_mx]
+    add a
+    ld [nes_fit_tmp_l], a
+    ld a, [nes_fit_tmp_h]
+    inc a
+    ld [nes_fit_tmp_h], a
+    ld de, nes_fit_chr_quad + 32
+    call nes_video_fit_soft_fetch_chr_at_tx_ty
+
+    ld a, [nes_fit_tmp_l]
+    inc a
+    ld [nes_fit_tmp_l], a
+    ld de, nes_fit_chr_quad + 48
+    call nes_video_fit_soft_fetch_chr_at_tx_ty
+
+    ; 8x8 GBC tile: each pixel = prefer-nonzero 2x2 NES sample
+    ld hl, nes_fit_tile_scratch
+    xor a
+    ld [nes_fit_my], a ; reuse as oy counter carefully — NO, keep my. Use B.
+    ld b, 0 ; oy
+.oy:
+    ld c, 0 ; ox
+    ld d, 0 ; lo plane
+    ld e, 0 ; hi plane
+.ox:
+    push bc
+    push de
+    push hl
+    ; local nes x,y = ox*2, oy*2
+    ld a, c
+    add a
+    ld c, a
+    ld a, b
+    add a
+    ld b, a
+    call nes_video_fit_soft_sample_2x2 ; A = color
+    ld [nes_fit_tmp_l], a
+    pop hl
+    pop de
+    pop bc
+    ; bit index = 7-ox
+    ld a, 7
+    sub c
+    ld [nes_fit_tmp_h], a
+    ; apply lo
+    ld a, [nes_fit_tmp_l]
+    bit 0, a
+    jr z, .skip_lo
+    push bc
+    ld a, [nes_fit_tmp_h]
+    ld b, a
+    ld a, 1
+    inc b
+    dec b
+    jr z, .lo_or
+.lo_shl:
+    add a
+    dec b
+    jr nz, .lo_shl
+.lo_or:
+    or d
+    ld d, a
+    pop bc
+.skip_lo:
+    ld a, [nes_fit_tmp_l]
+    bit 1, a
+    jr z, .skip_hi
+    push bc
+    ld a, [nes_fit_tmp_h]
+    ld b, a
+    ld a, 1
+    inc b
+    dec b
+    jr z, .hi_or
+.hi_shl:
+    add a
+    dec b
+    jr nz, .hi_shl
+.hi_or:
+    or e
+    ld e, a
+    pop bc
+.skip_hi:
+    inc c
+    ld a, c
+    cp 8
+    jr c, .ox
+    ld a, d
+    ld [hli], a
+    ld a, e
+    ld [hli], a
+    inc b
+    ld a, b
+    cp 8
+    jp c, .oy
+    ret
+
+; tmp_l=tx, tmp_h=ty; DE=dest 16 bytes. Page in nes_fit_page.
+nes_video_fit_soft_fetch_chr_at_tx_ty:
+    push de
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, [nes_fit_tmp_h]
+    ld b, a
+    ld a, [nes_fit_tmp_l]
+    ld c, a
+    ld a, b
+    and $07
+    swap a
+    add a
+    or c
+    ld l, a
+    ld a, b
+    srl a
+    srl a
+    srl a
+    and $03
+    ld b, a
+    ld a, [nes_fit_page]
+    or b
+    or $D0
+    ld h, a
+    ld a, [hl]
+    ld c, a
+
+    ld h, 0
+    ld l, c
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld a, [nes_ppuctrl]
+    and $10
+    jr z, .no_pt1
+    ld a, h
+    or $10
+    ld h, a
+.no_pt1:
+    ld a, [nes_chr_bank]
+    add $03
+    ld [$2000], a
+    ld a, h
+    and $1F
+    or $40
+    ld h, a
+    pop de
+    ld b, 16
+.copy_chr:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .copy_chr
+    jp nes_restore_code_bank
+
+; Palette 0..3 for soft tile at fit_mx/my/page.
+nes_video_fit_soft_tile_palette:
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, [nes_fit_mx]
+    add a
+    ld c, a
+    ld a, [nes_fit_my]
+    add a
+    ld b, a
+    ld a, c
+    srl a
+    srl a
+    ld e, a
+    ld a, b
+    srl a
+    srl a
+    add a
+    add a
+    add a
+    add e
+    add $C0
+    ld l, a
+    ld a, [nes_fit_page]
+    add $D3
+    ld h, a
+    ld a, [hl]
+    ld d, a
+    ld a, b
+    and $02
+    add a
+    ld e, a
+    ld a, c
+    and $02
+    or e
+    ld c, a
+    and a
+    jr z, .noshift
+.shift:
+    srl d
+    dec c
+    jr nz, .shift
+.noshift:
+    ld a, d
+    and $03
+    ret
+
+; Prefer-nonzero 2x2 at local (c,b) in 16x16 / chr_quad. Returns A=color.
+nes_video_fit_soft_sample_2x2:
+    push bc
+    call nes_video_fit_soft_pixel_at
+    and a
+    jr nz, .hit
+    pop bc
+    push bc
+    inc c
+    call nes_video_fit_soft_pixel_at
+    and a
+    jr nz, .hit
+    pop bc
+    push bc
+    inc b
+    call nes_video_fit_soft_pixel_at
+    and a
+    jr nz, .hit
+    pop bc
+    inc b
+    inc c
+    jp nes_video_fit_soft_pixel_at
+.hit:
+    pop bc
+    ret
+
+; Pixel at local (c=x,b=y) in chr_quad. A=0..3
+nes_video_fit_soft_pixel_at:
+    ld a, 0
+    bit 3, c
+    jr z, .not_r
+    ld a, 16
+.not_r:
+    bit 3, b
+    jr z, .not_b
+    add 32
+.not_b:
+    ld e, a
+    ld d, 0
+    ld hl, nes_fit_chr_quad
+    add hl, de
+    ld a, b
+    and $07
+    ld e, a
+    ld d, 0
+    push hl
+    add hl, de
+    ld a, [hl]
+    ld d, a
+    pop hl
+    ld a, e
+    add 8
+    ld e, a
+    add hl, de
+    ld a, [hl]
+    ld e, a
+    ; mask = 1 << (7 - (x&7))
+    ld a, c
+    and $07
+    ld c, a
+    ld a, 7
+    sub c
+    ld b, a
+    ld a, 1
+    inc b
+    dec b
+    jr z, .mask_ok
+.msk:
+    add a
+    dec b
+    jr nz, .msk
+.mask_ok:
+    ld b, a
+    ld a, d
+    and b
+    jr z, .p0_0
+    ld a, 1
+    jr .p0_d
+.p0_0:
+    xor a
+.p0_d:
+    ld d, a
+    ld a, e
+    and b
+    jr z, .done
+    ld a, d
+    or 2
+    ret
+.done:
+    ld a, d
+    ret
+
+; Store scratch into soft BG WRAM and upload to VRAM tile + map attr.
+nes_video_fit_soft_store_and_upload:
+    ; soft index = my*16+mx; offset = index*16
+    ld a, [nes_fit_my]
+    swap a
+    and $F0
+    ld b, a
+    ld a, [nes_fit_mx]
+    or b
+    ; HL = nes_fit_soft_bg + A*16
+    ld h, 0
+    ld l, a
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld a, $07
+    ldh [rSVBK], a
+    ld de, nes_fit_soft_bg
+    add hl, de
+    ld de, nes_fit_tile_scratch
+    ld b, 16
+.copy_soft:
+    ld a, [de]
+    inc de
+    ld [hli], a
+    dec b
+    jr nz, .copy_soft
+    ld a, $01
+    ldh [rSVBK], a
+
+    ; VRAM tile id = 1+my*16+mx, addr = $8000 + id*16
+    ld a, [nes_fit_my]
+    swap a
+    and $F0
+    ld b, a
+    ld a, [nes_fit_mx]
+    or b
+    inc a ; tile id
+    ld c, a
+    ld h, 0
+    ld l, a
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld a, h
+    or $80
+    ld h, a
+    ld d, h
+    ld e, l
+
+    xor a
+    ldh [rVBK], a
+    ld hl, nes_fit_tile_scratch
+    ld b, 16
+.upload:
+    call nes_video_wait_vram
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .upload
+
+    ; Map cell + attr for resident page's map
+    ld a, [nes_fit_vram_page]
+    and a
+    jr z, .map9800
+    ld hl, $9C00
+    jr .map_ready
+.map9800:
+    ld hl, $9800
+.map_ready:
+    ld a, [nes_fit_my]
+    ; offset = my*32+mx
+    ld b, a
+    add a
+    add a
+    add a
+    add a
+    add a ; my*32
+    ld b, a
+    ld a, [nes_fit_mx]
+    add b
+    ld e, a
+    ld d, 0
+    add hl, de
+    ; tile id already in C
+    call nes_video_wait_vram
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [hl], a
+    ld a, $01
+    ldh [rVBK], a
+    call nes_video_wait_vram
+    ld a, [nes_fit_pal]
+    and $03
+    ld [hl], a ; bank 0
+    xor a
+    ldh [rVBK], a
     ret
