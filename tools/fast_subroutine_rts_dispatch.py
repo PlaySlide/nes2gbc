@@ -2,8 +2,8 @@
 """Extend guarded RTS dispatch to multi-block 6502 subroutines.
 
 `fast_leaf_rts_dispatch.py` only knows that a JSR target itself is a one-block
-RTS leaf.  Real NES subroutines often branch through several basic blocks before
-reaching one or more RTS sites.  This pass follows only the caller-visible
+RTS leaf. Real NES subroutines often branch through several basic blocks before
+reaching one or more RTS sites. This pass follows only the caller-visible
 control flow of each statically known JSR target:
 
 - branches/jumps/fallthrough stay inside the candidate subroutine graph;
@@ -11,15 +11,21 @@ control flow of each statically known JSR target:
 - RTS blocks terminate the walk;
 - indirect jumps/RTI/BRK terminate conservatively.
 
-For every reached RTS block we collect the exact continuation PCs of the JSR
-sites that can enter that subroutine.  The *actual* return PC is still popped
-from the emulated 6502 stack first.  We only bypass `nes_dispatch_hl` when HL
+For every reached RTS block we collect exact continuation PCs from direct JSR
+sites that can enter that subroutine. The *actual* return PC is still popped
+from the emulated 6502 stack first. We only bypass `nes_dispatch_hl` when HL
 matches one of those exact PCs; every mismatch falls back to the original
-dispatcher.  Thus stack tricks, dynamic entries and analysis misses preserve the
+dispatcher. Thus stack tricks, dynamic entries and analysis misses preserve the
 old behavior.
 
+If an RTS can be reached from more static continuations than the guard-size
+limit, rank continuations by the number of direct JSR sites producing each
+return PC and specialize only the hottest subset. Unselected return PCs still
+fall through to `nes_dispatch_hl`, so this broadens coverage without weakening
+the exact-return guard or increasing its maximum size.
+
 This pass runs after the one-block leaf pass, so already-specialized RTS sites
-are left alone.  A per-bank expansion budget keeps the prototype from consuming
+are left alone. A per-bank expansion budget keeps the prototype from consuming
 translated-code headroom too aggressively.
 """
 
@@ -102,10 +108,9 @@ def tail_targets(lines: list[str], block: Block) -> set[int]:
 
 def direct_jsr_calls(
     lines: list[str], blocks: dict[int, Block], labels: set[int]
-) -> tuple[dict[int, set[int]], dict[int, int]]:
-    """Return target->continuations and target->number of direct JSR sites."""
-    continuations: dict[int, set[int]] = collections.defaultdict(set)
-    counts: dict[int, int] = collections.defaultdict(int)
+) -> dict[int, collections.Counter[int]]:
+    """Map direct static JSR target -> weighted exact continuation PCs."""
+    continuations: dict[int, collections.Counter[int]] = collections.defaultdict(collections.Counter)
 
     for block in blocks.values():
         for k, (comment_i, pc, mnemonic, _mode) in enumerate(block.insns):
@@ -126,10 +131,9 @@ def direct_jsr_calls(
                 # Non-returning inline dispatchers deliberately have no normal
                 # continuation and cannot contribute an RTS return hint.
                 continue
-            continuations[target].add(ret_pc)
-            counts[target] += 1
+            continuations[target][ret_pc] += 1
 
-    return continuations, counts
+    return continuations
 
 
 def successors(lines: list[str], block: Block, labels: set[int]) -> set[int]:
@@ -147,7 +151,7 @@ def successors(lines: list[str], block: Block, labels: set[int]) -> set[int]:
         return {ret_pc} if ret_pc in labels else set()
 
     # For a branch this includes both the taken target emitted with the branch
-    # and the block fallthrough emitted after it.  For absolute JMP or a block
+    # and the block fallthrough emitted after it. For absolute JMP or a block
     # split at an already-known entry point it naturally yields the sole edge.
     return {t for t in tail_targets(lines, block) if t in labels}
 
@@ -242,6 +246,14 @@ def pessimistic_bytes(text: str) -> int:
     return max(0, n - 3)  # replacing an existing three-byte JP
 
 
+def rank_returns(weighted: collections.Counter[int], limit: int) -> list[int]:
+    """Choose the hottest exact return PCs, deterministic on equal weights."""
+    return [
+        ret
+        for ret, _weight in sorted(weighted.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    ]
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("asm", type=Path)
@@ -254,56 +266,68 @@ def main() -> int:
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     blocks, label_bank = parse_blocks(lines)
     labels = set(label_bank)
-    call_returns, call_counts = direct_jsr_calls(lines, blocks, labels)
+    call_returns = direct_jsr_calls(lines, blocks, labels)
 
-    rts_returns: dict[int, set[int]] = collections.defaultdict(set)
-    rts_weight: dict[int, int] = collections.defaultdict(int)
-    for entry, returns in call_returns.items():
-        sites = call_counts[entry]
+    rts_return_weight: dict[int, collections.Counter[int]] = collections.defaultdict(collections.Counter)
+    for entry, weighted_returns in call_returns.items():
         for rts in reachable_rts(entry, lines, blocks, labels):
-            rts_returns[rts].update(returns)
-            rts_weight[rts] += sites
+            rts_return_weight[rts].update(weighted_returns)
 
-    candidates: list[tuple[int, int, int, str]] = []  # -weight, addr, extra, text
-    for addr, returns in rts_returns.items():
+    # -covered_weight, addr, extra, text, selected_count, was_wide
+    candidates: list[tuple[int, int, int, str, int, bool]] = []
+    for addr, weighted_returns in rts_return_weight.items():
         block = blocks.get(addr)
         if block is None or find_generic_rts_dispatch(lines, block) is None:
             # The leaf pass may already have consumed this exact dispatch.
             continue
-        if not (1 <= len(returns) <= args.max_returns):
+        if not weighted_returns:
             continue
-        ordered = sorted(returns)
-        text = fast_dispatch(block, ordered, label_bank)
-        candidates.append((-rts_weight[addr], addr, pessimistic_bytes(text), text))
 
-    selected: dict[int, str] = {}
+        ordered = rank_returns(weighted_returns, args.max_returns)
+        if not ordered:
+            continue
+        text = fast_dispatch(block, ordered, label_bank)
+        covered_weight = sum(weighted_returns[ret] for ret in ordered)
+        candidates.append((
+            -covered_weight,
+            addr,
+            pessimistic_bytes(text),
+            text,
+            len(ordered),
+            len(weighted_returns) > len(ordered),
+        ))
+
+    selected: dict[int, tuple[str, int, bool]] = {}
     used: dict[int, int] = collections.defaultdict(int)
     count_in_bank: dict[int, int] = collections.defaultdict(int)
-    for _neg_weight, addr, extra, text in sorted(candidates):
+    for _neg_weight, addr, extra, text, nret, was_wide in sorted(candidates):
         bank = blocks[addr].bank
         if count_in_bank[bank] >= args.max_rts_per_bank:
             continue
         if used[bank] + extra > args.bank_budget:
             continue
-        selected[addr] = text
+        selected[addr] = (text, nret, was_wide)
         used[bank] += extra
         count_in_bank[bank] += 1
 
-    rewrites: list[tuple[int, str, int]] = []
-    for addr, text in selected.items():
+    rewrites: list[tuple[int, str, int, bool]] = []
+    for addr, (text, nret, was_wide) in selected.items():
         dispatch_i = find_generic_rts_dispatch(lines, blocks[addr])
         if dispatch_i is not None:
-            rewrites.append((dispatch_i, text, len(rts_returns[addr])))
+            rewrites.append((dispatch_i, text, nret, was_wide))
 
     total_targets = 0
-    for dispatch_i, text, nret in sorted(rewrites, reverse=True):
+    wide_sets = 0
+    for dispatch_i, text, nret, was_wide in sorted(rewrites, reverse=True):
         lines[dispatch_i] = text
         total_targets += nret
+        wide_sets += int(was_wide)
 
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
         f"rts-subroutine: specialized {len(rewrites)} additional RTS blocks / "
-        f"{total_targets} exact return targets"
+        f"{total_targets} exact return targets; "
+        f"{wide_sets} wide return set(s) trimmed to top {args.max_returns}"
     )
     return 0
 
