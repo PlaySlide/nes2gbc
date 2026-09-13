@@ -222,6 +222,26 @@ ENDC
     ld a, $01
     ld [nes_vram_unlocked], a
     ldh [rSVBK], a
+
+    ; Fit: large NT floods must not compose per queue entry (Balloon Fight hang).
+    ; Pre-mark dirty for one chunked full-page catch-up at .done. Small updates
+    ; (SMB scroll columns) stay incremental in the loop below.
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .fit_bulk_done
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $D8
+    jr nz, .fit_bulk
+    ld a, [nes_nametable_queue_ptr_lo]
+    cp 96                      ; >= 48 tile entries (2 bytes each)
+    jr c, .fit_bulk_done
+.fit_bulk:
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+.fit_bulk_done:
+
     ld de, nes_nametable_queue
 
 .loop:
@@ -2477,7 +2497,6 @@ nes_video_fit_sync_nametable_write:
     jp nc, nes_video_fit_sync_attribute_write
 
 .fit_tile:
-nes_video_fit_mark_dirty_if_resident:
     ; Only the displayed physical page owns identity-slot CHR.
     ld a, h
     and $04
@@ -2485,6 +2504,32 @@ nes_video_fit_mark_dirty_if_resident:
     ld a, [nes_fit_vram_page]
     cp b
     ret nz
+
+    ; Bulk flood already scheduled: skip per-tile work (finish via chunked flush).
+    ld a, [nes_fit_dirty]
+    and a
+    ret nz
+
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, nes_video_fit_mark_dirty_if_resident
+
+    ; Incremental: compose the 2x2 metatile containing this NT byte.
+    ld a, l
+    and $DE
+    ld l, a
+    jp nes_video_fit_publish_metatile_hl
+
+nes_video_fit_mark_dirty_if_resident:
+    ld a, h
+    and $04
+    ld b, a
+    ld a, [nes_fit_vram_page]
+    cp b
+    ret nz
+    ld a, [nes_fit_dirty]
+    and a
+    ret nz                    ; already chunking — do not restart from row 0
     ld a, $01
     ld [nes_fit_dirty], a
     xor a
@@ -2837,6 +2882,12 @@ nes_video_fit_upload_tile_a:
     ret
 
 nes_video_fit_sync_attribute_write:
+    ; Tile publishes already sample authoritative attrs. While unlocked
+    ; (incremental column flush), skip — avoids restarting a full-page chunk
+    ; on every SMB attribute touch. Deferred/locked paths still coalesce.
+    ld a, [nes_vram_unlocked]
+    and a
+    ret nz
     jp nes_video_fit_mark_dirty_if_resident
 
 nes_video_fit_sync_sprite_chr:
