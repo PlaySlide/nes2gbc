@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """Cache hot 6502 X/Y values in unused LR35902 B/C within a basic block.
 
-This is intentionally local and conservative.  The Rust emitter treats every
-translated basic-block entry as having no live host accumulator state, so using
-A to seed a cache at the block label is harmless.  We only use B/C because both
-host interrupt handlers preserve BC; D/E are not safe across STAT.  Blocks that
+This is intentionally local and conservative. We only use B/C because both
+host interrupt handlers preserve BC; D/E are not safe across STAT. Blocks that
 contain any ordinary CALL are skipped because runtime helpers do not promise to
-preserve BC.  The optional profile-trace helper is allowed: it explicitly saves
+preserve BC. The optional profile-trace helper is allowed: it explicitly saves
 and restores BC.
 
 For an eligible block, a cache is only worthwhile when the estimated cycle
-saving is positive:
-    baseline X/Y reload: ldh a,[nes_x/y]          = 3 M-cycles
-    cached reload:       ld a,b/c                 = 1 M-cycle
-    one-time seed:       ldh a,[state] + ld r,a   = 4 M-cycles
-    state update:        extra ld r,a             = 1 M-cycle
+saving is positive. Cache initialization is lazy:
 
-Canonical HRAM state remains authoritative.  Every write to nes_x/nes_y still
+* if the first X/Y access is a load, keep that first HRAM load and copy A into
+  the cache register; later reloads become `ld a,b/c`;
+* if the first X/Y access is a store, the canonical store also initializes the
+  cache, so no HRAM seed load is needed at all.
+
+This avoids the old redundant block-entry seed followed by an immediate cached
+reload at the first real use, and admits some blocks where a write establishes
+the cached value before the first read.
+
+Canonical HRAM state remains authoritative. Every write to nes_x/nes_y still
 happens normally and is mirrored into the chosen host register afterward.
 """
 
@@ -87,30 +90,58 @@ def has_unsafe_call(body: list[str]) -> bool:
     return False
 
 
-def state_counts(body: list[str], state: str) -> tuple[int, int]:
+def access_kind(line: str, state: str) -> str | None:
+    c = code(line)
+    if c in {f"ldh a, [{state}]", f"ld a, [{state}]"}:
+        return "load"
+    if c in {f"ldh [{state}], a", f"ld [{state}], a"}:
+        return "store"
+    return None
+
+
+def state_stats(body: list[str], state: str) -> tuple[int, int, str | None]:
     loads = 0
     stores = 0
+    first: str | None = None
     for line in body:
-        c = code(line)
-        if c in {f"ldh a, [{state}]", f"ld a, [{state}]"}:
+        kind = access_kind(line, state)
+        if kind is None:
+            continue
+        if first is None:
+            first = kind
+        if kind == "load":
             loads += 1
-        elif c in {f"ldh [{state}], a", f"ld [{state}], a"}:
+        else:
             stores += 1
-    return loads, stores
+    return loads, stores, first
 
 
-def estimated_saving(loads: int, stores: int) -> int:
-    # M-cycle estimate described in the module docstring.
-    return 2 * loads - 4 - stores
+def estimated_saving(loads: int, stores: int, first: str | None) -> int:
+    """Estimated M-cycle saving relative to canonical HRAM reloads.
+
+    HRAM load costs 3 M-cycles; cached `ld a,r` costs 1; cache refresh `ld r,a`
+    costs 1. If the first access is a load, that load remains and pays one extra
+    cache-copy cycle, so saving is 2*loads - 3 - stores. If the first access is
+    a store, that store initializes the cache for free apart from its required
+    mirror, so saving is 2*loads - stores.
+    """
+    if first == "load":
+        return 2 * loads - 3 - stores
+    if first == "store":
+        return 2 * loads - stores
+    return -1
 
 
-def optimize(lines: list[str]) -> tuple[int, int, int]:
+def optimize(lines: list[str]) -> tuple[int, int, int, int, int]:
     bs = blocks(lines)
-    # Rewrite bottom-up so insertion does not invalidate earlier block indexes.
     cached_x_blocks = 0
     cached_y_blocks = 0
     replaced_loads = 0
+    load_seeds = 0
+    store_seeds = 0
 
+    # Rewrite bottom-up even though we no longer insert list elements; keeping
+    # this order makes the pass robust if a later refinement adds local inserts.
     for block in reversed(bs):
         body = lines[block.start + 1 : block.end]
         if has_unsafe_call(body):
@@ -120,52 +151,53 @@ def optimize(lines: list[str]) -> tuple[int, int, int]:
         if not free_regs:
             continue
 
-        candidates: list[tuple[int, str, int, int]] = []
+        candidates: list[tuple[int, str, int, int, str]] = []
         for state in ("nes_x", "nes_y"):
-            loads, stores = state_counts(body, state)
-            saving = estimated_saving(loads, stores)
-            if saving > 0:
-                candidates.append((saving, state, loads, stores))
+            loads, stores, first = state_stats(body, state)
+            saving = estimated_saving(loads, stores, first)
+            if saving > 0 and first is not None:
+                candidates.append((saving, state, loads, stores, first))
 
         if not candidates:
             continue
         candidates.sort(reverse=True)
 
         assignment: dict[str, str] = {}
-        for (_saving, state, _loads, _stores), reg in zip(candidates, free_regs):
+        for (_saving, state, _loads, _stores, _first), reg in zip(candidates, free_regs):
             assignment[state] = reg
         if not assignment:
             continue
 
-        # Seed caches immediately after the canonical block label.  LD/LDH do
-        # not affect flags.  The emitter never carries A as an architectural
-        # assumption across block entries; canonical nes_a remains in HRAM.
-        seed: list[str] = []
-        for state, reg in assignment.items():
-            seed.append(f"    ldh a, [{state}]\n")
-            seed.append(f"    ld {reg}, a ; block-local {state} cache\n")
-        lines[block.start + 1 : block.start + 1] = seed
-
-        # Account for the insertion while rewriting the original body range.
-        delta = len(seed)
-        start = block.start + 1 + delta
-        end = block.end + delta
-        i = start
-        while i < end:
+        initialized: set[str] = set()
+        i = block.start + 1
+        while i < block.end:
             c = code(lines[i])
-            changed = False
             for state, reg in assignment.items():
-                if c in {f"ldh a, [{state}]", f"ld a, [{state}]"}:
-                    lines[i] = f"    ld a, {reg} ; cached {state}\n"
-                    replaced_loads += 1
-                    changed = True
+                load_forms = {f"ldh a, [{state}]", f"ld a, [{state}]"}
+                store_forms = {f"ldh [{state}], a", f"ld [{state}], a"}
+
+                if c in load_forms:
+                    indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                    if state in initialized:
+                        lines[i] = f"{indent}ld a, {reg} ; cached {state}\n"
+                        replaced_loads += 1
+                    else:
+                        # Keep the first canonical HRAM load, then seed the cache
+                        # from the exact value now in A. LD does not affect flags.
+                        lines[i] = lines[i] + f"{indent}ld {reg}, a ; seed {state} cache\n"
+                        initialized.add(state)
+                        load_seeds += 1
                     break
-                if c in {f"ldh [{state}], a", f"ld [{state}], a"}:
+
+                if c in store_forms:
+                    indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                    was_initialized = state in initialized
                     # Keep the canonical write exactly as-is, then mirror the
                     # new value into the host cache without touching flags.
-                    indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
                     lines[i] = lines[i] + f"{indent}ld {reg}, a ; refresh {state} cache\n"
-                    changed = True
+                    initialized.add(state)
+                    if not was_initialized:
+                        store_seeds += 1
                     break
             i += 1
 
@@ -174,7 +206,7 @@ def optimize(lines: list[str]) -> tuple[int, int, int]:
         if "nes_y" in assignment:
             cached_y_blocks += 1
 
-    return cached_x_blocks, cached_y_blocks, replaced_loads
+    return cached_x_blocks, cached_y_blocks, replaced_loads, load_seeds, store_seeds
 
 
 def main() -> int:
@@ -183,11 +215,12 @@ def main() -> int:
     args = p.parse_args()
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    x_blocks, y_blocks, loads = optimize(lines)
+    x_blocks, y_blocks, loads, load_seeds, store_seeds = optimize(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
         f"xy-cache: cached X in {x_blocks} blocks, Y in {y_blocks} blocks, "
-        f"replaced {loads} HRAM index reloads"
+        f"replaced {loads} HRAM index reloads; seeded {load_seeds} on first load / "
+        f"{store_seeds} from prior store"
     )
     return 0
 
