@@ -2,13 +2,15 @@
 """Mirror hot indexed NROM/CNROM PRG tables into translated code banks.
 
 Absolute,X / Absolute,Y reads from fixed mapper-0/3 PRG currently switch the
-MBC away from translated code, read one byte, then restore the code bank.  For
+MBC away from translated code, read one byte, then restore the code bank. For
 frequently referenced indexed tables, duplicate a bounded 256-byte window into
 the same ROMX bank as the translated block and read it locally instead.
 
 The pass is deliberately bounded to four unique tables (1 KiB) per translated
-code bank. The bank allocator already keeps conservative headroom, and this cap
-keeps the experiment easy to back out if a title has unusually dense output.
+code bank. Mirrored tables for each bank share one 256-byte-aligned section.
+Because every table is exactly 256 bytes, every table label then has low byte
+$00. Indexed reads can therefore overwrite L directly with X/Y instead of
+paying ADD/carry/high-byte-fixup address arithmetic at every access.
 """
 
 from __future__ import annotations
@@ -162,40 +164,44 @@ def main() -> int:
         replacement = (
             f"{indent}PROFILE_INC nes_profile_cpu_read\n"
             f"{indent}PROFILE_INC nes_profile_read_prg\n"
-            f"{indent}; local mapper {mapper} indexed PRG mirror ${s.base:04X},{s.index[-1].upper()}\n"
+            f"{indent}; aligned local mapper {mapper} indexed PRG mirror ${s.base:04X},{s.index[-1].upper()}\n"
             f"{indent}ld hl, {label}\n"
             f"{indent}ldh a, [{s.index}]\n"
-            f"{indent}add l\n"
-            f"{indent}ld l, a\n"
-            f"{indent}jr nc, :+\n"
-            f"{indent}inc h\n"
-            ":\n"
+            f"{indent}ld l, a ; 256-byte-aligned table: low byte is index\n"
             f"{indent}ld a, [hl]\n"
         )
         lines[s.start] = replacement
         for j in range(s.start + 1, s.end + 1):
-            lines[j] = f"{indent}; indexed PRG bus path removed\n"
+            lines[j] = f"{indent}; aligned indexed PRG bus/address path removed\n"
         rewritten += 1
         mirrored.add((s.bank, s.base))
 
     if mirrored:
-        lines.append("\n; Same-bank mirrors for hot fixed-PRG indexed reads.\n")
+        lines.append("\n; Same-bank 256-byte-aligned mirrors for hot fixed-PRG indexed reads.\n")
+        by_bank: dict[int, list[int]] = collections.defaultdict(list)
         for bank, base in sorted(mirrored):
-            label = label_for(bank, base)
+            by_bank[bank].append(base)
+
+        for bank in sorted(by_bank):
+            # One aligned section per bank bounds linker padding to at most 255
+            # bytes for the whole group. Every 256-byte table after the first
+            # remains naturally aligned.
             lines.append(
-                f'SECTION "Hot PRG mirror b{bank} ${base:04X}", ROMX, BANK[{bank}]\n'
+                f'SECTION "Hot PRG mirrors b{bank}", ROMX, BANK[{bank}], ALIGN[8]\n'
             )
-            lines.append(f"{label}:\n")
-            data = [prg_byte(prg, base + i) for i in range(256)]
-            for off in range(0, 256, 16):
-                chunk = ", ".join(f"${b:02X}" for b in data[off:off + 16])
-                lines.append(f"    db {chunk}\n")
-            lines.append("\n")
+            for base in by_bank[bank]:
+                label = label_for(bank, base)
+                lines.append(f"{label}:\n")
+                data = [prg_byte(prg, base + i) for i in range(256)]
+                for off in range(0, 256, 16):
+                    chunk = ", ".join(f"${b:02X}" for b in data[off:off + 16])
+                    lines.append(f"    db {chunk}\n")
+                lines.append("\n")
 
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
-        f"indexed-prg: mirrored {len(mirrored)} tables / 256B, "
-        f"rewrote {rewritten} indexed PRG read sites"
+        f"indexed-prg: mirrored {len(mirrored)} aligned tables / 256B, "
+        f"rewrote {rewritten} indexed PRG read sites with direct low-byte indexing"
     )
     return 0
 
