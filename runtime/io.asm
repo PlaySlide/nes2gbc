@@ -196,17 +196,27 @@ nes_gbc_oam_shadow: ds $00A0
 
 ; Set during host publish bursts while LY is still in VBlank. wait_vram
 ; treats this as a fast path and clears it if scanout resumes.
-;; Build-time half-scale fit mode (CHR shrunk + OAM coords /2 + letterbox).
+;; Fit-screen: identity soft metatiles (2x2 half-CHR compose) + OAM/2.
 SECTION "NES fit screen", WRAM0[$CBA0]
 nes_fit_screen:        ds 1
+nes_fit_sprite_pt:     ds 1  ; last sprite PT select (0 or $08)
+nes_fit_vram_page:     ds 1  ; resident physical page (0 or 4)
+nes_fit_mt_quad:       ds 4  ; TL,TR,BL,BR NES tile indices
+nes_fit_mt_compose:    ds 16 ; scratch composed GBC tile
+nes_fit_mt_tmp_l:      ds 1
+nes_fit_mt_tmp_h:      ds 1
+nes_fit_mt_mx:         ds 1  ; half-res X 0..15
+nes_fit_mt_my:         ds 1  ; half-res Y 0..14
+nes_fit_mt_page:       ds 1  ; 0 or 4
+; 1+1+1+4+16+1+1+1+1+1 = 28 bytes -> $CBA0-$CBBB
 
-SECTION "NES VRAM unlock", WRAM0[$CBA1]
+SECTION "NES VRAM unlock", WRAM0[$CBBC]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBA2]
+SECTION "Host native stack reserve", WRAM0[$CBBD]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA2-$CFFF leaves 1118 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $045E
+; $CBBD-$CFFF leaves 1091 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $0443
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
