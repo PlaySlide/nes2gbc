@@ -2,13 +2,21 @@
 """Inline exact hot 6502 ALU helpers in generated LR35902 assembly.
 
 This pass only replaces helper calls whose complete semantics are local to the
-call.  It preserves the canonical lazy C/Z/N shadows and overflow bit exactly;
+call. It preserves the canonical lazy C/Z/N shadows and overflow bit exactly;
 we are removing CALL/RET and branchy carry shims, not relaxing CPU semantics.
+
+After those helpers are inline, zero-page indexed read/modify/write instructions
+have another exact simplification: the first effective address remains live in
+HL across the whole RMW body. The emitter currently recomputes that same address
+for the write-back and wraps the second computation in PUSH/POP AF. For a single
+source INC/DEC/ASL/LSR/ROL/ROR ZeroPageX/ZeroPageY instruction, reuse the first
+HL instead and remove only that redundant second address calculation.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 
@@ -170,6 +178,98 @@ def _inline_ror(indent: str) -> str:
     )
 
 
+_SOURCE_RE = re.compile(
+    r"; \$[0-9A-Fa-f]{4}: \$[0-9A-Fa-f]{2} ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
+)
+_INDEX_LOADS = {"ldh a, [nes_x]", "ldh a, [nes_y]"}
+_ADD_ZP_RE = re.compile(r"add \$[0-9A-Fa-f]{2}$")
+
+
+def _is_indexed_rmw_source(lines: list[str], start: int) -> bool:
+    """Require the nearest source marker to be one indexed 6502 RMW opcode."""
+    for i in range(start - 1, max(-1, start - 17), -1):
+        m = _SOURCE_RE.search(lines[i])
+        if m:
+            return m.group(1) in {"Inc", "Dec", "Asl", "Lsr", "Rol", "Ror"} and m.group(2) in {
+                "ZeroPageX",
+                "ZeroPageY",
+            }
+        c = _code(lines[i])
+        if c.startswith("SECTION ") or (c.startswith("nes_") and c.endswith(":")):
+            break
+    return False
+
+
+def _body_preserves_hl(lines: list[str], start: int, end: int) -> bool:
+    """Prove the inlined RMW body leaves the first effective address in HL."""
+    reg_re = re.compile(r"\b(?:hl|h|l)\b", re.IGNORECASE)
+    for line in lines[start:end]:
+        if _SOURCE_RE.search(line):
+            return False
+        c = _code(line)
+        if not c:
+            continue
+        low = c.lower()
+        if low.endswith(":") or low.startswith(("call ", "jp ", "jr ", "ret", "reti")):
+            return False
+        if reg_re.search(low):
+            return False
+    return True
+
+
+def _fuse_indexed_rmw_address_recalc(lines: list[str]) -> int:
+    """Reuse HL across one ZeroPageX/Y read-modify-write instruction."""
+    fused = 0
+    i = 0
+    while i + 12 < len(lines):
+        first_index = _code(lines[i])
+        if first_index not in _INDEX_LOADS or not _ADD_ZP_RE.fullmatch(_code(lines[i + 1])):
+            i += 1
+            continue
+        if [_code(lines[i + n]) for n in range(2, 5)] != [
+            "ld l, a",
+            "ld h, $C0",
+            "ld a, [hl]",
+        ]:
+            i += 1
+            continue
+        if not _is_indexed_rmw_source(lines, i):
+            i += 1
+            continue
+
+        push_i = None
+        ceiling = min(len(lines) - 6, i + 36)
+        for j in range(i + 5, ceiling):
+            if _SOURCE_RE.search(lines[j]):
+                break
+            if _code(lines[j]) == "push af":
+                push_i = j
+                break
+        if push_i is None or not _body_preserves_hl(lines, i + 5, push_i):
+            i += 1
+            continue
+
+        second = [_code(lines[push_i + n]) for n in range(1, 7)]
+        if second != [
+            first_index,
+            _code(lines[i + 1]),
+            "ld l, a",
+            "ld h, $C0",
+            "pop af",
+            "ld [hl], a",
+        ]:
+            i += 1
+            continue
+
+        ind = _indent(lines[push_i])
+        lines[push_i] = f"{ind}; reused first indexed RMW effective address in HL\n"
+        for j in range(push_i + 1, push_i + 6):
+            lines[j] = f"{ind}; redundant indexed RMW address recompute removed\n"
+        fused += 1
+        i = push_i + 7
+    return fused
+
+
 def optimize(lines: list[str]) -> tuple[list[str], dict[str, int]]:
     out = list(lines)
     stats = {name: 0 for name in ("adc", "sbc", "bit", "asl", "lsr", "rol", "ror")}
@@ -191,6 +291,10 @@ def optimize(lines: list[str]) -> tuple[list[str], dict[str, int]]:
         out[i] = emitter(_indent(line))
         stats[name] += 1
 
+    # Helper inlining above can introduce multiple physical lines in one list
+    # element. Re-split before looking for the exact duplicated RMW address path.
+    out = "".join(out).splitlines(keepends=True)
+    stats["indexed_rmw"] = _fuse_indexed_rmw_address_recalc(out)
     return out, stats
 
 
@@ -204,7 +308,8 @@ def main() -> int:
     print(
         "hot-alu: "
         f"{s['adc']} ADC, {s['sbc']} SBC, {s['bit']} BIT, "
-        f"{s['asl']} ASL, {s['lsr']} LSR, {s['rol']} ROL, {s['ror']} ROR"
+        f"{s['asl']} ASL, {s['lsr']} LSR, {s['rol']} ROL, {s['ror']} ROR, "
+        f"fused {s['indexed_rmw']} indexed RMW address recalculation(s)"
     )
     return 0
 
