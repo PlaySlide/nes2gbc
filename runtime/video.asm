@@ -2845,7 +2845,8 @@ nes_video_fit_soft_sample_2x2:
 
 ; Pixel at local (c=x,b=y) in chr_quad. A=0..3
 nes_video_fit_soft_pixel_at:
-    ld a, 0
+    ; NES planar tile in nes_fit_chr_quad: select TL/TR/BL/BR by x/y bit3.
+    xor a
     bit 3, c
     jr z, .not_r
     ld a, 16
@@ -2858,6 +2859,7 @@ nes_video_fit_soft_pixel_at:
     ld d, 0
     ld hl, nes_fit_chr_quad
     add hl, de
+    ; HL = tile base. Plane0 at +row, plane1 at +row+8.
     ld a, b
     and $07
     ld e, a
@@ -2865,14 +2867,14 @@ nes_video_fit_soft_pixel_at:
     push hl
     add hl, de
     ld a, [hl]
-    ld d, a
+    ld [nes_fit_tmp_l], a ; plane0 — never store into D (DE high must stay 0)
     pop hl
     ld a, e
     add 8
     ld e, a
     add hl, de
     ld a, [hl]
-    ld e, a
+    ld [nes_fit_tmp_h], a ; plane1
     ; mask = 1 << (7 - (x&7))
     ld a, c
     and $07
@@ -2890,7 +2892,7 @@ nes_video_fit_soft_pixel_at:
     jr nz, .msk
 .mask_ok:
     ld b, a
-    ld a, d
+    ld a, [nes_fit_tmp_l]
     and b
     jr z, .p0_0
     ld a, 1
@@ -2898,15 +2900,15 @@ nes_video_fit_soft_pixel_at:
 .p0_0:
     xor a
 .p0_d:
-    ld d, a
-    ld a, e
+    ld c, a
+    ld a, [nes_fit_tmp_h]
     and b
     jr z, .done
-    ld a, d
+    ld a, c
     or 2
     ret
 .done:
-    ld a, d
+    ld a, c
     ret
 
 ; Store scratch into soft BG WRAM and upload to VRAM tile + map attr.
@@ -2982,20 +2984,26 @@ nes_video_fit_soft_store_and_upload:
 .map9800:
     ld hl, $9800
 .map_ready:
+    ; offset = my*32+mx (16-bit — 8-bit my*32 overflows for my>=8)
     ld a, [nes_fit_my]
-    ; offset = my*32+mx
-    ld b, a
-    add a
-    add a
-    add a
-    add a
-    add a ; my*32
-    ld b, a
-    ld a, [nes_fit_mx]
-    add b
     ld e, a
     ld d, 0
-    add hl, de
+    ld b, h
+    ld c, l
+    ld h, d
+    ld l, e
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl ; my*32
+    ld a, [nes_fit_mx]
+    add l
+    ld l, a
+    jr nc, .map_off_ok
+    inc h
+.map_off_ok:
+    add hl, bc
     ; tile id already in C
     call nes_video_wait_vram
     xor a
