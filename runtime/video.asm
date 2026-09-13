@@ -1637,6 +1637,12 @@ nes_video_sync_oam:
 ; NES global select changes. Do not XOR: a single stale/mismatched attribute
 ; would otherwise remain permanently opposite to the rest of the map.
 nes_video_toggle_bg_pattern_bank:
+    ; Fit-screen BG metatiles always live in VRAM bank 0; sprite CHR owns bank 1.
+    ; Never rewrite attr bit 3 from PPUCTRL.4 — compose reads the BG PT from ROM.
+    ld a, [nes_fit_screen]
+    and a
+    ret nz
+
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_BG_BANK_REWRITE
     ld [nes_diag_event_flags], a
@@ -2475,6 +2481,14 @@ nes_video_fit_cache_lookup:
     ld a, $07
     ldh [rSVBK], a
 
+    ; Key byte 0 = CHR bank | BG pattern-table select (PPUCTRL.4).
+    ld a, [nes_chr_bank]
+    ld b, a
+    ld a, [nes_ppuctrl]
+    and $10
+    or b
+    ld [nes_fit_mt_tmp_h], a
+
     ld a, [nes_fit_mt_full]
     and a
     jr nz, .search_all
@@ -2486,17 +2500,21 @@ nes_video_fit_cache_lookup:
     jr .search_prep
 
 .search_all:
-    ; All 256 slots valid; B=0 means 256 iterations via borrow trick below.
+    ; Slots 1..255 valid; B=0 means wrap after c hits 0.
     xor a
     ld b, a
 
 .search_prep:
     ; Slot 0 is the permanent blank metatile; never match/reuse it.
-    ld hl, nes_fit_mt_keys + 4
+    ld hl, nes_fit_mt_keys + 5
     ld c, 1
 .search:
     push bc
     push hl
+    ld a, [nes_fit_mt_tmp_h]
+    cp [hl]
+    jr nz, .diff
+    inc hl
     ld de, nes_fit_mt_quad
     ld b, 4
 .cmp:
@@ -2519,7 +2537,7 @@ nes_video_fit_cache_lookup:
 .diff:
     pop hl
     ld a, l
-    add 4
+    add 5
     ld l, a
     jr nc, .key_nc
     inc h
@@ -2538,29 +2556,44 @@ nes_video_fit_cache_lookup:
     ld a, c
     and a
     jr nz, .search
-    ; c wrapped 255→0 after 256 compares: miss
+    ; c wrapped 255→0 after comparing slots 1..255: miss
     jr .miss_alloc
 
 .miss_alloc:
     ld a, [nes_fit_mt_full]
     and a
     jr z, .use_next
-    ; Full: round-robin overwrite starting at next (0-255)
+    ; Full: round-robin overwrite starting at next (always 1..255)
     ld a, [nes_fit_mt_next]
     ld c, a
+    and a
+    jr nz, .write_key
+    ld c, 1
     jr .write_key
 
 .use_next:
     ld a, [nes_fit_mt_next]
     ld c, a
+    and a
+    jr nz, .write_key
+    ld c, 1
 
 .write_key:
     ld l, c
     ld h, 0
+    ; slot * 5 = slot*4 + slot
     add hl, hl
     add hl, hl
+    ld a, c
+    add l
+    ld l, a
+    jr nc, .key_addr_ok
+    inc h
+.key_addr_ok:
     ld de, nes_fit_mt_keys
     add hl, de
+    ld a, [nes_fit_mt_tmp_h]
+    ld [hli], a
     ld de, nes_fit_mt_quad
     ld b, 4
 .store_key:
@@ -2590,24 +2623,37 @@ nes_video_fit_cache_lookup:
     jr nz, .rr_store
     ld a, 1
 .rr_store:
+    and a
+    jr nz, .rr_ok
+    ld a, 1
+.rr_ok:
     ld [nes_fit_mt_next], a
 
 .alloc_done:
     ld a, $01
     ldh [rSVBK], a
 
+    ; Mask IE during compose+upload so VBlank cannot re-enter mid-buffer.
+    ldh a, [rIE]
+    push af
+    xor a
+    ldh [rIE], a
+
     push bc
     call nes_video_fit_compose_quad
     pop bc
     ld a, c
     call nes_video_fit_upload_tile_a
+
+    pop af
+    ldh [rIE], a
     ld a, c
     ret
 
+; Pack four already-shrunk 4x4 CHR quadrants into nes_fit_mt_compose.
+; Explicit TL/TR/BL/BR with dest row bases 0/4 and left/right nibble placement.
+; CHR page ($40/$50) lives in nes_fit_mt_chr_page for the whole routine.
 nes_video_fit_compose_quad:
-    ld a, [nes_fit_mt_page]
-    push af
-
     ld hl, nes_fit_mt_compose
     ld b, 16
     xor a
@@ -2625,28 +2671,49 @@ nes_video_fit_compose_quad:
     ld a, [nes_ppuctrl]
     and $10
     jr z, .pt0
-    ld d, $50
-    jr .base_ready
+    ld a, $50
+    jr .page_ready
 .pt0:
-    ld d, $40
-.base_ready:
-    ; D = CHR page high byte for duration of compose
+    ld a, $40
+.page_ready:
+    ld [nes_fit_mt_chr_page], a
 
-    xor a
-.quad_loop:
-    cp 4
-    jp nc, .compose_done
-    ld [nes_fit_mt_tmp_l], a
-
-    ld c, a
-    ld hl, nes_fit_mt_quad
-    add l
-    ld l, a
-    jr nc, .q_ok
-    inc h
-.q_ok:
-    ld a, [hl]
+    ; Quad 0 TL: rows 0..3, left nibble
+    ld a, [nes_fit_mt_quad]
     ld e, a
+    ld b, 0
+    ld c, 0
+    call nes_video_fit_compose_one
+
+    ; Quad 1 TR: rows 0..3, right nibble
+    ld a, [nes_fit_mt_quad + 1]
+    ld e, a
+    ld b, 0
+    ld c, 1
+    call nes_video_fit_compose_one
+
+    ; Quad 2 BL: rows 4..7, left nibble
+    ld a, [nes_fit_mt_quad + 2]
+    ld e, a
+    ld b, 4
+    ld c, 0
+    call nes_video_fit_compose_one
+
+    ; Quad 3 BR: rows 4..7, right nibble
+    ld a, [nes_fit_mt_quad + 3]
+    ld e, a
+    ld b, 4
+    ld c, 1
+    call nes_video_fit_compose_one
+
+    call nes_restore_code_bank
+    ret
+
+; E = NES tile index, B = dest row base (0 or 4), C = 0 left / 1 right.
+; Uses nes_fit_mt_chr_page; clobbers A/D/HL; preserves caller BC via stack.
+nes_video_fit_compose_one:
+    ld a, [nes_fit_mt_chr_page]
+    ld d, a
     ld l, e
     ld h, 0
     add hl, hl
@@ -2656,24 +2723,17 @@ nes_video_fit_compose_quad:
     ld a, d
     add h
     ld h, a
-    ; HL = src tile, D preserved
-
-    ld a, c
-    and $02
-    add a
-    ld b, a
-    ld a, c
-    and $01
-    ld c, a
+    ; HL = source tile in current GBC CHR bank
 
     xor a
 .row_loop:
     cp 4
-    jr nc, .next_quad
+    ret nc
     ld [nes_fit_mt_tmp_h], a
 
     push hl
-    push de
+    push bc
+
     add a
     add l
     ld l, a
@@ -2687,12 +2747,13 @@ nes_video_fit_compose_quad:
     and $F0
     ld d, a
 
+    ; dest = nes_fit_mt_compose + (row_base + row) * 2
     ld a, [nes_fit_mt_tmp_h]
+    pop bc
+    push bc
     add b
     add a
-    ld l, a
-    ld h, HIGH(nes_fit_mt_compose)
-    ld a, LOW(nes_fit_mt_compose)
+    ld hl, nes_fit_mt_compose
     add l
     ld l, a
     jr nc, .dst_ok
@@ -2723,24 +2784,17 @@ nes_video_fit_compose_quad:
     or d
     ld [hl], a
 .row_done:
-    pop de
+    pop bc
     pop hl
     ld a, [nes_fit_mt_tmp_h]
     inc a
     jr .row_loop
 
-.next_quad:
-    ld a, [nes_fit_mt_tmp_l]
-    inc a
-    jr .quad_loop
-
-.compose_done:
-    call nes_restore_code_bank
-    pop af
-    ld [nes_fit_mt_page], a
-    ret
-
 nes_video_fit_upload_tile_a:
+    ; Never upload into blank reserved tile 0.
+    and a
+    ret z
+
     ld l, a
     ld h, 0
     add hl, hl
