@@ -625,9 +625,7 @@ nes_gbc_stat_isr:
     or NES_DIAG_EVENT_STAT_SPLIT
     ld [nes_diag_event_flags], a
 
-    ldh a, [nes_split_armed_x]
-    srl a
-    sub 16
+    ld a, [nes_fit_play_scx]
     ldh [rSCX], a
     ldh a, [nes_split_armed_y]
     srl a

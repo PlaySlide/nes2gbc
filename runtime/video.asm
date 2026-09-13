@@ -2289,9 +2289,10 @@ nes_video_fit_init_identity:
     ld [nes_fit_vram_page], a
     ld [nes_fit_dirty], a
     ld [nes_fit_recompose_my], a
-
+    ld [nes_fit_origin_mx], a
     xor a
     sub 16
+    ld [nes_fit_play_scx], a
     ldh [rSCX], a
     xor a
     sub 12
@@ -2310,6 +2311,9 @@ nes_video_fit_write_identity_map_9c00:
     ld de, $9C00
 
 nes_video_fit_write_identity_map_de:
+    ; Fill all 32 columns. Slot s (=c&15) is identity tile 1+my*16+s; columns
+    ; 16-31 mirror 0-15 so SCX letterbox/wrap never walks into blank tile 0
+    ; (smb-fit.mvl: map R half stayed empty while playfield SCX grew).
     ld b, 0
 .row:
     ld c, 0
@@ -2318,12 +2322,12 @@ nes_video_fit_write_identity_map_de:
     cp 15
     jr nc, .zero
     ld a, c
-    cp 16
-    jr nc, .zero
+    and $0F                   ; s = c & 15
+    ld h, a                   ; temp in H (HL free; DE is dest)
     ld a, b
     swap a
     and $F0
-    add c
+    add h
     inc a
     jr .store
 .zero:
@@ -2386,20 +2390,98 @@ nes_video_fit_apply_scroll:
     ld [nes_vram_unlocked], a
 
 .regs:
-    ld a, [nes_ppu_scroll_x]
-    srl a
-    sub 16
-    ldh [rSCX], a
-    ld a, [nes_ppu_scroll_y]
-    srl a
-    sub 12
-    ldh [rSCY], a
-
+    call nes_video_fit_update_scroll_window
     xor a
     ldh [nes_seam_active], a
     ldh a, [rSTAT]
     and $BF
     ldh [rSTAT], a
+    ret
+
+; Sliding 16-slot window over the 32-metatile (512px) horizontal pair.
+; smb-fit.mvl: identity maps only filled cols 0-15; SCX=scroll/2-16 walked into
+; empty 16-31 (blue void). Mirror map cols + origin-based compose fixes that.
+nes_video_fit_update_scroll_window:
+    ld a, [nes_ppu_scroll_x]
+    ld c, a
+    ld b, 0
+    ldh a, [nes_split_active]
+    and a
+    jr z, .eff_from_ctrl
+    ldh a, [nes_split_bottom_x]
+    ld c, a
+    ldh a, [nes_view_x]
+    add c
+    ld c, a
+    ld b, 0
+    jr nc, .eff_split_nt
+    inc b
+.eff_split_nt:
+    ldh a, [nes_split_bottom_ctrl]
+    and $01
+    xor b
+    ld b, a
+    jr .eff_ready
+.eff_from_ctrl:
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .eff_ready
+    ld a, [nes_ppuctrl]
+    and $01
+    ld b, a
+.eff_ready:
+    ; HL = effective NES X (0..511)
+    ld a, c
+    ld l, a
+    ld a, b
+    ld h, a
+    srl h
+    rr l                       ; HL = half_x
+    ld a, l
+    and $07
+    ld e, a                    ; fine 0..7
+    ld a, l
+    srl a
+    srl a
+    srl a
+    and $1F
+    ld c, a                    ; new origin_mx
+
+    ld a, [nes_fit_origin_mx]
+    cp c
+    jr z, .scx_only
+    ld a, c
+    ld [nes_fit_origin_mx], a
+    ld a, [nes_fit_dirty]
+    and a
+    jr nz, .scx_only
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+
+.scx_only:
+    ld a, [nes_fit_origin_mx]
+    and $0F
+    add a
+    add a
+    add a                      ; (origin&15)*8
+    add e
+    sub 16
+    ld [nes_fit_play_scx], a
+    ldh [rSCX], a
+
+    ldh a, [nes_split_active]
+    and a
+    jr z, .scy_ppu
+    ldh a, [nes_split_bottom_y]
+    jr .scy_write
+.scy_ppu:
+    ld a, [nes_ppu_scroll_y]
+.scy_write:
+    srl a
+    sub 12
+    ldh [rSCY], a
     ret
 
 nes_video_fit_displayed_page:
@@ -2518,14 +2600,8 @@ nes_video_fit_sync_nametable_write:
     jp nc, nes_video_fit_sync_attribute_write
 
 .fit_tile:
-    ; Only the displayed physical page owns identity-slot CHR.
-    ld a, h
-    and $04
-    ld b, a
-    ld a, [nes_fit_vram_page]
-    cp b
-    ret nz
-
+    ; Sliding window may source either physical NT. Skip only if this world
+    ; column is outside the current 16-slot view.
     ; Bulk flood already scheduled: skip per-tile work (finish via chunked flush).
     ld a, [nes_fit_dirty]
     and a
@@ -2547,12 +2623,6 @@ nes_video_fit_sync_nametable_write:
     jp nes_video_fit_publish_metatile_hl
 
 nes_video_fit_mark_dirty_if_resident:
-    ld a, h
-    and $04
-    ld b, a
-    ld a, [nes_fit_vram_page]
-    cp b
-    ret nz
     ld a, [nes_fit_dirty]
     and a
     ret nz                    ; already chunking — do not restart from row 0
@@ -2591,9 +2661,26 @@ nes_video_fit_publish_metatile_hl:
     ld a, [nes_fit_mt_tmp_h]
     ld h, a
 
+    ; world_mx = (phys_page?16:0) + (tile_x>>1)
     ld a, l
     and $1F
     srl a
+    ld c, a
+    ld a, h
+    and $04
+    jr z, .world_p0
+    ld a, c
+    or $10
+    ld c, a
+.world_p0:
+    ; window offset = (world_mx - origin) & 31; must be < 16
+    ld a, [nes_fit_origin_mx]
+    ld b, a
+    ld a, c
+    sub b
+    and $1F
+    cp 16
+    ret nc
     ld [nes_fit_mt_mx], a
 
     ld a, h
@@ -2615,18 +2702,32 @@ nes_video_fit_publish_metatile_hl:
     cp 15
     ret nc
     ld [nes_fit_mt_my], a
-
-    ld a, h
-    and $04
-    ld [nes_fit_mt_page], a
     jp nes_video_fit_publish_at_mx_my
 
-; Compose + upload using nes_fit_mt_mx/my/page and nes_fit_mt_quad.
+; Compose + upload using nes_fit_mt_mx/my as WINDOW offset 0..15.
+; World metatile X = (origin_mx + mx) & 31 picks NT page/column; CHR slot = W&15.
 nes_video_fit_publish_at_mx_my:
-    ; If quad not already filled (recompose path), load from NT.
+    ld a, [nes_fit_origin_mx]
+    ld b, a
     ld a, [nes_fit_mt_mx]
+    add b
+    and $1F
+    ld [nes_fit_mt_page], a    ; temp: world mx in page var
+    ; local NES tile X = (world_mx & 15)*2
+    and $0F
     add a
     ld c, a
+    ; physical page bit: world_mx bit4 -> $04
+    ld a, [nes_fit_mt_page]
+    and $10
+    jr z, .page0
+    ld a, $04
+    jr .page_set
+.page0:
+    xor a
+.page_set:
+    ld [nes_fit_mt_page], a
+
     ld a, [nes_fit_mt_my]
     add a
     ld b, a
@@ -2693,24 +2794,63 @@ nes_video_fit_publish_at_mx_my:
     ld [nes_fit_mt_tmp_h], a
     pop hl
 
-    ; tile id = 1+my*16+mx
+    ; tile id = 1+my*16+(world_mx&15). Keep nes_fit_mt_mx as window offset.
+    ld a, [nes_fit_origin_mx]
+    ld b, a
+    ld a, [nes_fit_mt_mx]
+    add b
+    and $0F
+    ld c, a
     ld a, [nes_fit_mt_my]
     swap a
     and $F0
-    ld b, a
-    ld a, [nes_fit_mt_mx]
-    or b
+    or c
     inc a
     ld [nes_fit_mt_tmp_l], a
     call nes_video_fit_upload_tile_a
+    jr nz, .map_cells
+    ; Compose burned the remainder of VBlank — defer; do not HBlank-pace.
+    jp nes_video_fit_defer_dirty
 
-    call nes_video_fit_map_addr_de
-    call nes_video_wait_vram
+.map_cells:
+    ; Map cols (slot) and (slot|16) must stay twins: SCX letterbox 240 scans
+    ; the high half, and origin slides leave those cells stale otherwise.
+    call nes_video_fit_vblank_ok
+    jp z, nes_video_fit_defer_dirty
+    ld a, [nes_fit_origin_mx]
+    ld b, a
+    ld a, [nes_fit_mt_mx]
+    add b
+    and $0F
+    call nes_video_fit_map_addr_a
+    call nes_video_fit_write_map_cell_de
+    ; Mirror into column+16 on the same row (E += 16 within 32-wide row).
+    ld a, e
+    add 16
+    ld e, a
+    call nes_video_fit_write_map_cell_de
+    or $01
+    ret
+
+; Mark dirty without resetting an in-progress chunk cursor.
+nes_video_fit_defer_dirty:
+    ld a, [nes_fit_dirty]
+    and a
+    jr nz, .keep
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+.keep:
+    xor a
+    ret
+
+; Write tile id (tmp_l) + attr (tmp_h) at DE. Assumes VBlank/LCD-off.
+nes_video_fit_write_map_cell_de:
     xor a
     ldh [rVBK], a
     ld a, [nes_fit_mt_tmp_l]
     ld [de], a
-    call nes_video_wait_vram
     ld a, $01
     ldh [rVBK], a
     ld a, [nes_fit_mt_tmp_h]
@@ -2719,35 +2859,33 @@ nes_video_fit_publish_at_mx_my:
     ldh [rVBK], a
     ret
 
-nes_video_fit_map_addr_de:
-    ; DE = map base for resident page + my*32+mx
+; A = map column 0..15. DE = displayed map + my*32 + A.
+nes_video_fit_map_addr_a:
+    and $0F
+    ld c, a
     ld a, [nes_fit_vram_page]
     and a
     jr z, .m9800
-    ld hl, $9C00
+    ld de, $9C00
     jr .base
 .m9800:
-    ld hl, $9800
+    ld de, $9800
 .base:
     ld a, [nes_fit_mt_my]
-    ld e, a
-    ld d, 0
-    ld b, h
-    ld c, l
-    ld h, d
-    ld l, e
+    ld l, a
+    ld h, 0
     add hl, hl
     add hl, hl
     add hl, hl
     add hl, hl
-    add hl, hl
-    ld a, [nes_fit_mt_mx]
+    add hl, hl                 ; my*32
+    ld a, c
     add l
     ld l, a
     jr nc, .ok
     inc h
 .ok:
-    add hl, bc
+    add hl, de
     ld d, h
     ld e, l
     ret
@@ -2882,7 +3020,11 @@ nes_video_fit_compose_quad:
     jp nes_restore_code_bank
 
 nes_video_fit_upload_tile_a:
-    ; A = tile id already in nes_fit_mt_tmp_l
+    ; BG CHR upload is VBlank/LCD-off only. nes_video_wait_vram's HBlank
+    ; fallback was still rewriting bank0 on ~every scanline after unlock
+    ; cleared (smb-fit-a/b: 25k–52k active-line VRAM0 flushes).
+    call nes_video_fit_vblank_ok
+    ret z
     ld a, [nes_fit_mt_tmp_l]
     ld l, a
     ld h, 0
@@ -2899,12 +3041,13 @@ nes_video_fit_upload_tile_a:
     ld hl, nes_fit_mt_compose
     ld b, 16
 .copy:
-    call nes_video_wait_vram
+    ; VBlank/LCD-off: VRAM is freely writable — do not STAT-poll mode 0/3.
     ld a, [hli]
     ld [de], a
     inc de
     dec b
     jr nz, .copy
+    or $01                    ; NZ = success (dec b left Z set)
     ret
 
 nes_video_fit_sync_attribute_write:
