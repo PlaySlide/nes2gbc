@@ -12,6 +12,11 @@ The direct path deliberately uses nes_jump_known_hl_a even when the destination
 happens to share the current code bank. Besides keeping the implementation
 simple, that helper's XOR A normalizes host flags the same way the dynamic
 dispatcher does before entering translated code.
+
+The selected return-PC set is unchanged by guard ordering. Candidates sharing a
+high byte are grouped so H is compared once, with hotter high-byte groups and
+low-byte returns checked first according to the existing static poll-point
+ranking. This only removes redundant comparisons from successful probes.
 """
 
 from __future__ import annotations
@@ -135,26 +140,44 @@ def find_rti_dispatches(lines: list[str]) -> list[int]:
     return out
 
 
-def helper(candidates: list[int]) -> str:
+def helper(candidates: list[tuple[int, int]]) -> str:
+    """Emit exact RTI guards grouped by high byte and ordered by static weight."""
+    grouped: dict[int, list[tuple[int, int]]] = collections.defaultdict(list)
+    for score, pc in candidates:
+        grouped[(pc >> 8) & 0xFF].append((score, pc))
+
+    ordered_groups = sorted(
+        grouped.items(),
+        key=lambda item: (-sum(score for score, _pc in item[1]), item[0]),
+    )
+
     out: list[str] = [
         "\nSECTION \"Guarded RTI return fast dispatch\", ROM0\n",
         "nes_rti_fast_dispatch:\n",
         "    ; HL is the exact PC popped by nes_rti_pop_hl.\n",
     ]
-    for n, pc in enumerate(candidates):
-        nxt = f".next_{n}"
+    for hi_n, (hi, vals) in enumerate(ordered_groups):
+        next_hi = f".next_hi_{hi_n}"
         out.extend([
             "    ld a, h\n",
-            f"    cp ${(pc >> 8) & 0xFF:02X}\n",
-            f"    jr nz, {nxt}\n",
-            "    ld a, l\n",
-            f"    cp ${pc & 0xFF:02X}\n",
-            f"    jr nz, {nxt}\n",
-            f"    ld a, BANK(nes_{pc:04X})\n",
-            f"    ld hl, nes_{pc:04X}\n",
-            "    jp nes_jump_known_hl_a\n",
-            f"{nxt}:\n",
+            f"    cp ${hi:02X}\n",
+            f"    jr nz, {next_hi}\n",
         ])
+
+        ordered_vals = sorted(vals, key=lambda item: (-item[0], item[1]))
+        for lo_n, (_score, pc) in enumerate(ordered_vals):
+            next_lo = f".next_{hi_n}_{lo_n}"
+            out.extend([
+                "    ld a, l\n",
+                f"    cp ${pc & 0xFF:02X}\n",
+                f"    jr nz, {next_lo}\n",
+                f"    ld a, BANK(nes_{pc:04X})\n",
+                f"    ld hl, nes_{pc:04X}\n",
+                "    jp nes_jump_known_hl_a\n",
+                f"{next_lo}:\n",
+            ])
+        out.append(f"{next_hi}:\n")
+
     out.extend([
         "    ; Uncommon poll point, IRQ/BRK RTI, or modified stacked PC.\n",
         "    jp nes_dispatch_hl\n",
@@ -183,7 +206,7 @@ def main() -> int:
         return 0
 
     ranked = rank_poll_points(lines, points)
-    candidates = [pc for _score, pc in ranked[: args.max_targets]]
+    candidates = ranked[: args.max_targets]
 
     for i in dispatches:
         ind = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
@@ -192,10 +215,12 @@ def main() -> int:
     lines.append(helper(candidates))
     args.asm.write_text("".join(lines), encoding="utf-8")
 
-    pcs = ",".join(f"${pc:04X}" for pc in candidates)
+    pcs = ",".join(f"${pc:04X}" for _score, pc in candidates)
+    hi_groups = len({(pc >> 8) & 0xFF for _score, pc in candidates})
     print(
         f"rti-fast: rewrote {len(dispatches)} RTI dispatch site(s); "
-        f"probing {len(candidates)}/{len(points)} ranked poll returns [{pcs}]"
+        f"probing {len(candidates)}/{len(points)} ranked poll returns in "
+        f"{hi_groups} high-byte group(s) [{pcs}]"
     )
     return 0
 
