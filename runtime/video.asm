@@ -2631,10 +2631,9 @@ nes_video_fit_soft_render_tile:
     ld de, nes_fit_chr_quad + 48
     call nes_video_fit_soft_fetch_chr_at_tx_ty
 
-    ; 8x8 GBC tile: each pixel = prefer-nonzero 2x2 NES sample
+    ; 8x8 GBC tile: each pixel = prefer-nonzero 2x2 NES sample.
+    ; Do NOT clobber nes_fit_my/mx — rebuild loops depend on them.
     ld hl, nes_fit_tile_scratch
-    xor a
-    ld [nes_fit_my], a ; reuse as oy counter carefully — NO, keep my. Use B.
     ld b, 0 ; oy
 .oy:
     ld c, 0 ; ox
