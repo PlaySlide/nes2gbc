@@ -11,6 +11,13 @@ SECTION "Header Entry", ROM0[$0100]
     nop
     jp Start
 
+; Reserve the Nintendo logo + cartridge header ($0104-$014F) so floating
+; ROM0 sections (generated follow/fit init, etc.) cannot land here. rgbfix
+; fills this range; without the reserve it warns "-Woverwrite" and destroys
+; whatever code the linker parked on top of the logo.
+SECTION "Header Logo and Cart", ROM0[$0104]
+    ds $4C
+
 ; C817 is the remaining free byte beside the hidden-map change counter at C816.
 ; Remember whether the current proven SMB stitch already consumed its one extra
 ; duplicate-NMI grace. This prevents the host-side grace from relatching forever.
