@@ -199,23 +199,14 @@ nes_gbc_oam_shadow: ds $00A0
 ;; Build-time half-scale fit mode (CHR shrunk + OAM coords /2 + letterbox).
 SECTION "NES fit screen", WRAM0[$CBA0]
 nes_fit_screen:        ds 1
-nes_fit_mt_next:       ds 1  ; next free VRAM tile slot (0-255) for metatile cache
-nes_fit_mt_quad:       ds 4  ; TL,TR,BL,BR NES tile indices being packed
-nes_fit_mt_compose:    ds 16 ; scratch 8x8 GBC tile during compose
-nes_fit_mt_tmp_l:      ds 1  ; scratch for metatile map/addr work
-nes_fit_mt_tmp_h:      ds 1
-nes_fit_mt_mx:         ds 1
-nes_fit_mt_my:         ds 1
-nes_fit_mt_page:       ds 1  ; 0 or 4 (physical NT page bit from address high)
-nes_fit_mt_full:       ds 1  ; non-zero when all 256 cache slots are valid
 
-SECTION "NES VRAM unlock", WRAM0[$CBBC]
+SECTION "NES VRAM unlock", WRAM0[$CBA1]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBBD]
+SECTION "Host native stack reserve", WRAM0[$CBA2]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBBD-$CFFF leaves 1091 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $0443
+; $CBA2-$CFFF leaves 1118 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $045E
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
@@ -244,8 +235,3 @@ nes_nametable_published_shadow: ds $800
 ; The retained queue entry still publishes the final authoritative WRAM byte.
 SECTION "NES nametable stage seen", WRAMX[$D800], BANK[6]
 nes_nametable_stage_seen: ds $100
-
-; Fit-screen BG metatile cache keys (4 NES tile indices per VRAM tile slot).
-; Bank 7 is free of NT/PRG/shadow traffic.
-SECTION "NES fit metatile keys", WRAMX[$D000], BANK[7]
-nes_fit_mt_keys: ds $0400

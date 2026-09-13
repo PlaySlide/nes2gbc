@@ -76,10 +76,6 @@ nes_video_init:
     ; LCD on, BG on, unsigned tile IDs, map $9800.
     ld a, $91
     ldh [rLCDC], a
-
-    ld a, [nes_fit_screen]
-    and a
-    call nz, nes_video_fit_reset_cache
     ret
 
 nes_video_fill_zero:
@@ -118,10 +114,6 @@ nes_upload_chr_bank:
     add b
     ld [$2000], a
 
-    ld a, [nes_fit_screen]
-    and a
-    jr nz, .fit_chr_upload
-
     xor a
     ldh [rVBK], a
     ld hl, $4000
@@ -135,20 +127,7 @@ nes_upload_chr_bank:
     ld de, $8000
     ld bc, $1000
     call nes_video_copy
-    jr .chr_upload_done
 
-.fit_chr_upload:
-    ; Bank 0 VRAM holds composed BG metatiles. Keep shrunk sprite CHR (PT $1000)
-    ; in bank 1. BG compose reads converted CHR from ROM.
-    ld a, $01
-    ldh [rVBK], a
-    ld hl, $5000
-    ld de, $8000
-    ld bc, $1000
-    call nes_video_copy
-    call nes_video_fit_reset_cache
-
-.chr_upload_done:
     xor a
     ldh [rVBK], a
 
@@ -539,12 +518,6 @@ nes_video_sync_nametable_write_if_changed:
 nes_video_sync_nametable_write:
     PROFILE_INC nes_profile_nametable_sync
     ld c, a
-
-    ; Fit-screen: pack 2x2 NES tiles into one GBC 8x8 metatile (no screen-door).
-    ld a, [nes_fit_screen]
-    and a
-    ld a, c
-    jp nz, nes_video_fit_sync_nametable_write
 
     ; Attribute bytes start at offset $3C0 within each physical 1 KiB table.
     ld a, h
@@ -1453,7 +1426,6 @@ nes_video_build_oam_shadow:
     ld a, [hli]
     ldh [nes_sprite_attr_tmp], a
 
-
     ; Source X.
     ld a, [hli]
     ldh [nes_view_coord_tmp], a
@@ -1494,8 +1466,6 @@ nes_video_build_oam_shadow:
     inc de
 
     ; Tile number and pattern-table bank.
-    ; Fit-screen clears LCDC 8x16, so NES 8x16 entries become a single 8x8
-    ; using the top tile (& $FE) and bank from tile bit 0.
     ldh a, [nes_oam_ppuctrl_tmp]
     bit 5, a
     jr z, .sprite_8x8
@@ -1711,11 +1681,6 @@ nes_video_update_mask:
 ; surface and synthesize the lower playfield into $9C00. Rebuild only when the
 ; coarse horizontal key changes or virtual nametable data changed.
 nes_video_update_horizontal_stitch:
-    ; Fit-screen uses a half-res packed map; stitching would fight that layout.
-    ld a, [nes_fit_screen]
-    and a
-    jr nz, .disable
-
     ld a, [nes_mirroring]
     cp $01
     jr z, .vertical
@@ -2073,10 +2038,6 @@ nes_video_apply_map_select_a:
 ; 256 pixels. If the visible crop crosses NES Y=240, arm a one-shot STAT split
 ; that toggles the vertical nametable and adds 16 to SCY at the exact seam.
 nes_video_apply_single_scroll:
-    ld a, [nes_fit_screen]
-    and a
-    jp nz, nes_video_fit_apply_scroll
-
     ; Horizontal crop remains a simple 256-pixel wrap.
     ld a, [nes_ppu_scroll_x]
     ld b, a
@@ -2181,9 +2142,6 @@ nes_video_update_ctrl:
     and $F3
     ld b, a
 
-    ld a, [nes_fit_screen]
-    and a
-    jr nz, .size_done
     ld a, [nes_ppuctrl]
     bit 5, a
     jr z, .size_done
@@ -2218,542 +2176,3 @@ nes_video_update_ctrl:
 .write:
     ldh [rLCDC], a
     ret
-
-;; ---------------------------------------------------------------------------
-; Fit-screen 2x2 nametable metatile packing
-; ---------------------------------------------------------------------------
-; Each GBC BG tile composites four already-shrunk 4x4 CHR quadrants.
-; Half-res map is 16x15 per physical NES nametable; scroll is NES/2 + letterbox
-; (+16 X, +12 Y) matching OAM. VRAM bank 0 = up to 256 content-keyed metatiles;
-; sprite CHR remains in bank 1.
-
-nes_video_fit_reset_cache:
-    xor a
-    ld [nes_fit_mt_next], a
-    ld [nes_fit_mt_full], a
-    ret
-
-nes_video_fit_apply_scroll:
-    ld a, [nes_ppuctrl]
-    call nes_video_apply_map_select_a
-
-    ld a, [nes_ppu_scroll_x]
-    srl a
-    add 16
-    ldh [rSCX], a
-
-    ld a, [nes_ppu_scroll_y]
-    srl a
-    add 12
-    ldh [rSCY], a
-
-    xor a
-    ldh [nes_seam_active], a
-    ldh a, [rSTAT]
-    and $BF
-    ldh [rSTAT], a
-    ret
-
-nes_video_fit_sync_nametable_write:
-    ld a, h
-    and $03
-    cp $03
-    jr c, .fit_tile
-    ld a, l
-    cp $C0
-    jr nc, .fit_attr
-
-.fit_tile:
-    ld a, l
-    and $DE
-    ld l, a
-    jr nes_video_fit_publish_metatile
-
-.fit_attr:
-    jp nes_video_fit_sync_attribute_write
-
-; HL = aligned metatile top-left in bank-1 NT RAM.
-nes_video_fit_publish_metatile:
-    ld a, $01
-    ldh [rSVBK], a
-
-    ld a, [hli]
-    ld [nes_fit_mt_quad], a
-    ld a, [hld]
-    ld [nes_fit_mt_quad + 1], a
-
-    ld a, l
-    ld [nes_fit_mt_tmp_l], a
-    ld a, h
-    ld [nes_fit_mt_tmp_h], a
-
-    ld a, l
-    add $20
-    ld l, a
-    jr nc, .row2_ok
-    inc h
-.row2_ok:
-    ld a, [hli]
-    ld [nes_fit_mt_quad + 2], a
-    ld a, [hl]
-    ld [nes_fit_mt_quad + 3], a
-
-    ld a, [nes_fit_mt_tmp_l]
-    ld l, a
-    ld a, [nes_fit_mt_tmp_h]
-    ld h, a
-
-    ld a, l
-    and $1F
-    srl a
-    ld [nes_fit_mt_mx], a
-
-    ld a, h
-    and $03
-    add a
-    add a
-    add a
-    ld b, a
-    ld a, l
-    and $E0
-    rrca
-    rrca
-    rrca
-    rrca
-    rrca
-    and $07
-    add b
-    srl a
-    cp 15
-    ret nc
-    ld [nes_fit_mt_my], a
-
-    ld a, h
-    and $04
-    ld [nes_fit_mt_page], a
-
-    push hl
-    call nes_video_fit_cache_lookup
-    ld [nes_fit_mt_tmp_l], a
-    pop hl
-
-    push hl
-    call nes_video_authoritative_tile_palette
-    and $07
-    ld [nes_fit_mt_tmp_h], a
-    pop hl
-
-    call nes_video_fit_map_addr_de
-
-    call nes_video_wait_vram
-    xor a
-    ldh [rVBK], a
-    ld a, [nes_fit_mt_tmp_l]
-    ld [de], a
-
-    call nes_video_wait_vram
-    ld a, $01
-    ldh [rVBK], a
-    ld a, [nes_fit_mt_tmp_h]
-    ld [de], a
-    xor a
-    ldh [rVBK], a
-
-    ld a, $01
-    ldh [rSVBK], a
-    ret
-
-nes_video_fit_map_addr_de:
-    ld a, [nes_fit_mt_my]
-    ld l, a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    ld a, [nes_fit_mt_mx]
-    add l
-    ld l, a
-    jr nc, .no_carry
-    inc h
-.no_carry:
-    ld a, [nes_fit_mt_page]
-    add $98
-    add h
-    ld d, a
-    ld e, l
-    ret
-
-nes_video_fit_cache_lookup:
-    ld a, $07
-    ldh [rSVBK], a
-
-    ld a, [nes_fit_mt_full]
-    and a
-    jr nz, .search_all
-    ld a, [nes_fit_mt_next]
-    ld b, a
-    and a
-    jr z, .miss_alloc
-    jr .search_prep
-
-.search_all:
-    ; All 256 slots valid; B=0 means 256 iterations via borrow trick below.
-    xor a
-    ld b, a
-
-.search_prep:
-    ld hl, nes_fit_mt_keys
-    ld c, 0
-.search:
-    push bc
-    push hl
-    ld de, nes_fit_mt_quad
-    ld b, 4
-.cmp:
-    ld a, [de]
-    cp [hl]
-    jr nz, .diff
-    inc de
-    inc hl
-    dec b
-    jr nz, .cmp
-    pop hl
-    pop bc
-    ld a, c
-    push af
-    ld a, $01
-    ldh [rSVBK], a
-    pop af
-    ret
-
-.diff:
-    pop hl
-    ld a, l
-    add 4
-    ld l, a
-    jr nc, .key_nc
-    inc h
-.key_nc:
-    pop bc
-    inc c
-    ld a, [nes_fit_mt_full]
-    and a
-    jr nz, .search_full_cont
-    ld a, c
-    cp b
-    jr c, .search
-    jr .miss_alloc
-
-.search_full_cont:
-    ld a, c
-    and a
-    jr nz, .search
-    ; c wrapped 255→0 after 256 compares: miss
-    jr .miss_alloc
-
-.miss_alloc:
-    ld a, [nes_fit_mt_full]
-    and a
-    jr z, .use_next
-    ; Full: round-robin overwrite starting at next (0-255)
-    ld a, [nes_fit_mt_next]
-    ld c, a
-    jr .write_key
-
-.use_next:
-    ld a, [nes_fit_mt_next]
-    ld c, a
-
-.write_key:
-    ld l, c
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    ld de, nes_fit_mt_keys
-    add hl, de
-    ld de, nes_fit_mt_quad
-    ld b, 4
-.store_key:
-    ld a, [de]
-    ld [hli], a
-    inc de
-    dec b
-    jr nz, .store_key
-
-    ld a, [nes_fit_mt_full]
-    and a
-    jr nz, .advance_rr
-    ld a, c
-    inc a
-    ld [nes_fit_mt_next], a
-    jr nz, .alloc_done
-    ld a, $01
-    ld [nes_fit_mt_full], a
-    xor a
-    ld [nes_fit_mt_next], a
-    jr .alloc_done
-
-.advance_rr:
-    ld a, c
-    inc a
-    ld [nes_fit_mt_next], a
-
-.alloc_done:
-    ld a, $01
-    ldh [rSVBK], a
-
-    push bc
-    call nes_video_fit_compose_quad
-    pop bc
-    ld a, c
-    call nes_video_fit_upload_tile_a
-    ld a, c
-    ret
-
-nes_video_fit_compose_quad:
-    ld a, [nes_fit_mt_page]
-    push af
-
-    ld hl, nes_fit_mt_compose
-    ld b, 16
-    xor a
-.clear:
-    ld [hli], a
-    dec b
-    jr nz, .clear
-
-    ld a, [nes_chr_gbc_bank_base]
-    ld b, a
-    ld a, [nes_chr_bank]
-    add b
-    ld [$2000], a
-
-    ld a, [nes_ppuctrl]
-    and $10
-    jr z, .pt0
-    ld d, $50
-    jr .base_ready
-.pt0:
-    ld d, $40
-.base_ready:
-    ; D = CHR page high byte for duration of compose
-
-    xor a
-.quad_loop:
-    cp 4
-    jp nc, .compose_done
-    ld [nes_fit_mt_tmp_l], a
-
-    ld c, a
-    ld hl, nes_fit_mt_quad
-    add l
-    ld l, a
-    jr nc, .q_ok
-    inc h
-.q_ok:
-    ld a, [hl]
-    ld e, a
-    ld l, e
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    ld a, d
-    add h
-    ld h, a
-    ; HL = src tile, D preserved
-
-    ld a, c
-    and $02
-    add a
-    ld b, a
-    ld a, c
-    and $01
-    ld c, a
-
-    xor a
-.row_loop:
-    cp 4
-    jr nc, .next_quad
-    ld [nes_fit_mt_tmp_h], a
-
-    push hl
-    push de
-    add a
-    add l
-    ld l, a
-    jr nc, .src_ok
-    inc h
-.src_ok:
-    ld a, [hli]
-    and $F0
-    ld e, a
-    ld a, [hl]
-    and $F0
-    ld d, a
-
-    ld a, [nes_fit_mt_tmp_h]
-    add b
-    add a
-    ld l, a
-    ld h, HIGH(nes_fit_mt_compose)
-    ld a, LOW(nes_fit_mt_compose)
-    add l
-    ld l, a
-    jr nc, .dst_ok
-    inc h
-.dst_ok:
-
-    ld a, c
-    and a
-    jr nz, .right
-    ld a, [hl]
-    or e
-    ld [hli], a
-    ld a, [hl]
-    or d
-    ld [hl], a
-    jr .row_done
-.right:
-    ld a, e
-    swap a
-    ld e, a
-    ld a, d
-    swap a
-    ld d, a
-    ld a, [hl]
-    or e
-    ld [hli], a
-    ld a, [hl]
-    or d
-    ld [hl], a
-.row_done:
-    pop de
-    pop hl
-    ld a, [nes_fit_mt_tmp_h]
-    inc a
-    jr .row_loop
-
-.next_quad:
-    ld a, [nes_fit_mt_tmp_l]
-    inc a
-    jr .quad_loop
-
-.compose_done:
-    call nes_restore_code_bank
-    pop af
-    ld [nes_fit_mt_page], a
-    ret
-
-nes_video_fit_upload_tile_a:
-    ld l, a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    ld a, $80
-    add h
-    ld d, a
-    ld e, l
-
-    xor a
-    ldh [rVBK], a
-    ld hl, nes_fit_mt_compose
-    ld b, 16
-.copy:
-    call nes_video_wait_vram
-    ld a, [hli]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .copy
-    ret
-
-; Refresh CGB attrs for the 2x2 metatiles covered by NES attr byte at HL.
-; Does not recompose tiles — only palette bits.
-nes_video_fit_sync_attribute_write:
-    ld a, h
-    and $04
-    ld [nes_fit_mt_page], a
-
-    ld a, l
-    sub $C0
-    ld c, a
-    and $07
-    add a
-    ld [nes_fit_mt_quad], a
-    ld a, c
-    srl a
-    srl a
-    srl a
-    and $07
-    add a
-    ld [nes_fit_mt_quad + 1], a
-
-    xor a
-.meta_loop:
-    cp 4
-    ret z
-    ld [nes_fit_mt_quad + 2], a
-
-    and $01
-    ld c, a
-    ld a, [nes_fit_mt_quad]
-    add c
-    ld [nes_fit_mt_mx], a
-
-    ld a, [nes_fit_mt_quad + 2]
-    and $02
-    srl a
-    ld c, a
-    ld a, [nes_fit_mt_quad + 1]
-    add c
-    cp 15
-    jr nc, .next
-    ld [nes_fit_mt_my], a
-
-    ; TL NES address for palette decode
-    ld a, [nes_fit_mt_mx]
-    add a
-    ld e, a
-    ld a, [nes_fit_mt_my]
-    add a
-    ld d, a
-    ld a, d
-    and $07
-    swap a
-    add a
-    and $E0
-    or e
-    ld l, a
-    ld a, d
-    srl a
-    srl a
-    srl a
-    and $03
-    ld c, a
-    ld a, [nes_fit_mt_page]
-    or c
-    or $D0
-    ld h, a
-
-    call nes_video_authoritative_tile_palette
-    and $07
-    ld c, a
-    call nes_video_fit_map_addr_de
-    call nes_video_wait_vram
-    ld a, $01
-    ldh [rVBK], a
-    ld a, c
-    ld [de], a
-    xor a
-    ldh [rVBK], a
-
-.next:
-    ld a, [nes_fit_mt_quad + 2]
-    inc a
-    jr .meta_loop
