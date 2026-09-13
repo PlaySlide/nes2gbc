@@ -21,6 +21,11 @@ the cached value before the first read.
 
 Canonical HRAM state remains authoritative. Every write to nes_x/nes_y still
 happens normally and is mirrored into the chosen host register afterward.
+
+Aligned same-bank PRG mirrors have another exact composition opportunity. Their
+low address byte is guaranteed to be $00, so a cached X/Y reload immediately
+followed by `ld l,a` can become `ld l,b/c` directly. This removes the otherwise
+redundant move through A without affecting host flags.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from pathlib import Path
 
 
 BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+CACHED_INDEX_RE = re.compile(r"ld a, ([bc])\s*;\s*cached nes_([xy])$", re.IGNORECASE)
 
 
 def code(line: str) -> str:
@@ -132,7 +138,29 @@ def estimated_saving(loads: int, stores: int, first: str | None) -> int:
     return -1
 
 
-def optimize(lines: list[str]) -> tuple[int, int, int, int, int]:
+def fold_aligned_prg_cached_indexes(lines: list[str]) -> int:
+    """Feed cached X/Y directly into L for validated 256-byte PRG mirrors."""
+    folded = 0
+    for i in range(len(lines) - 2):
+        m = CACHED_INDEX_RE.fullmatch(lines[i].strip())
+        if not m:
+            continue
+        reg = m.group(1).lower()
+        # The marker is emitted only by mirror_indexed_prg_tables.py after the
+        # table section has been ALIGN[8]-constrained. Require the following
+        # direct table load too so A has no observable use as the index value.
+        if "256-byte-aligned table: low byte is index" not in lines[i + 1]:
+            continue
+        if code(lines[i + 1]) != "ld l, a" or code(lines[i + 2]) != "ld a, [hl]":
+            continue
+        indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+        lines[i] = f"{indent}; cached index moved directly into L\n"
+        lines[i + 1] = f"{indent}ld l, {reg} ; cached X/Y + 256-byte-aligned PRG table\n"
+        folded += 1
+    return folded
+
+
+def optimize(lines: list[str]) -> tuple[int, int, int, int, int, int]:
     bs = blocks(lines)
     cached_x_blocks = 0
     cached_y_blocks = 0
@@ -206,7 +234,8 @@ def optimize(lines: list[str]) -> tuple[int, int, int, int, int]:
         if "nes_y" in assignment:
             cached_y_blocks += 1
 
-    return cached_x_blocks, cached_y_blocks, replaced_loads, load_seeds, store_seeds
+    prg_direct = fold_aligned_prg_cached_indexes(lines)
+    return cached_x_blocks, cached_y_blocks, replaced_loads, load_seeds, store_seeds, prg_direct
 
 
 def main() -> int:
@@ -215,12 +244,13 @@ def main() -> int:
     args = p.parse_args()
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    x_blocks, y_blocks, loads, load_seeds, store_seeds = optimize(lines)
+    x_blocks, y_blocks, loads, load_seeds, store_seeds, prg_direct = optimize(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
         f"xy-cache: cached X in {x_blocks} blocks, Y in {y_blocks} blocks, "
         f"replaced {loads} HRAM index reloads; seeded {load_seeds} on first load / "
-        f"{store_seeds} from prior store"
+        f"{store_seeds} from prior store; fed {prg_direct} cached index(es) directly "
+        f"into aligned PRG tables"
     )
     return 0
 
