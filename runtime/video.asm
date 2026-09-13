@@ -236,10 +236,20 @@ ENDC
     cp 96                      ; >= 48 tile entries (2 bytes each)
     jr c, .fit_bulk_done
 .fit_bulk:
+    ; Coalesce with an in-progress chunk. Resetting recompose_my on every large
+    ; flood (Balloon Fight title/Game A) starved the 15-row pass and made fit
+    ; feel far slower than 1x. Fresh dirty still starts at row 0.
+    ld a, [nes_fit_dirty]
+    and a
+    jr nz, .fit_bulk_keep
     ld a, $01
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    jr .fit_bulk_done
+.fit_bulk_keep:
+    ld a, $01
+    ld [nes_fit_dirty], a
 .fit_bulk_done:
 
     ld de, nes_nametable_queue
@@ -2315,9 +2325,9 @@ nes_video_fit_write_identity_map_9c00:
     ld de, $9C00
 
 nes_video_fit_write_identity_map_de:
-    ; Fill all 32 columns. Slot s (=c&15) is identity tile 1+my*16+s; columns
-    ; 16-31 mirror 0-15 so SCX letterbox/wrap never walks into blank tile 0
-    ; (smb-fit.mvl: map R half stayed empty while playfield SCX grew).
+    ; Cols 0-15: identity tile 1+my*16+c. Cols 16-31 stay tile 0 (blank
+    ; letterbox gutters). SCX=240 then samples blank left, content, blank right.
+    ; Map twins of 0-15 were wrong for letterbox and caused BF edge wrap.
     ld b, 0
 .row:
     ld c, 0
@@ -2326,8 +2336,9 @@ nes_video_fit_write_identity_map_de:
     cp 15
     jr nc, .zero
     ld a, c
-    and $0F                   ; s = c & 15
-    ld h, a                   ; temp in H (HL free; DE is dest)
+    cp 16
+    jr nc, .zero              ; high half = blank gutter
+    ld h, a                   ; s = c (window-local slot)
     ld a, b
     swap a
     and $F0
@@ -2377,27 +2388,30 @@ nes_video_fit_apply_scroll:
     ld b, a
     ld a, [nes_fit_vram_page]
     cp b
-    jr z, .maybe_flush
+    jr z, .page_done
     ld a, b
     ld [nes_fit_vram_page], a
     ld a, $01
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+.page_done:
 
-.maybe_flush:
+    ; Update origin/SCX before flush so an origin step rebuilds the *new*
+    ; window in this same VBlank instead of finishing a stale pass first.
+    call nes_video_fit_update_scroll_window
+
     ; One chunk per host frame max — never HBlank-pace all 240 tiles in one ISR.
     ld a, [nes_fit_dirty]
     and a
-    jr z, .regs
+    jr z, .regs_done
     ld a, $01
     ld [nes_vram_unlocked], a
     call nes_video_fit_flush_dirty
     xor a
     ld [nes_vram_unlocked], a
 
-.regs:
-    call nes_video_fit_update_scroll_window
+.regs_done:
     xor a
     ldh [nes_seam_active], a
     ldh a, [rSTAT]
@@ -2406,17 +2420,26 @@ nes_video_fit_apply_scroll:
     ret
 
 ; Half-scale letterbox scroll with a *guarded* 16-slot sliding window.
-; Map cols 16-31 mirror 0-15 so SCX=240 letterbox never walks into blank tile 0.
+; Cols 16-31 stay blank (letterbox). Sliding is vertical-mirroring + SMB-style
+; raster split only; DK/Balloon Fight keep origin_mx=0 resident compose.
 ;
-; Sliding is vertical-mirroring only (SMB-style 512px horizontal pair). Horizontal
-; / single-screen titles (DK, Balloon Fight) keep origin_mx=0 so publish stays on
-; the resident page — d4bc54c's unguarded slide mixed NT pages into identity slots.
+; Window model (SMB): map slot i holds world column origin+i; play SCX is
+; fine-16 only (letterbox). Do not pan SCX by (origin&15)*8 — that fought
+; slow chunked recompose and left a repeating strip. On every origin change,
+; force dirty + recompose_my=0 so the window restarts coherently.
 nes_video_fit_update_scroll_window:
     ld a, [nes_mirroring]
     cp $01
-    jr z, .slide_vert
+    jr nz, .resident
+    ; Require split so single-screen vertical titles (if any) never slide.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .resident
 
-    ; Non-vertical: resident single-screen behavior (origin locked).
+    jr .slide_vert
+
+.resident:
+    ; Non-slide: resident single-screen behavior (origin locked).
     xor a
     ld [nes_fit_origin_mx], a
     ldh a, [nes_split_active]
@@ -2481,25 +2504,18 @@ nes_video_fit_update_scroll_window:
     jr z, .scx_from_origin
     ld a, c
     ld [nes_fit_origin_mx], a
-    ; Origin moved: request recompose. If a chunk is already running, do not
-    ; reset the row cursor (starvation while SMB scrolls every few frames);
-    ; remaining rows pick up the new origin via publish.
-    ld a, [nes_fit_dirty]
-    and a
-    jr nz, .scx_from_origin
+    ; Origin moved: always restart chunked recompose from row 0. Keeping a
+    ; mid-pass cursor across origins left old-origin rows mixed with new ones
+    ; (permanent repeating strip). SMB origin steps are infrequent enough that
+    ; a VBlank-strict full-window rebuild can catch up.
     ld a, $01
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
 
 .scx_from_origin:
-    ; play_scx = (origin_mx & 15)*8 + fine - 16
-    ld a, [nes_fit_origin_mx]
-    and $0F
-    add a
-    add a
-    add a
-    add e
+    ; play_scx = fine - 16 (letterbox). Slots are window-local (origin+i).
+    ld a, e
     sub 16
     ld [nes_fit_play_scx], a
 
@@ -2553,12 +2569,14 @@ nes_video_fit_recompose_resident_page:
 .have_row:
     ld [nes_fit_mt_my], a
 
-    ; LCD on: at most 2 rows per call (~32 metatiles) so boot cannot stall.
+    ; LCD on: attempt a full 15-row window per call; nes_video_fit_vblank_ok
+    ; still aborts before active scanout. Budget 2 starved SMB after origin
+    ; restarts (repeating strip). LCD off: b=0 ignores the budget.
     ld b, 0
     ldh a, [rLCDC]
     bit 7, a
     jr z, .yloop
-    ld b, 2
+    ld b, 15
 
 .yloop:
     call nes_video_fit_vblank_ok
@@ -2802,7 +2820,7 @@ nes_video_fit_publish_metatile_hl:
 ; Compose + upload using nes_fit_mt_mx/my.
 ; origin_mx==0: mx is resident-page local column; nes_fit_mt_page selects NT.
 ; origin_mx!=0: mx is window offset; world=(origin+mx)&31 picks NT/column;
-;               CHR/map slot = world&15 (unique within any 16-wide window).
+;               CHR/map slot = mx (window-local: slot i shows origin+i).
 nes_video_fit_publish_at_mx_my:
     ld a, [nes_fit_origin_mx]
     and a
@@ -2900,17 +2918,7 @@ nes_video_fit_publish_at_mx_my:
     ld [nes_fit_mt_tmp_h], a
     pop hl
 
-    ; tile id = 1+my*16+slot; slot = mx (resident) or world&15 (sliding)
-    ld a, [nes_fit_origin_mx]
-    and a
-    jr z, .slot_resident
-    ld b, a
-    ld a, [nes_fit_mt_mx]
-    add b
-    and $0F
-    ld c, a
-    jr .slot_ready
-.slot_resident:
+    ; tile id = 1+my*16+slot; slot = mx (resident and window-local sliding)
     ld a, [nes_fit_mt_mx]
     and $0F
     ld c, a
@@ -2927,27 +2935,12 @@ nes_video_fit_publish_at_mx_my:
     jp nes_video_fit_defer_dirty
 
 .map_cells:
-    ; Map cols (slot) and (slot|16) stay twins so SCX=240 letterbox never
-    ; samples blank tile 0 in the high half (identity init mirrors both).
+    ; Publish only map cols 0-15. High cols stay blank letterbox gutters.
     call nes_video_fit_vblank_ok
     jp z, nes_video_fit_defer_dirty
-    ld a, [nes_fit_origin_mx]
-    and a
-    jr z, .map_slot_res
-    ld b, a
-    ld a, [nes_fit_mt_mx]
-    add b
-    and $0F
-    jr .map_slot_go
-.map_slot_res:
     ld a, [nes_fit_mt_mx]
     and $0F
-.map_slot_go:
     call nes_video_fit_map_addr_a
-    call nes_video_fit_write_map_cell_de
-    ld a, e
-    add 16
-    ld e, a
     call nes_video_fit_write_map_cell_de
     or $01
     ret
