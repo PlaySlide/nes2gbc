@@ -208,7 +208,7 @@ nes_fit_mt_tmp_h:      ds 1
 nes_fit_mt_mx:         ds 1  ; half-res X 0..15
 nes_fit_mt_my:         ds 1  ; half-res Y 0..14
 nes_fit_mt_page:       ds 1  ; 0 or 4
-nes_fit_dirty:         ds 1  ; nonzero => resident page needs recompose
+nes_fit_dirty:         ds 1  ; 0=clean 1=full 2=enter-right-col 3=enter-left-col
 nes_fit_recompose_my:  ds 1  ; next metatile row to compose (0..14); chunked flush
 nes_fit_origin_mx:     ds 1  ; world metatile X (0..31) mapped to identity slot 0
 nes_fit_play_scx:      ds 1  ; last half-scale playfield SCX (for STAT split)
