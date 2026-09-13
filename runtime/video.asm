@@ -1627,7 +1627,14 @@ nes_video_sync_oam:
 nes_video_toggle_bg_pattern_bank:
     ld a, [nes_fit_screen]
     and a
-    jp nz, nes_video_fit_recompose_resident_page
+    jr z, .toggle_normal
+    ; Fit: never block the ISR on a full 240-tile recompose. Restart chunked work.
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+    ret
+.toggle_normal:
 
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_BG_BANK_REWRITE
@@ -2261,6 +2268,7 @@ nes_video_fit_init_identity:
     xor a
     ld [nes_fit_vram_page], a
     ld [nes_fit_dirty], a
+    ld [nes_fit_recompose_my], a
 
     xor a
     sub 16
@@ -2334,25 +2342,30 @@ nes_video_fit_apply_scroll:
     ld a, [nes_ppuctrl]
     call nes_video_apply_map_select_a
 
-    ; Apply any coalesced NT dirty before sampling the new scroll regs.
-    ld a, $01
-    ld [nes_vram_unlocked], a
-    call nes_video_fit_flush_dirty
-
     call nes_video_fit_displayed_page
     ld b, a
     ld a, [nes_fit_vram_page]
     cp b
-    jr z, .regs
+    jr z, .maybe_flush
     ld a, b
     ld [nes_fit_vram_page], a
-    push bc
-    call nes_video_fit_recompose_resident_page
-    pop bc
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
 
-.regs:
+.maybe_flush:
+    ; One chunk per host frame max — never HBlank-pace all 240 tiles in one ISR.
+    ld a, [nes_fit_dirty]
+    and a
+    jr z, .regs
+    ld a, $01
+    ld [nes_vram_unlocked], a
+    call nes_video_fit_flush_dirty
     xor a
     ld [nes_vram_unlocked], a
+
+.regs:
     ld a, [nes_ppu_scroll_x]
     srl a
     sub 16
@@ -2384,24 +2397,54 @@ nes_video_fit_displayed_page:
     add a
     ret
 
-; If nes_fit_dirty set, rebuild all identity slots for the resident page.
+; If nes_fit_dirty set, compose as many identity rows as this VBlank allows.
+; Full 240-tile HBlank-paced bursts were taking minutes of wall time at boot.
 nes_video_fit_flush_dirty:
     ld a, [nes_fit_dirty]
     and a
     ret z
-    xor a
-    ld [nes_fit_dirty], a
-    ; fall through
+    ; fall through — dirty cleared only when the chunked pass finishes
 
-; Recompose all 16x15 soft tiles for nes_fit_vram_page from NT WRAM.
+; Recompose identity slots for nes_fit_vram_page from NT WRAM.
+; LCD off: do the whole page. LCD on: one or more rows while LY>=144, then
+; yield with dirty still set so the next host VBlank continues.
 nes_video_fit_recompose_resident_page:
-    xor a
-    ld [nes_fit_dirty], a
     ld a, [nes_fit_vram_page]
     ld [nes_fit_mt_page], a
+    ld a, [nes_fit_recompose_my]
+    cp 15
+    jr c, .have_row
     xor a
+.have_row:
     ld [nes_fit_mt_my], a
+
+    ; LCD on: at most 2 rows per call (~32 metatiles) so boot cannot stall.
+    ld b, 0
+    ldh a, [rLCDC]
+    bit 7, a
+    jr z, .yloop
+    ld b, 2
+
 .yloop:
+    ldh a, [rLCDC]
+    bit 7, a
+    jr z, .do_row
+    ldh a, [rLY]
+    cp 144
+    jr nc, .budget
+.yield:
+    ld a, [nes_fit_mt_my]
+    ld [nes_fit_recompose_my], a
+    ld a, $01
+    ld [nes_fit_dirty], a
+    ret
+.budget:
+    ld a, b
+    and a
+    jr z, .yield
+    dec b
+
+.do_row:
     xor a
     ld [nes_fit_mt_mx], a
 .xloop:
@@ -2411,11 +2454,17 @@ nes_video_fit_recompose_resident_page:
     ld [nes_fit_mt_mx], a
     cp 16
     jr c, .xloop
+
     ld a, [nes_fit_mt_my]
     inc a
     ld [nes_fit_mt_my], a
     cp 15
     jr c, .yloop
+
+    xor a
+    ld [nes_fit_dirty], a
+    ld a, 15
+    ld [nes_fit_recompose_my], a
     ret
 
 nes_video_fit_sync_nametable_write:
@@ -2438,6 +2487,8 @@ nes_video_fit_mark_dirty_if_resident:
     ret nz
     ld a, $01
     ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
     ret
 
 ; Kept for call sites that already have TL in HL (unused by dirty path).

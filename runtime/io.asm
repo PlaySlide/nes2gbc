@@ -209,15 +209,16 @@ nes_fit_mt_mx:         ds 1  ; half-res X 0..15
 nes_fit_mt_my:         ds 1  ; half-res Y 0..14
 nes_fit_mt_page:       ds 1  ; 0 or 4
 nes_fit_dirty:         ds 1  ; nonzero => resident page needs recompose
-; 1+1+1+4+16+1+1+1+1+1+1 = 29 bytes -> $CBA0-$CBBC
+nes_fit_recompose_my:  ds 1  ; next metatile row to compose (0..14); chunked flush
+; 1+1+1+4+16+1+1+1+1+1+1+1 = 30 bytes -> $CBA0-$CBBD
 
-SECTION "NES VRAM unlock", WRAM0[$CBBD]
+SECTION "NES VRAM unlock", WRAM0[$CBBE]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBBE]
+SECTION "Host native stack reserve", WRAM0[$CBBF]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBBE-$CFFF leaves 1090 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $0442
+; $CBBF-$CFFF leaves 1089 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $0441
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
