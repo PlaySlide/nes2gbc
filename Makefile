@@ -49,6 +49,7 @@ generate:
 		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
 		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
+		python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
 		python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
