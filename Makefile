@@ -44,6 +44,7 @@ generate:
 		python3 tools/dead_terminal_zn.py runtime/generated.asm; \
 		python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm; \
 		python3 tools/fast_subroutine_rts_dispatch.py runtime/generated.asm; \
+		python3 tools/defer_subroutine_rts_increment.py runtime/generated.asm; \
 		python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
