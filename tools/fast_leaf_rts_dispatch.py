@@ -7,9 +7,11 @@ stack, the callee, and RTS pops completely untouched. It only replaces the
 final dynamic dispatch of a very simple one-block RTS callee with guarded direct
 jumps to statically known JSR continuations.
 
-The guard compares the *actual* return PC popped from the emulated 6502 stack.
-If it differs for any reason (stack tricks, dynamic entry, stale/static analysis,
-etc.), execution falls back to nes_dispatch_hl exactly as before.
+The emulated 6502 stack contains PC-1 when RTS pops it. For specialized returns,
+compare that raw stacked address against continuation-1 and jump directly. Only
+an unmatched fallback performs the architectural RTS increment before entering
+nes_dispatch_hl. Thus matched fast paths avoid one unconditional INC HL while
+stack state and dynamic fallback semantics remain unchanged.
 
 When a leaf has multiple exact static continuations, emit the continuation with
 the most direct JSR sites first. This changes only guard ordering: the eligible
@@ -118,17 +120,18 @@ def collect_jsr_returns(
 
 def fast_dispatch(leaf: Block, continuations: list[int], label_bank: dict[int, int]) -> str:
     ind = "    "
-    out: list[str] = [f"{ind}; guarded exact RTS return fast path\n"]
+    out: list[str] = [f"{ind}; guarded exact RTS raw-stack return fast path\n"]
 
     for idx, ret_pc in enumerate(continuations):
+        stacked_pc = (ret_pc - 1) & 0xFFFF
         next_label = f"nes_rts_fast_{leaf.addr:04X}_{idx}_next"
         out.extend(
             [
                 f"{ind}ld a, h\n",
-                f"{ind}cp ${(ret_pc >> 8) & 0xFF:02X}\n",
+                f"{ind}cp ${(stacked_pc >> 8) & 0xFF:02X}\n",
                 f"{ind}jr nz, {next_label}\n",
                 f"{ind}ld a, l\n",
-                f"{ind}cp ${ret_pc & 0xFF:02X}\n",
+                f"{ind}cp ${stacked_pc & 0xFF:02X}\n",
                 f"{ind}jr nz, {next_label}\n",
             ]
         )
@@ -146,7 +149,13 @@ def fast_dispatch(leaf: Block, continuations: list[int], label_bank: dict[int, i
             )
         out.append(f"{next_label}:\n")
 
-    out.append(f"{ind}jp nes_dispatch_hl\n")
+    out.extend(
+        [
+            f"{ind}; unmatched RTS: apply the architectural PC+1 before dispatch\n",
+            f"{ind}inc hl\n",
+            f"{ind}jp nes_dispatch_hl\n",
+        ]
+    )
     return "".join(out)
 
 
@@ -162,7 +171,7 @@ def main() -> int:
     labels = set(label_bank)
     returns = collect_jsr_returns(lines, blocks, labels)
 
-    rewrites: list[tuple[int, str, int]] = []  # line, replacement, number of returns
+    rewrites: list[tuple[int, int, str, int]] = []  # inc line, dispatch line, replacement, returns
     for target, weighted_returns in returns.items():
         leaf = blocks.get(target)
         if leaf is None or not leaf.insns:
@@ -176,16 +185,16 @@ def main() -> int:
             continue
 
         rts_comment_i = leaf.insns[-1][0]
+        inc_i: int | None = None
         dispatch_i: int | None = None
-        saw_inc_hl = False
         for j in range(rts_comment_i + 1, leaf.end_i):
             c = code(lines[j])
-            if c == "inc hl":
-                saw_inc_hl = True
-            elif c == "jp nes_dispatch_hl" and saw_inc_hl:
+            if c == "inc hl" and inc_i is None:
+                inc_i = j
+            elif c == "jp nes_dispatch_hl" and inc_i is not None:
                 dispatch_i = j
                 break
-        if dispatch_i is None:
+        if inc_i is None or dispatch_i is None:
             continue
 
         ordered = [
@@ -194,17 +203,20 @@ def main() -> int:
                 weighted_returns.items(), key=lambda item: (-item[1], item[0])
             )
         ]
-        rewrites.append((dispatch_i, fast_dispatch(leaf, ordered, label_bank), len(ordered)))
+        rewrites.append(
+            (inc_i, dispatch_i, fast_dispatch(leaf, ordered, label_bank), len(ordered))
+        )
 
     total_targets = 0
-    for dispatch_i, replacement, nret in sorted(rewrites, reverse=True):
-        lines[dispatch_i] = replacement
+    for inc_i, dispatch_i, replacement, nret in sorted(rewrites, reverse=True):
+        lines[inc_i] = replacement
+        lines[dispatch_i] = "    ; generic RTS dispatch moved into guarded fallback above\n"
         total_targets += nret
 
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
         f"rts-fast: specialized {len(rewrites)} one-block RTS leaves / "
-        f"{total_targets} exact return targets"
+        f"{total_targets} exact return targets; deferred {len(rewrites)} RTS PC increment(s) to fallback"
     )
     return 0
 
