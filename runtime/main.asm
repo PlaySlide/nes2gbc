@@ -95,15 +95,22 @@ nes_gbc_vblank_isr:
     ; Arm the HUD/playfield raster state before any potentially long
     ; completed-frame publication. The long BG path below temporarily allows
     ; only STAT to nest so this armed split can still fire exactly at LYC.
-    ; Fit-screen: do not arm SMB HUD/playfield split — it rewrites SCX/SCY/maps
-    ; against the half-scale fit path.
     ld a, [nes_fit_screen]
     and a
-    jp nz, .early_split_done
+    jr nz, .early_split_fit
+    ldh a, [nes_split_active]
+    and a
+    jp z, .early_split_done
+    jp .early_split_capture
+
+.early_split_fit:
+    ; Fit: arm scroll-only half-scale split. Never touch LCDC map select or
+    ; hstitch — identity maps stay put; only SCX/SCY switch at LYC.
     ldh a, [nes_split_active]
     and a
     jp z, .early_split_done
 
+.early_split_capture:
     ; A completed translated NMI has a coherent new split state. Freeze it now
     ; so the raster state used by this host frame matches the transaction being
     ; published below. If an NMI is still active, retain the previous armed state.
@@ -131,6 +138,10 @@ nes_gbc_vblank_isr:
     ld [nes_view_armed_y], a
 
 .early_split_apply:
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .early_split_apply_fit
+
     call nes_video_apply_split_top_map
     ldh a, [nes_split_armed_top_x]
     ldh [rSCX], a
@@ -138,6 +149,31 @@ nes_gbc_vblank_isr:
     ldh [rSCY], a
 
     ldh a, [nes_split_line]
+    ldh [rLYC], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
+    jr .early_split_done
+
+.early_split_apply_fit:
+    ; Half-scale + letterbox top/HUD scroll. Same physical identity map.
+    ldh a, [nes_split_armed_top_x]
+    srl a
+    sub 16
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_top_y]
+    srl a
+    sub 12
+    ldh [rSCY], a
+
+    ; LYC ~= NES split_line/2 + top letterbox (12).
+    ldh a, [nes_split_line]
+    srl a
+    add 12
+    cp 144
+    jr c, .fit_lyc_ok
+    ld a, 143
+.fit_lyc_ok:
     ldh [rLYC], a
     ldh a, [rSTAT]
     or $40
@@ -336,9 +372,23 @@ nes_gbc_vblank_isr:
     jp .scroll_done
 
 .scroll_fit:
-    ; Always refresh fit scroll while presenting; ignore split_active.
     xor a
     ldh [nes_scroll_dirty], a
+    ; When SMB HUD/playfield split is live, early_split+STAT own SCX/SCY.
+    ; Only continue chunked dirty flush here — do not overwrite half-scale split.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .scroll_fit_single
+    ld a, [nes_fit_dirty]
+    and a
+    jp z, .scroll_done
+    ld a, $01
+    ld [nes_vram_unlocked], a
+    call nes_video_fit_flush_dirty
+    xor a
+    ld [nes_vram_unlocked], a
+    jp .scroll_done
+.scroll_fit_single:
     call nes_video_apply_single_scroll
     jp .scroll_done
 
@@ -540,7 +590,7 @@ nes_gbc_stat_isr:
 
     ld a, [nes_fit_screen]
     and a
-    jr nz, .check_vertical_seam
+    jr nz, .stat_fit_split
 
     ldh a, [nes_split_active]
     and a
@@ -562,6 +612,26 @@ nes_gbc_stat_isr:
     ld b, a
     ld a, [nes_view_armed_y]
     add b
+    ldh [rSCY], a
+    jr .disable_stat
+
+.stat_fit_split:
+    ldh a, [nes_split_active]
+    and a
+    jr z, .check_vertical_seam
+
+    ; Fit: playfield scroll only. No map select — identity maps are shared.
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_STAT_SPLIT
+    ld [nes_diag_event_flags], a
+
+    ldh a, [nes_split_armed_x]
+    srl a
+    sub 16
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_y]
+    srl a
+    sub 12
     ldh [rSCY], a
     jr .disable_stat
 
