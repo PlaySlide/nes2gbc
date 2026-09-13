@@ -2,14 +2,19 @@
 """Fast-path exact RTS return targets without changing 6502 stack semantics.
 
 A previous native CALL/RET experiment was fast but unsafe because it changed the
-observable 6502 stack/control-flow behavior.  This pass leaves JSR, the virtual
-stack, the callee, and RTS pops completely untouched.  It only replaces the
+observable 6502 stack/control-flow behavior. This pass leaves JSR, the virtual
+stack, the callee, and RTS pops completely untouched. It only replaces the
 final dynamic dispatch of a very simple one-block RTS callee with guarded direct
 jumps to statically known JSR continuations.
 
 The guard compares the *actual* return PC popped from the emulated 6502 stack.
 If it differs for any reason (stack tricks, dynamic entry, stale/static analysis,
 etc.), execution falls back to nes_dispatch_hl exactly as before.
+
+When a leaf has multiple exact static continuations, emit the continuation with
+the most direct JSR sites first. This changes only guard ordering: the eligible
+return set, guard count, exact comparisons, stack behavior and dynamic fallback
+remain unchanged.
 """
 
 from __future__ import annotations
@@ -81,9 +86,11 @@ def insn_end(block: Block, index: int) -> int:
     return block.end_i
 
 
-def collect_jsr_returns(lines: list[str], blocks: dict[int, Block], labels: set[int]) -> dict[int, list[int]]:
-    """Map direct static JSR target -> exact continuation PCs."""
-    returns: dict[int, list[int]] = collections.defaultdict(list)
+def collect_jsr_returns(
+    lines: list[str], blocks: dict[int, Block], labels: set[int]
+) -> dict[int, collections.Counter[int]]:
+    """Map direct static JSR target -> weighted exact continuation PCs."""
+    returns: dict[int, collections.Counter[int]] = collections.defaultdict(collections.Counter)
 
     for block in blocks.values():
         for k, (comment_i, pc, mnemonic, _mode) in enumerate(block.insns):
@@ -104,8 +111,7 @@ def collect_jsr_returns(lines: list[str], blocks: dict[int, Block], labels: set[
                 # Non-returning JSR dispatchers intentionally have no normal
                 # continuation block and must not participate in this pass.
                 continue
-            if continuation not in returns[target]:
-                returns[target].append(continuation)
+            returns[target][continuation] += 1
 
     return returns
 
@@ -157,7 +163,7 @@ def main() -> int:
     returns = collect_jsr_returns(lines, blocks, labels)
 
     rewrites: list[tuple[int, str, int]] = []  # line, replacement, number of returns
-    for target, continuations in returns.items():
+    for target, weighted_returns in returns.items():
         leaf = blocks.get(target)
         if leaf is None or not leaf.insns:
             continue
@@ -166,7 +172,7 @@ def main() -> int:
         # line one-block leaf callees, but stack instructions inside remain legal.
         if leaf.insns[-1][2] != "Rts":
             continue
-        if not (1 <= len(continuations) <= args.max_returns):
+        if not (1 <= len(weighted_returns) <= args.max_returns):
             continue
 
         rts_comment_i = leaf.insns[-1][0]
@@ -182,7 +188,12 @@ def main() -> int:
         if dispatch_i is None:
             continue
 
-        ordered = sorted(continuations)
+        ordered = [
+            ret
+            for ret, _weight in sorted(
+                weighted_returns.items(), key=lambda item: (-item[1], item[0])
+            )
+        ]
         rewrites.append((dispatch_i, fast_dispatch(leaf, ordered, label_bank), len(ordered)))
 
     total_targets = 0
