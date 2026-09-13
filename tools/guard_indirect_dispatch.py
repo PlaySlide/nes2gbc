@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Guard small statically-resolved 6502 indirect JMP target sets.
+"""Guard statically-resolved 6502 indirect JMP target sets.
 
 The CFG analyzer already recognizes several common NES jump-table idioms, but
 translated `JMP (ptr)` still falls through the full dynamic PC dispatcher at
 runtime. This post-pass recovers the same simple table shapes directly from the
-ROM and specializes only small target sets.
+ROM and guards a small set of likely targets.
 
 Semantics remain guarded by the actual target produced by `nes_jmp_indirect_hl`:
 
@@ -12,9 +12,11 @@ Semantics remain guarded by the actual target produced by `nes_jmp_indirect_hl`:
 * on an exact hit, jump directly (or use the existing known-bank helper);
 * on every miss, fall back to `nes_dispatch_hl` unchanged.
 
-Only target PCs that have an emitted `nes_XXXX` label are eligible. Sites with
-more than `--max-targets` distinct resolved targets are left untouched rather
-than guessing which table entries are hot.
+Only target PCs that have an emitted `nes_XXXX` label are eligible. Wide target
+sets are no longer discarded wholesale: choose up to `--max-targets` candidates
+using duplicate table-entry frequency first, then static incoming generated-code
+references as a tie-breaker. This changes only which exact targets get guards and
+their order; every unselected real target still reaches the original dispatcher.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ IMM_HL_RE = re.compile(r"^ld hl, \$([0-9A-Fa-f]{4})$")
 INSN_RE = re.compile(
     r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
 )
+TARGET_RE = re.compile(r"\bnes_([0-9A-Fa-f]{4})\b")
 MAX_WORD_TABLE_ENTRIES = 128
 
 
@@ -114,8 +117,10 @@ def add_table_targets(
     rom: NesRom,
     base: int,
     labels: set[int],
-    out: list[int],
+    counts: collections.Counter[int],
+    first_seen: dict[int, int],
 ) -> None:
+    """Accumulate exact generated targets while retaining table frequency/order."""
     found_any = False
     for i in range(MAX_WORD_TABLE_ENTRIES):
         target = rom.word((base + i * 2) & 0xFFFF)
@@ -126,8 +131,9 @@ def add_table_targets(
                 break
             continue
         found_any = True
-        if target not in out:
-            out.append(target)
+        counts[target] += 1
+        if target not in first_seen:
+            first_seen[target] = len(first_seen)
 
 
 def resolve_indirect_targets(
@@ -135,9 +141,9 @@ def resolve_indirect_targets(
     jmp_pc: int,
     pointer: int,
     labels: set[int],
-) -> list[int]:
+) -> tuple[collections.Counter[int], dict[int, int]]:
     if pointer > 0x00FE:
-        return []
+        return collections.Counter(), {}
 
     tables: list[int] = []
 
@@ -188,10 +194,48 @@ def resolve_indirect_targets(
             if high_base == ((base + 1) & 0xFFFF) and base not in tables:
                 tables.append(base)
 
-    out: list[int] = []
+    counts: collections.Counter[int] = collections.Counter()
+    first_seen: dict[int, int] = {}
     for base in tables:
-        add_table_targets(rom, base, labels, out)
-    return out
+        add_table_targets(rom, base, labels, counts, first_seen)
+    return counts, first_seen
+
+
+def static_incoming_scores(lines: list[str], labels: set[int]) -> collections.Counter[int]:
+    """Count generated-code static references as a secondary hotness signal."""
+    scores: collections.Counter[int] = collections.Counter()
+    for line in lines:
+        c = code(line)
+        if not (
+            c.startswith("jr ")
+            or c.startswith("jp ")
+            or c.startswith("ld hl, nes_")
+        ):
+            continue
+        for m in TARGET_RE.finditer(c):
+            target = int(m.group(1), 16)
+            if target in labels:
+                scores[target] += 1
+    return scores
+
+
+def rank_targets(
+    counts: collections.Counter[int],
+    first_seen: dict[int, int],
+    incoming: collections.Counter[int],
+    limit: int,
+) -> list[int]:
+    """Prefer repeated table entries, then statically popular generated targets."""
+    ranked = sorted(
+        counts,
+        key=lambda target: (
+            -counts[target],
+            -incoming[target],
+            first_seen.get(target, 1 << 30),
+            target,
+        ),
+    )
+    return ranked[:limit]
 
 
 def find_sites(
@@ -231,6 +275,7 @@ def fast_dispatch(
     jmp_pc: int,
     source_bank: int,
     targets: list[int],
+    target_weights: dict[int, int],
     label_bank: dict[int, int],
     indent: str,
 ) -> str:
@@ -238,15 +283,18 @@ def fast_dispatch(
     for target in targets:
         grouped[(target >> 8) & 0xFF].append(target)
 
-    # Table order is our only useful static ordering signal here. Preserve the
-    # first occurrence of each high-byte group and each target within it.
-    first_index = {target: n for n, target in enumerate(targets)}
+    rank_index = {target: n for n, target in enumerate(targets)}
     groups = sorted(
-        grouped.items(), key=lambda item: min(first_index[t] for t in item[1])
+        grouped.items(),
+        key=lambda item: (
+            -sum(target_weights[t] for t in item[1]),
+            min(rank_index[t] for t in item[1]),
+            item[0],
+        ),
     )
 
     out = [
-        f"{indent}; guarded resolved JMP(ind) fast path: {len(targets)} target(s)\n"
+        f"{indent}; guarded resolved JMP(ind) fast path: {len(targets)} selected target(s)\n"
     ]
     for hi_n, (hi, vals) in enumerate(groups):
         next_hi = f"nes_indirect_fast_{jmp_pc:04X}_{site_id}_hi_{hi_n}_next"
@@ -257,7 +305,7 @@ def fast_dispatch(
                 f"{indent}jr nz, {next_hi}\n",
             ]
         )
-        vals.sort(key=lambda t: first_index[t])
+        vals.sort(key=lambda t: rank_index[t])
         for lo_n, target in enumerate(vals):
             next_lo = (
                 f"nes_indirect_fast_{jmp_pc:04X}_{site_id}_{hi_n}_{lo_n}_next"
@@ -297,21 +345,32 @@ def main() -> int:
     label_bank, line_bank = index_labels(lines)
     labels = set(label_bank)
     rom = NesRom(args.rom)
+    incoming = static_incoming_scores(lines, labels)
 
     sites = find_sites(lines, line_bank)
     rewrites: list[tuple[int, str]] = []
     resolved_sites = 0
     wide_sites = 0
-    total_targets = 0
+    total_selected_targets = 0
+    total_resolved_targets = 0
 
     for site_id, (dispatch_i, jmp_pc, pointer, source_bank) in enumerate(sites):
-        targets = resolve_indirect_targets(rom, jmp_pc, pointer, labels)
-        if not targets:
+        counts, first_seen = resolve_indirect_targets(rom, jmp_pc, pointer, labels)
+        if not counts:
             continue
         resolved_sites += 1
-        if len(targets) > args.max_targets:
+        total_resolved_targets += len(counts)
+        if len(counts) > args.max_targets:
             wide_sites += 1
+
+        targets = rank_targets(counts, first_seen, incoming, args.max_targets)
+        if not targets:
             continue
+        # Duplicate table-entry count is the primary signal. Static incoming refs
+        # break ties while still keeping all behavior behind exact PC guards.
+        target_weights = {
+            target: counts[target] * 1024 + incoming[target] for target in targets
+        }
         indent = lines[dispatch_i][
             : len(lines[dispatch_i]) - len(lines[dispatch_i].lstrip())
         ]
@@ -323,20 +382,22 @@ def main() -> int:
                     jmp_pc,
                     source_bank,
                     targets,
+                    target_weights,
                     label_bank,
                     indent,
                 ),
             )
         )
-        total_targets += len(targets)
+        total_selected_targets += len(targets)
 
     for dispatch_i, replacement in sorted(rewrites, reverse=True):
         lines[dispatch_i] = replacement
 
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
-        f"indirect-fast: specialized {len(rewrites)}/{resolved_sites} resolved JMP(ind) site(s) / "
-        f"{total_targets} exact target(s); skipped {wide_sites} wide set(s) > {args.max_targets}"
+        f"indirect-fast: specialized {len(rewrites)}/{resolved_sites} resolved JMP(ind) site(s); "
+        f"guarding {total_selected_targets}/{total_resolved_targets} exact target(s), "
+        f"trimmed {wide_sites} wide set(s) to top {args.max_targets}"
     )
     return 0
 
