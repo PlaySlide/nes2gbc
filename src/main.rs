@@ -134,6 +134,49 @@ fn emit_fit_screen_init(asm: &mut String, fit_screen: bool) {
     asm.push_str("    ret\n");
 }
 
+/// Emit INCBINs for the fit-screen metatile atlas + sorted lookup.
+/// Lookup records: 6 bytes = t0,t1,t2,t3,idx_lo,idx_hi (sorted by key).
+/// Atlas tile 0 is blank; runtime BANK() picks the ROMX bank.
+fn emit_fit_atlas_sections(
+    asm: &mut String,
+    fit_screen: bool,
+    atlas_file: &str,
+    lookup_file: &str,
+    lookup_count: usize,
+    atlas_bank: u16,
+    lookup_bank: u16,
+) {
+    asm.push_str("\n; Fit-screen metatile atlas / ROM lookup (build-time compose)\n");
+    asm.push_str("; Lookup record: t0,t1,t2,t3, idx_lo, idx_hi (LE), sorted ascending by key.\n");
+    asm.push_str("SECTION \"Generated fit-screen atlas count\", ROM0\n");
+    asm.push_str(&format!("nes_fit_lookup_count: dw ${lookup_count:04X}\n"));
+    asm.push_str(&format!("nes_fit_atlas_bank: db ${atlas_bank:02X}\n"));
+    asm.push_str(&format!("nes_fit_lookup_bank: db ${lookup_bank:02X}\n"));
+
+    if fit_screen {
+        asm.push_str(&format!(
+            "SECTION \"Fit-screen metatile atlas\", ROMX[$4000], BANK[{atlas_bank}]\n"
+        ));
+        asm.push_str("nes_fit_atlas:\n");
+        asm.push_str(&format!("    INCBIN \"{atlas_file}\"\n"));
+        asm.push_str(&format!(
+            "SECTION \"Fit-screen metatile lookup\", ROMX[$4000], BANK[{lookup_bank}]\n"
+        ));
+        asm.push_str("nes_fit_lookup:\n");
+        if lookup_count > 0 {
+        asm.push_str(&format!("    INCBIN \"{lookup_file}\"\n"));
+        } else {
+            asm.push_str("    ; empty lookup — all runtime keys miss to blank tile 0\n");
+        }
+    } else {
+        // Stub symbols so video.asm can reference them unconditionally.
+        asm.push_str("SECTION \"Fit-screen atlas stub\", ROM0\n");
+        asm.push_str("nes_fit_atlas:\n");
+        asm.push_str("    ds 16, 0\n");
+        asm.push_str("nes_fit_lookup:\n");
+    }
+}
+
 fn main() -> ExitCode {
     let mut args = env::args_os();
     let program = args.next().unwrap_or_default();
@@ -289,6 +332,59 @@ fn main() -> ExitCode {
         emit_follow_hint_init(&mut asm, follow_slot);
         emit_fit_screen_init(&mut asm, fit_screen);
 
+        let atlas_name = format!("{stem}.fit.atlas.bin");
+        let lookup_name = format!("{stem}.fit.lookup.bin");
+        let atlas_path = parent.join(&atlas_name);
+        let lookup_path = parent.join(&lookup_name);
+
+        // Fixed banks below dispatch tables (32) / code (40), above typical CHR.
+        let atlas_bank = 30u16;
+        let lookup_bank = 31u16;
+
+        let mut fit_lookup_count = 0usize;
+        let mut fit_atlas_tiles = 0usize;
+        if fit_screen {
+            let fit = assets::build_fit_atlas(
+                cart.chr_rom,
+                cart.prg_rom,
+                assets::FIT_ATLAS_MAX_TILES,
+            );
+            fit_lookup_count = fit.lookup.len() / assets::FIT_LOOKUP_RECORD_SIZE;
+            fit_atlas_tiles = fit.tile_count;
+            println!(
+                "Fit-screen atlas: {} tiles ({} discovered keys{}, {} lookup entries) [CHR bank 0 only]",
+                fit.tile_count,
+                fit.discovered,
+                if fit.truncated { ", truncated to VRAM cap" } else { "" },
+                fit_lookup_count,
+            );
+            if let Err(err) = fs::write(&atlas_path, &fit.atlas) {
+                eprintln!("error writing {}: {err}", atlas_path.display());
+                return ExitCode::FAILURE;
+            }
+            if let Err(err) = fs::write(&lookup_path, &fit.lookup) {
+                eprintln!("error writing {}: {err}", lookup_path.display());
+                return ExitCode::FAILURE;
+            }
+            // Keep empty lookup INCBIN-valid.
+            if fit.lookup.is_empty() {
+                let _ = fs::write(&lookup_path, [0u8; 0]);
+            }
+        } else {
+            let _ = fs::write(&atlas_path, [0u8; 16]);
+            let _ = fs::write(&lookup_path, [0u8; 0]);
+        }
+
+        emit_fit_atlas_sections(
+            &mut asm,
+            fit_screen,
+            &atlas_name,
+            &lookup_name,
+            fit_lookup_count,
+            atlas_bank,
+            lookup_bank,
+        );
+
         if let Err(err) = fs::write(&out_path, asm) {
             eprintln!("error writing {}: {err}", out_path.display());
             return ExitCode::FAILURE;
@@ -302,7 +398,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         let converted_chr = if fit_screen {
-            println!("Fit-screen: half-scale CHR (4x4 content in 8x8 GBC tiles)");
+            println!("Fit-screen: half-scale CHR (4x4 content in 8x8 GBC tiles) + build-time metatile atlas");
             assets::convert_chr_to_gbc_fit_half(cart.chr_rom)
         } else {
             assets::convert_chr_to_gbc(cart.chr_rom)
@@ -316,6 +412,10 @@ fn main() -> ExitCode {
         println!("Embedded PRG data: {}", prg_path.display());
         println!("Embedded CHR data: {}", chr_path.display());
         println!("Converted GBC tile data: {}", chr_gbc_path.display());
+        if fit_screen {
+            println!("Fit atlas: {} ({} tiles)", atlas_path.display(), fit_atlas_tiles);
+            println!("Fit lookup: {} ({} entries)", lookup_path.display(), fit_lookup_count);
+        }
     }
 
     ExitCode::SUCCESS
