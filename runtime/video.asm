@@ -195,38 +195,11 @@ IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_ntdiag_display_map], a
 ENDC
 
-    ; Fixed-screen games have no raster deadline to preserve. Their staged
-    ; NMI updates are often a short vertical column; publishing that column
-    ; through HBlank can visibly expose one tile at a time for 60+ scanlines.
-    ; For frames with no split, no synthetic vertical seam, and no SMB stitch,
-    ; make the transaction truly atomic by disabling LCD during this VBlank.
-    ;
-    ; Raster/seam/stitch users must keep LCD timing alive because resetting LY
-    ; would destroy their presentation timing.
-    xor a
-    ld [nes_saved_lcdc], a
-
-    ldh a, [nes_split_active]
-    and a
-    jr nz, .flush_keep_lcd
-    ldh a, [nes_seam_active]
-    and a
-    jr nz, .flush_keep_lcd
-    ld a, [nes_hstitch_valid]
-    and a
-    jr nz, .flush_keep_lcd
-    ld a, [nes_hstitch_seen]
-    and a
-    jr nz, .flush_keep_lcd
-
-    ldh a, [rLCDC]
-    ld [nes_saved_lcdc], a
-    bit 7, a
-    jr z, .flush_keep_lcd
-    and $7F
-    ldh [rLCDC], a
-
-.flush_keep_lcd:
+    ; Keep the physical LCD running while publishing the staged transaction.
+    ; Start with the VBlank fast path; if publication runs past VBlank,
+    ; nes_video_wait_vram falls back to waiting around mode 3 safely.
+    ; Never disable LCD here: real GBC hardware visibly flashes white when
+    ; LCDC.7 is cleared, even when the transition begins during VBlank.
     ; Prefer unlocked VRAM writes while this host VBlank still owns the bus.
     ld a, $01
     ld [nes_vram_unlocked], a
@@ -375,7 +348,7 @@ IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_ntdiag_commit_serial], a
 ENDC
 
-    ; Reset transaction before re-enabling scanout.
+    ; Reset the completed transaction. Scanout stayed enabled throughout.
     xor a
     ld [nes_nametable_queue_ptr_lo], a
     ld [nes_nametable_queue_overflow], a
@@ -384,13 +357,6 @@ ENDC
 
     xor a
     ldh [rVBK], a
-
-    ; Restore LCD only when this flush took the fixed-screen atomic path.
-    ; A saved value with bit 7 clear means no active LCD was disabled here.
-    ld a, [nes_saved_lcdc]
-    bit 7, a
-    ret z
-    ldh [rLCDC], a
     ret
 
 ; Rebuild both physical GBC background maps from authoritative NES
