@@ -208,15 +208,14 @@ nes_fit_mt_mx:         ds 1
 nes_fit_mt_my:         ds 1
 nes_fit_mt_page:       ds 1  ; 0 or 4 (physical NT page bit from address high)
 nes_fit_mt_full:       ds 1  ; non-zero when all 256 cache slots are valid
-nes_fit_sprite_pt:     ds 1  ; last uploaded sprite PT select (0 or $08)
 
-SECTION "NES VRAM unlock", WRAM0[$CBBD]
+SECTION "NES VRAM unlock", WRAM0[$CBBC]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBBE]
+SECTION "Host native stack reserve", WRAM0[$CBBD]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBBE-$CFFF leaves 1090 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $0442
+; $CBBD-$CFFF leaves 1091 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $0443
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
