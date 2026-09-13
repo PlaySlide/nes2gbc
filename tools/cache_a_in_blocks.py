@@ -2,22 +2,29 @@
 """Cache canonical 6502 A in a spare LR35902 B/C register within a block.
 
 This pass deliberately runs after the already-validated X/Y and hot-ZP caches,
-so it never steals a host register from them.  It only uses B/C when that
+so it never steals a host register from them. It only uses B/C when that
 register is otherwise completely unused in the translated block, and skips
 blocks containing ordinary helper calls because helpers do not promise to
 preserve BC.
 
-Canonical nes_a in HRAM remains authoritative.  Every store to nes_a is kept
-and mirrored into the host register; loads may then use the mirror.  The GBC
-interrupt handlers preserve BC.  The optional profile-trace helper is allowed
+Canonical nes_a in HRAM remains authoritative. Every store to nes_a is kept
+and mirrored into the host register; later loads may use the mirror. The GBC
+interrupt handlers preserve BC. The optional profile-trace helper is allowed
 because it saves/restores BC explicitly.
 
+Cache initialization is lazy:
+* if the first nes_a access is a load, keep that canonical HRAM load and copy A
+  into the cache register; later reloads become `ld a,b/c`;
+* if the first nes_a access is a store, that canonical store also initializes
+  the cache, so no seed load is needed.
+
 LR35902 M-cycle estimate:
-    canonical load:  ldh a,[nes_a] = 3
-    cached load:     ld a,b/c      = 1
-    one-time seed:   ldh + ld      = 4
-    store refresh:   extra ld      = 1
-A cache is installed only when 2*loads - 4 - stores is positive.
+    canonical load:        ldh a,[nes_a] = 3
+    cached load:           ld a,b/c      = 1
+    first-load seed copy:  ld r,a        = 1
+    store refresh:         extra ld r,a  = 1
+If the first access is a load, estimated saving is 2*loads - 3 - stores.
+If the first access is a store, estimated saving is 2*loads - stores.
 """
 
 from __future__ import annotations
@@ -88,29 +95,45 @@ def has_unsafe_call(body: list[str]) -> bool:
     return False
 
 
-def a_counts(body: list[str]) -> tuple[int, int, bool]:
+def a_stats(body: list[str]) -> tuple[int, int, bool, str | None]:
     loads = 0
     stores = 0
-    bad_store = False
+    bad_access = False
+    first: str | None = None
+
     for line in body:
         c = code(line)
         if c in {"ldh a, [nes_a]", "ld a, [nes_a]"}:
+            if first is None:
+                first = "load"
             loads += 1
         elif c in {"ldh [nes_a], a", "ld [nes_a], a"}:
+            if first is None:
+                first = "store"
             stores += 1
         elif "[nes_a]" in c and c.startswith(("ldh ", "ld ")):
-            # An unfamiliar write/read shape means our simple mirror proof does
+            # An unfamiliar read/write shape means our simple mirror proof does
             # not cover this block. Leave it alone rather than guessing.
-            bad_store = True
-    return loads, stores, bad_store
+            bad_access = True
+
+    return loads, stores, bad_access, first
 
 
-def optimize(lines: list[str]) -> tuple[int, int, int]:
+def estimated_saving(loads: int, stores: int, first: str | None) -> int:
+    if first == "load":
+        return 2 * loads - 3 - stores
+    if first == "store":
+        return 2 * loads - stores
+    return -1
+
+
+def optimize(lines: list[str]) -> tuple[int, int, int, int, int]:
     cached_blocks = 0
     replaced_loads = 0
     mirrored_stores = 0
+    load_seeds = 0
+    store_seeds = 0
 
-    # Bottom-up insertion keeps recorded block indexes valid.
     for block in reversed(blocks(lines)):
         body = lines[block.start + 1 : block.end]
         if has_unsafe_call(body):
@@ -120,38 +143,42 @@ def optimize(lines: list[str]) -> tuple[int, int, int]:
         if not free_regs:
             continue
 
-        loads, stores, bad_store = a_counts(body)
-        if bad_store or loads == 0:
+        loads, stores, bad_access, first = a_stats(body)
+        if bad_access or loads == 0 or first is None:
             continue
-        if 2 * loads - 4 - stores <= 0:
+        if estimated_saving(loads, stores, first) <= 0:
             continue
 
         reg = free_regs[0]
-        seed = [
-            "    ldh a, [nes_a]\n",
-            f"    ld {reg}, a ; block-local 6502 A cache\n",
-        ]
-        lines[block.start + 1 : block.start + 1] = seed
-        delta = len(seed)
-        start = block.start + 1 + delta
-        end = block.end + delta
+        initialized = False
 
-        i = start
-        while i < end:
+        i = block.start + 1
+        while i < block.end:
             c = code(lines[i])
             if c in {"ldh a, [nes_a]", "ld a, [nes_a]"}:
                 ind = indent_of(lines[i])
-                lines[i] = f"{ind}ld a, {reg} ; cached 6502 A\n"
-                replaced_loads += 1
+                if initialized:
+                    lines[i] = f"{ind}ld a, {reg} ; cached 6502 A\n"
+                    replaced_loads += 1
+                else:
+                    # Preserve the first canonical load and seed the host cache
+                    # from the exact architectural A value now in A.
+                    lines[i] = lines[i] + f"{ind}ld {reg}, a ; seed 6502 A cache\n"
+                    initialized = True
+                    load_seeds += 1
             elif c in {"ldh [nes_a], a", "ld [nes_a], a"}:
                 ind = indent_of(lines[i])
+                was_initialized = initialized
                 lines[i] = lines[i] + f"{ind}ld {reg}, a ; refresh 6502 A cache\n"
                 mirrored_stores += 1
+                initialized = True
+                if not was_initialized:
+                    store_seeds += 1
             i += 1
 
         cached_blocks += 1
 
-    return cached_blocks, replaced_loads, mirrored_stores
+    return cached_blocks, replaced_loads, mirrored_stores, load_seeds, store_seeds
 
 
 def main() -> int:
@@ -160,11 +187,12 @@ def main() -> int:
     args = p.parse_args()
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    blocks_n, loads_n, stores_n = optimize(lines)
+    blocks_n, loads_n, stores_n, load_seeds, store_seeds = optimize(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
         f"a-cache: cached A in {blocks_n} blocks, replaced {loads_n} HRAM loads, "
-        f"mirrored {stores_n} stores"
+        f"mirrored {stores_n} stores; seeded {load_seeds} on first load / "
+        f"{store_seeds} from prior store"
     )
     return 0
 
