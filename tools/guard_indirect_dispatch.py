@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Guard statically-resolved 6502 indirect JMP target sets.
 
-The CFG analyzer already recognizes several common NES jump-table idioms, but
-translated `JMP (ptr)` still falls through the full dynamic PC dispatcher at
-runtime. This post-pass recovers the same simple table shapes directly from the
-ROM and guards a small set of likely targets.
+The CFG analyzer recognizes several common NES jump-table idioms, but translated
+`JMP (ptr)` still falls through the full dynamic PC dispatcher at runtime. This
+post-pass recovers the same table shapes directly from the ROM and guards a
+small set of likely targets.
 
 Semantics remain guarded by the actual target produced by `nes_jmp_indirect_hl`:
 
@@ -13,10 +13,14 @@ Semantics remain guarded by the actual target produced by `nes_jmp_indirect_hl`:
 * on every miss, fall back to `nes_dispatch_hl` unchanged.
 
 Only target PCs that have an emitted `nes_XXXX` label are eligible. Wide target
-sets are no longer discarded wholesale: choose up to `--max-targets` candidates
-using duplicate table-entry frequency first, then static incoming generated-code
-references as a tie-breaker. This changes only which exact targets get guards and
-their order; every unselected real target still reaches the original dispatcher.
+sets choose up to `--max-targets` candidates using duplicate table-entry
+frequency first, then static incoming generated-code references as a tie-breaker.
+
+Recognized table shapes mirror the CFG analyzer, including the non-returning
+JSR-dispatcher idiom used by SMB's JumpEngine: callers JSR a dispatcher and
+place an inline word table immediately after the JSR; the dispatcher pops that
+return address, reads a target pointer from the inline table, then JMPs through
+it. Every unselected or unexpected target still reaches the original dispatcher.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import argparse
 import collections
 import re
 from pathlib import Path
+
 
 SECTION_BANK_RE = re.compile(r"^SECTION .*BANK\[(\d+)\]")
 BLOCK_LABEL_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
@@ -136,6 +141,77 @@ def add_table_targets(
             first_seen[target] = len(first_seen)
 
 
+def inline_jsr_dispatcher(rom: NesRom, entry: int) -> tuple[int, int] | None:
+    """Mirror cfg.rs recognition of a non-returning inline-table JSR dispatcher."""
+    start = rom.off(entry)
+    if start is None:
+        return None
+    end = min(start + 48, len(rom.prg))
+    if end <= start + 12:
+        return None
+
+    pop_i: int | None = None
+    base: int | None = None
+    i = start
+    while i + 5 < end:
+        if (
+            rom.prg[i] == 0x68
+            and rom.prg[i + 1] == 0x85
+            and rom.prg[i + 3] == 0x68
+            and rom.prg[i + 4] == 0x85
+            and rom.prg[i + 5] == ((rom.prg[i + 2] + 1) & 0xFF)
+        ):
+            pop_i = i
+            base = rom.prg[i + 2]
+            break
+        i += 1
+    if pop_i is None or base is None:
+        return None
+
+    low_i: int | None = None
+    pointer: int | None = None
+    j = pop_i + 6
+    while j + 3 < end:
+        if (
+            rom.prg[j] == 0xB1
+            and rom.prg[j + 1] == base
+            and rom.prg[j + 2] == 0x85
+        ):
+            low_i = j
+            pointer = rom.prg[j + 3]
+            break
+        j += 1
+    if low_i is None or pointer is None:
+        return None
+
+    high_i: int | None = None
+    k = low_i + 4
+    while k + 3 < end:
+        if (
+            rom.prg[k] == 0xB1
+            and rom.prg[k + 1] == base
+            and rom.prg[k + 2] == 0x85
+            and rom.prg[k + 3] == ((pointer + 1) & 0xFF)
+        ):
+            high_i = k
+            break
+        k += 1
+    if high_i is None:
+        return None
+
+    m = high_i + 4
+    while m + 2 < end:
+        if (
+            rom.prg[m] == 0x6C
+            and rom.prg[m + 1] == pointer
+            and rom.prg[m + 2] == 0x00
+        ):
+            delta = m - start
+            return ((entry + delta) & 0xFFFF, pointer)
+        m += 1
+    return None
+
+
 def resolve_indirect_targets(
     rom: NesRom,
     jmp_pc: int,
@@ -194,6 +270,21 @@ def resolve_indirect_targets(
             if high_base == ((base + 1) & 0xFFFF) and base not in tables:
                 tables.append(base)
 
+    # Form 3: non-returning JSR dispatcher with an inline word table immediately
+    # after each JSR. This mirrors cfg.rs and covers SMB's JumpEngine family.
+    call_off = 0
+    while call_off + 3 <= len(prg):
+        if prg[call_off] == 0x20:
+            entry = prg[call_off + 1] | (prg[call_off + 2] << 8)
+            found = inline_jsr_dispatcher(rom, entry)
+            if found is not None:
+                dispatch_jmp, dispatch_ptr = found
+                if dispatch_jmp == jmp_pc and dispatch_ptr == pointer:
+                    base = (0x8000 + call_off + 3) & 0xFFFF
+                    if base not in tables:
+                        tables.append(base)
+        call_off += 1
+
     counts: collections.Counter[int] = collections.Counter()
     first_seen: dict[int, int] = {}
     for base in tables:
@@ -246,8 +337,8 @@ def find_sites(
     for i, line in enumerate(lines):
         if code(line) != "call nes_jmp_indirect_hl":
             continue
-        prev_i = prev_code(lines, i - 1, max(0, i - 6))
-        next_i = next_code(lines, i + 1, min(len(lines), i + 6))
+        prev_i = prev_code(lines, i - 1, max(0, i - 8))
+        next_i = next_code(lines, i + 1, min(len(lines), i + 8))
         if (
             prev_i is None
             or next_i is None
@@ -259,11 +350,20 @@ def find_sites(
             continue
         pointer = int(m.group(1), 16)
 
+        # Peepholes may expand earlier instructions, so the source instruction
+        # comment is not guaranteed to remain within five physical lines.
         jmp_pc: int | None = None
-        for j in range(max(0, prev_i - 5), i + 1):
+        floor = max(0, prev_i - 64)
+        for j in range(prev_i, floor - 1, -1):
+            c = code(lines[j])
+            if c.startswith("SECTION ") or BLOCK_LABEL_RE.fullmatch(c):
+                break
             im = INSN_RE.search(lines[j])
-            if im and im.group(3) == "Jmp" and im.group(4) == "Indirect":
-                jmp_pc = int(im.group(1), 16)
+            if im:
+                if im.group(3) == "Jmp" and im.group(4) == "Indirect":
+                    jmp_pc = int(im.group(1), 16)
+                break
+
         bank = line_bank[i]
         if jmp_pc is not None and bank is not None:
             sites.append((next_i, jmp_pc, pointer, bank))
