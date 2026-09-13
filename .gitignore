@@ -8,6 +8,3 @@
 *.sym
 *.map
 .DS_Store
-runtime/generated*.bin
-runtime/build/
-Cargo.lock

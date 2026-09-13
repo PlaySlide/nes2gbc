@@ -35,5 +35,4 @@ test:
 clean:
 	cargo clean
 	$(MAKE) -C runtime clean
-	rm -f runtime/generated.prg.bin runtime/generated.chr.bin runtime/generated.chr.gbc.bin \
-		runtime/generated.fit.atlas.bin runtime/generated.fit.lookup.bin
+	rm -f runtime/generated.prg.bin runtime/generated.chr.bin runtime/generated.chr.gbc.bin
