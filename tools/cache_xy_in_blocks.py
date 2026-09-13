@@ -22,10 +22,16 @@ the cached value before the first read.
 Canonical HRAM state remains authoritative. Every write to nes_x/nes_y still
 happens normally and is mirrored into the chosen host register afterward.
 
-Aligned same-bank PRG mirrors have another exact composition opportunity. Their
-low address byte is guaranteed to be $00, so a cached X/Y reload immediately
-followed by `ld l,a` can become `ld l,b/c` directly. This removes the otherwise
-redundant move through A without affecting host flags.
+Validated indexed-address passes create three exact composition opportunities
+where the cached index can be copied straight into L instead of moving through
+A first:
+
+* 256-byte-aligned same-bank PRG mirrors;
+* page-aligned absolute RAM bases ($xx00 + X/Y);
+* zero-page base $00 + X/Y.
+
+All three are address formation only. Replacing `ld a,b/c ; ld l,a` with
+`ld l,b/c` changes neither LR35902 flags nor any NES-visible state.
 """
 
 from __future__ import annotations
@@ -38,10 +44,26 @@ from pathlib import Path
 
 BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
 CACHED_INDEX_RE = re.compile(r"ld a, ([bc])\s*;\s*cached nes_([xy])$", re.IGNORECASE)
+PAGE_BASE_RE = re.compile(r"ld hl, \$[0-9A-Fa-f]{2}00$", re.IGNORECASE)
 
 
 def code(line: str) -> str:
     return line.split(";", 1)[0].strip()
+
+
+def next_code_index(lines: list[str], start: int, ceiling: int | None = None) -> int | None:
+    end = len(lines) if ceiling is None else min(ceiling, len(lines))
+    for i in range(start, end):
+        if code(lines[i]):
+            return i
+    return None
+
+
+def prev_code_index(lines: list[str], start: int, floor: int = 0) -> int | None:
+    for i in range(start, floor - 1, -1):
+        if code(lines[i]):
+            return i
+    return None
 
 
 @dataclass
@@ -138,29 +160,69 @@ def estimated_saving(loads: int, stores: int, first: str | None) -> int:
     return -1
 
 
-def fold_aligned_prg_cached_indexes(lines: list[str]) -> int:
-    """Feed cached X/Y directly into L for validated 256-byte PRG mirrors."""
-    folded = 0
-    for i in range(len(lines) - 2):
+def fold_direct_cached_indexes(lines: list[str]) -> tuple[int, int, int]:
+    """Feed cached X/Y directly into L at exact proven low-byte index sites."""
+    prg = 0
+    page = 0
+    zp0 = 0
+
+    for i in range(len(lines)):
         m = CACHED_INDEX_RE.fullmatch(lines[i].strip())
         if not m:
             continue
         reg = m.group(1).lower()
-        # The marker is emitted only by mirror_indexed_prg_tables.py after the
-        # table section has been ALIGN[8]-constrained. Require the following
-        # direct table load too so A has no observable use as the index value.
-        if "256-byte-aligned table: low byte is index" not in lines[i + 1]:
+        j = next_code_index(lines, i + 1, min(len(lines), i + 10))
+        if j is None or code(lines[j]) != "ld l, a":
             continue
-        if code(lines[i + 1]) != "ld l, a" or code(lines[i + 2]) != "ld a, [hl]":
+
+        kind: str | None = None
+
+        # PRG mirror pass marks the LD L,A itself and only emits this form for
+        # an aligned 256-byte read table. Retain the following [HL] read check.
+        if "256-byte-aligned table: low byte is index" in lines[j]:
+            k = next_code_index(lines, j + 1, min(len(lines), j + 5))
+            if k is not None and code(lines[k]) == "ld a, [hl]":
+                kind = "prg"
+
+        # Zero-page $00 has its dead address-only AND removed immediately
+        # between the cached index load and LD L,A.
+        if kind is None and any(
+            "dead host-flag scaffold removed: zero-page $00 index" in lines[k]
+            for k in range(i + 1, j)
+        ):
+            kind = "zp0"
+
+        # Page-aligned absolute indexing retains LD HL,$xx00 immediately before
+        # the X/Y reload, and the exact index-math marker immediately after
+        # LD L,A. Requiring both keeps this fold tied to the validated rewrite.
+        if kind is None:
+            p = prev_code_index(lines, i - 1, max(0, i - 4))
+            page_marker = any(
+                "dead host-flag scaffold removed: page-aligned index" in lines[k]
+                for k in range(j + 1, min(len(lines), j + 6))
+            )
+            if p is not None and PAGE_BASE_RE.fullmatch(code(lines[p])) and page_marker:
+                kind = "page"
+
+        if kind is None:
             continue
+
         indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
         lines[i] = f"{indent}; cached index moved directly into L\n"
-        lines[i + 1] = f"{indent}ld l, {reg} ; cached X/Y + 256-byte-aligned PRG table\n"
-        folded += 1
-    return folded
+        if kind == "prg":
+            lines[j] = f"{indent}ld l, {reg} ; cached X/Y + 256-byte-aligned PRG table\n"
+            prg += 1
+        elif kind == "page":
+            lines[j] = f"{indent}ld l, {reg} ; cached X/Y + page-aligned RAM base\n"
+            page += 1
+        else:
+            lines[j] = f"{indent}ld l, {reg} ; cached X/Y + zero-page $00 base\n"
+            zp0 += 1
+
+    return prg, page, zp0
 
 
-def optimize(lines: list[str]) -> tuple[int, int, int, int, int, int]:
+def optimize(lines: list[str]) -> tuple[int, int, int, int, int, int, int, int]:
     bs = blocks(lines)
     cached_x_blocks = 0
     cached_y_blocks = 0
@@ -234,8 +296,17 @@ def optimize(lines: list[str]) -> tuple[int, int, int, int, int, int]:
         if "nes_y" in assignment:
             cached_y_blocks += 1
 
-    prg_direct = fold_aligned_prg_cached_indexes(lines)
-    return cached_x_blocks, cached_y_blocks, replaced_loads, load_seeds, store_seeds, prg_direct
+    prg_direct, page_direct, zp0_direct = fold_direct_cached_indexes(lines)
+    return (
+        cached_x_blocks,
+        cached_y_blocks,
+        replaced_loads,
+        load_seeds,
+        store_seeds,
+        prg_direct,
+        page_direct,
+        zp0_direct,
+    )
 
 
 def main() -> int:
@@ -244,13 +315,23 @@ def main() -> int:
     args = p.parse_args()
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    x_blocks, y_blocks, loads, load_seeds, store_seeds, prg_direct = optimize(lines)
+    (
+        x_blocks,
+        y_blocks,
+        loads,
+        load_seeds,
+        store_seeds,
+        prg_direct,
+        page_direct,
+        zp0_direct,
+    ) = optimize(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
         f"xy-cache: cached X in {x_blocks} blocks, Y in {y_blocks} blocks, "
         f"replaced {loads} HRAM index reloads; seeded {load_seeds} on first load / "
-        f"{store_seeds} from prior store; fed {prg_direct} cached index(es) directly "
-        f"into aligned PRG tables"
+        f"{store_seeds} from prior store; fed cached index directly into "
+        f"{prg_direct} aligned PRG, {page_direct} page-aligned RAM, "
+        f"{zp0_direct} zero-page-$00 site(s)"
     )
     return 0
 
