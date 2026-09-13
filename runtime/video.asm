@@ -150,8 +150,13 @@ nes_upload_chr_bank:
     add b
     ld [$2000], a
     call nes_video_fit_upload_sprite_chr_raw
-    ; CHR bank changed: rebuild soft BG from raw NES CHR while LCD is off.
-    call nes_video_fit_soft_rebuild_current_page
+    ; CHR bank changed: defer soft rebuild until nametable content exists.
+    ld a, $07
+    ldh [rSVBK], a
+    ld a, $01
+    ld [nes_fit_soft_dirty], a
+    ld a, $01
+    ldh [rSVBK], a
 
 .chr_upload_done:
     call nes_restore_code_bank
@@ -181,7 +186,7 @@ nes_video_flush_nametable_queue_atomic:
     jr nz, .has_entries
     ld a, [nes_nametable_queue_ptr_lo]
     and a
-    ret z
+    jp z, nes_video_fit_soft_rebuild_if_dirty
 
 .has_entries:
     ld a, [nes_diag_event_flags]
@@ -390,6 +395,10 @@ ENDC
     jp .loop
 
 .done:
+    ; Fit soft-BG: one page rebuild for the whole transaction (not per-byte).
+    ; Still unlocked / often LCD-off here so the bulk VRAM copy is cheap.
+    call nes_video_fit_soft_rebuild_if_dirty
+
     xor a
     ld [nes_vram_unlocked], a
 IF DEF(NES2GBC_DEBUG_TRACE)
@@ -454,6 +463,9 @@ nes_video_rebuild_generic_maps_atomic:
     and $10
     srl a
     ld [nes_bg_pattern_committed], a
+
+    ; Fit soft-BG: NT sync only dirtied; rebuild while LCD is still off.
+    call nes_video_fit_soft_rebuild_if_dirty
 
     ld a, $01
     ldh [rSVBK], a
@@ -2332,6 +2344,13 @@ nes_video_fit_soft_init:
     xor a
     ld [nes_fit_vram_page], a
 
+    ld a, $07
+    ldh [rSVBK], a
+    xor a
+    ld [nes_fit_soft_dirty], a
+    ld a, $01
+    ldh [rSVBK], a
+
     ; Initial letterbox (scroll 0).
     xor a
     sub 16
@@ -2420,6 +2439,13 @@ nes_video_fit_apply_scroll:
     ld a, b
     ld [nes_fit_vram_page], a
     push bc
+    ; Page swap: rebuild immediately and clear deferred dirty.
+    ld a, $07
+    ldh [rSVBK], a
+    xor a
+    ld [nes_fit_soft_dirty], a
+    ld a, $01
+    ldh [rSVBK], a
     call nes_video_fit_soft_rebuild_current_page
     pop bc
 
@@ -2458,11 +2484,57 @@ nes_video_fit_displayed_page:
     add a ; 0 or 4
     ret
 
+;; If fit-screen soft BG is dirty, rebuild the resident page.
+; Safe to call from host VBlank (flush). Turns LCD off briefly when needed.
+nes_video_fit_soft_rebuild_if_dirty:
+    ld a, [nes_fit_screen]
+    and a
+    ret z
+    ld a, $07
+    ldh [rSVBK], a
+    ld a, [nes_fit_soft_dirty]
+    and a
+    ld b, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, b
+    and a
+    ret z
+
+    ld a, $07
+    ldh [rSVBK], a
+    xor a
+    ld [nes_fit_soft_dirty], a
+    ld a, $01
+    ldh [rSVBK], a
+
+    ldh a, [rLCDC]
+    ld b, a
+    bit 7, a
+    jr z, .rebuild_now
+    and $7F
+    ldh [rLCDC], a
+.rebuild_now:
+    push bc
+    call nes_video_fit_soft_rebuild_current_page
+    pop bc
+    ld a, b
+    bit 7, a
+    ret z
+    ldh [rLCDC], a
+    ret
+
 ; Rebuild all 16x15 soft tiles for nes_fit_vram_page into WRAM + VRAM.
-; Prefer calling with LCD off (CHR upload); otherwise uses wait_vram per tile.
+; Maps raw NES CHR ROM once for the whole page. Prefer LCD off.
 nes_video_fit_soft_rebuild_current_page:
     ld a, [nes_fit_vram_page]
     ld [nes_fit_page], a
+
+    ; Hold raw NES CHR in $4000 for every fetch in this rebuild.
+    ld a, [nes_chr_bank]
+    add $03
+    ld [$2000], a
+
     xor a
     ld [nes_fit_my], a
 .yloop:
@@ -2481,115 +2553,20 @@ nes_video_fit_soft_rebuild_current_page:
     ld [nes_fit_my], a
     cp 15
     jr c, .yloop
-    ret
 
-; HL = physical NT addr, A/C = written byte. Fit soft-BG dirty path.
+    jp nes_restore_code_bank
+
+; HL = physical NT addr, A/C = written byte. Mark soft BG dirty only.
+; Per-write soft render was too slow (title/sync_now wrote hundreds of tiles
+; mid-frame). Host VBlank flush rebuilds the resident page once.
 nes_video_fit_soft_sync_nt_write:
-    ld c, a
-    ; Attribute?
-    ld a, h
-    and $03
-    cp $03
-    jr c, .tile
-    ld a, l
-    cp $C0
-    jr nc, .attribute
-
-.tile:
-    ; Only update VRAM/soft if this write is on the resident page.
-    ld a, h
-    and $04
-    ld b, a
-    ld a, [nes_fit_vram_page]
-    cp b
-    ret nz
-
-    ; mx = col/2, my = row/2. col = l&$1F, row = ((h&3)<<3) | (l>>5)
-    ld a, l
-    and $1F
-    srl a
-    ld [nes_fit_mx], a
-
-    ld a, h
-    and $03
-    add a
-    add a
-    add a
-    ld b, a
-    ld a, l
-    and $E0
-    swap a
-    srl a ; a = l>>5
-    or b
-    srl a
-    cp 15
-    ret nc
-    ld [nes_fit_my], a
-
-    ld a, h
-    and $04
-    ld [nes_fit_page], a
-    call nes_video_fit_soft_render_tile
-    jp nes_video_fit_soft_store_and_upload
-
-.attribute:
-    ld a, h
-    and $04
-    ld b, a
-    ld a, [nes_fit_vram_page]
-    cp b
-    ret nz
-    ld [nes_fit_page], a
-
-    ; attr index within table
-    ld a, l
-    sub $C0
-    ld c, a
-    and $07
-    ld e, a ; attr col 0..7
-    ld a, c
-    and $F8
-    srl a
-    srl a
-    srl a
-    ld d, a ; attr row 0..7
-
-    ; soft mx = attr_col*2 (+0,+1), my = attr_row*2 (+0,+1), clamp my<15
-    ld a, e
-    add a
-    ld [nes_fit_mx], a
-    ld a, d
-    add a
-    cp 15
-    jr c, .attr_my0
-    ld a, 14
-.attr_my0:
-    ld [nes_fit_my], a
-    call nes_video_fit_soft_render_tile
-    call nes_video_fit_soft_store_and_upload
-
-    ld a, [nes_fit_mx]
-    inc a
-    ld [nes_fit_mx], a
-    call nes_video_fit_soft_render_tile
-    call nes_video_fit_soft_store_and_upload
-
-    ld a, [nes_fit_mx]
-    dec a
-    ld [nes_fit_mx], a
-    ld a, [nes_fit_my]
-    inc a
-    cp 15
-    ret nc
-    ld [nes_fit_my], a
-    call nes_video_fit_soft_render_tile
-    call nes_video_fit_soft_store_and_upload
-
-    ld a, [nes_fit_mx]
-    inc a
-    ld [nes_fit_mx], a
-    call nes_video_fit_soft_render_tile
-    jp nes_video_fit_soft_store_and_upload
+    ld a, $07
+    ldh [rSVBK], a
+    ld a, $01
+    ld [nes_fit_soft_dirty], a
+    ld a, $01
+    ldh [rSVBK], a
+    ret
 
 ; Render soft tile (nes_fit_mx/my/page) into nes_fit_tile_scratch + nes_fit_pal.
 ; Uses full NES CHR from ROM (bank chr_bank+3). Clobbers most regs.
@@ -2753,9 +2730,7 @@ nes_video_fit_soft_fetch_chr_at_tx_ty:
     or $10
     ld h, a
 .no_pt1:
-    ld a, [nes_chr_bank]
-    add $03
-    ld [$2000], a
+    ; Raw NES CHR must already be mapped at $4000 (rebuild holds the bank).
     ld a, h
     and $1F
     or $40
@@ -2768,7 +2743,7 @@ nes_video_fit_soft_fetch_chr_at_tx_ty:
     inc de
     dec b
     jr nz, .copy_chr
-    jp nes_restore_code_bank
+    ret
 
 ; Palette 0..3 for soft tile at fit_mx/my/page.
 nes_video_fit_soft_tile_palette:

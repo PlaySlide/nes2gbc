@@ -251,3 +251,4 @@ nes_nametable_stage_seen: ds $100
 ; Bank 7 is free of NT/PRG/shadow traffic.
 SECTION "NES fit soft BG", WRAMX[$D000], BANK[7]
 nes_fit_soft_bg: ds 3840 ; 240 * 16
+nes_fit_soft_dirty: ds 1 ; set on NT write; cleared by page rebuild
