@@ -136,4 +136,44 @@ mod tests {
         assert_eq!(out[0] & 0x80, 0x80);
         assert_eq!(out[1] & 0x80, 0);
     }
+
+    /// Mirror of runtime `nes_video_fit_compose_quad`: pack four shrunk tiles'
+    /// high nibbles into one 8x8 (TL/TR rows 0..3, BL/BR rows 4..7).
+    fn fit_compose_quad(tiles: [&[u8; 16]; 4]) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        for (qi, tile) in tiles.iter().enumerate() {
+            let row_base = if qi >= 2 { 4 } else { 0 };
+            let right = qi & 1 == 1;
+            for row in 0..4 {
+                let lo = tile[row * 2] & 0xF0;
+                let hi = tile[row * 2 + 1] & 0xF0;
+                let (lo, hi) = if right {
+                    (lo >> 4, hi >> 4)
+                } else {
+                    (lo, hi)
+                };
+                let dest = (row_base + row) * 2;
+                out[dest] |= lo;
+                out[dest + 1] |= hi;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn fit_compose_four_solid_f0_tiles_fills_all_ff() {
+        // Only rows 0..3 matter for shrunk content; match convert_chr_to_gbc_fit_half.
+        let mut tile = [0u8; 16];
+        for row in 0..4 {
+            tile[row * 2] = 0xF0;
+            tile[row * 2 + 1] = 0xF0;
+        }
+        let out = fit_compose_quad([&tile, &tile, &tile, &tile]);
+        assert_eq!(out, [0xFFu8; 16]);
+        // Sanity: solid NES color-3 half CHR also composes to all FF.
+        let half = convert_chr_to_gbc_fit_half(&vec![0xFFu8; 16]);
+        let mut half_arr = [0u8; 16];
+        half_arr.copy_from_slice(&half);
+        assert_eq!(fit_compose_quad([&half_arr; 4]), [0xFFu8; 16]);
+    }
 }
