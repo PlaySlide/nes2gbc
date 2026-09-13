@@ -138,14 +138,9 @@ nes_upload_chr_bank:
     jr .chr_upload_done
 
 .fit_chr_upload:
-    ; Bank 0 VRAM holds composed BG metatiles. Keep shrunk sprite CHR (PT $1000)
-    ; in bank 1. BG compose reads converted CHR from ROM.
-    ld a, $01
-    ldh [rVBK], a
-    ld hl, $5000
-    ld de, $8000
-    ld bc, $1000
-    call nes_video_copy
+    ; Bank 0 VRAM holds composed BG metatiles. Bank 1 holds the active sprite
+    ; pattern table (PPUCTRL bit 3). BG compose still reads converted CHR from ROM.
+    call nes_video_fit_upload_sprite_chr_raw
     call nes_video_fit_reset_cache
 
 .chr_upload_done:
@@ -1520,6 +1515,14 @@ nes_video_build_oam_shadow:
     and $08
 
 .bank_ready:
+    ; Fit-screen: sprite CHR lives only in VRAM bank 1; force CGB attr bit 3.
+    ld c, a
+    ld a, [nes_fit_screen]
+    and a
+    ld a, c
+    jr z, .bank_store
+    or $08
+.bank_store:
     ldh [nes_sprite_bank_tmp], a
 
     ; Palette, CGB VRAM bank, priority, H flip, V flip.
@@ -2223,28 +2226,111 @@ nes_video_update_ctrl:
 ; Fit-screen 2x2 nametable metatile packing
 ; ---------------------------------------------------------------------------
 ; Each GBC BG tile composites four already-shrunk 4x4 CHR quadrants.
-; Half-res map is 16x15 per physical NES nametable; scroll is NES/2 + letterbox
-; (+16 X, +12 Y) matching OAM. VRAM bank 0 = up to 256 content-keyed metatiles;
-; sprite CHR remains in bank 1.
+; Half-res map is 16x15 per physical NES nametable at origin (0,0). Letterbox is
+; applied by subtracting from SCX/SCY (GB wrap) so content shifts into the
+; centered 160x144 viewport; OAM still uses +16/+12 screen offsets. VRAM bank 0
+; = metatile cache (tile 0 reserved blank); bank 1 = sprite CHR.
+
+; Copy PPUCTRL-selected sprite PT into VRAM bank 1. Caller must own LCD-off or
+; VBlank; does not touch the metatile cache. Updates nes_fit_sprite_pt.
+nes_video_fit_upload_sprite_chr_raw:
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [nes_ppuctrl]
+    and $08
+    ld [nes_fit_sprite_pt], a
+    jr nz, .sprite_pt1
+    ld hl, $4000
+    jr .sprite_copy
+.sprite_pt1:
+    ld hl, $5000
+.sprite_copy:
+    ld de, $8000
+    ld bc, $1000
+    call nes_video_copy
+    xor a
+    ldh [rVBK], a
+    ret
+
+; VBlank/ctrl-commit path: refresh sprite CHR if PPUCTRL bit 3 changed.
+nes_video_fit_sync_sprite_chr:
+    ld a, [nes_fit_screen]
+    and a
+    ret z
+    ld a, [nes_ppuctrl]
+    and $08
+    ld b, a
+    ld a, [nes_fit_sprite_pt]
+    cp b
+    ret z
+
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    bit 7, a
+    jr z, .lcd_off
+.wait_vblank:
+    ldh a, [rLY]
+    cp 144
+    jr c, .wait_vblank
+    ldh a, [rLCDC]
+    and $7F
+    ldh [rLCDC], a
+.lcd_off:
+    ld a, [nes_chr_gbc_bank_base]
+    ld b, a
+    ld a, [nes_chr_bank]
+    add b
+    ld [$2000], a
+    call nes_video_fit_upload_sprite_chr_raw
+    call nes_restore_code_bank
+    ld a, [nes_saved_lcdc]
+    ldh [rLCDC], a
+    ret
 
 nes_video_fit_reset_cache:
+    ; Reserve VRAM tile 0 as permanent blank for letterbox margins.
     xor a
-    ld [nes_fit_mt_next], a
     ld [nes_fit_mt_full], a
+    ld a, 1
+    ld [nes_fit_mt_next], a
+
+    ; Clear both BG maps + CGB attrs so unused regions are not garbage.
+    xor a
+    ldh [rVBK], a
+    ld hl, $9800
+    ld bc, $0800
+    call nes_video_fill_zero
+    ld a, $01
+    ldh [rVBK], a
+    ld hl, $9800
+    ld bc, $0800
+    call nes_video_fill_zero
+
+    ; Blank metatile 0 in bank 0.
+    xor a
+    ldh [rVBK], a
+    ld hl, $8000
+    ld b, 16
+.clear_tile0:
+    ld [hli], a
+    dec b
+    jr nz, .clear_tile0
     ret
 
 nes_video_fit_apply_scroll:
     ld a, [nes_ppuctrl]
     call nes_video_apply_map_select_a
 
+    ; Letterbox by subtracting so origin content shifts down-right into view.
+    ; sub 16 == add 240 when a<16 (GB wrap).
     ld a, [nes_ppu_scroll_x]
     srl a
-    add 16
+    sub 16
     ldh [rSCX], a
 
     ld a, [nes_ppu_scroll_y]
     srl a
-    add 12
+    sub 12
     ldh [rSCY], a
 
     xor a
@@ -2394,8 +2480,9 @@ nes_video_fit_cache_lookup:
     jr nz, .search_all
     ld a, [nes_fit_mt_next]
     ld b, a
-    and a
-    jr z, .miss_alloc
+    ; next==1 means only blank slot 0 reserved; nothing searchable yet.
+    cp 2
+    jr c, .miss_alloc
     jr .search_prep
 
 .search_all:
@@ -2404,8 +2491,9 @@ nes_video_fit_cache_lookup:
     ld b, a
 
 .search_prep:
-    ld hl, nes_fit_mt_keys
-    ld c, 0
+    ; Slot 0 is the permanent blank metatile; never match/reuse it.
+    ld hl, nes_fit_mt_keys + 4
+    ld c, 1
 .search:
     push bc
     push hl
@@ -2487,17 +2575,21 @@ nes_video_fit_cache_lookup:
     jr nz, .advance_rr
     ld a, c
     inc a
-    ld [nes_fit_mt_next], a
-    jr nz, .alloc_done
+    jr nz, .store_next_partial
+    ; Filled slots 1..255: reserve 0 forever, mark cache full.
     ld a, $01
     ld [nes_fit_mt_full], a
-    xor a
+    ld a, 1
+.store_next_partial:
     ld [nes_fit_mt_next], a
     jr .alloc_done
 
 .advance_rr:
     ld a, c
     inc a
+    jr nz, .rr_store
+    ld a, 1
+.rr_store:
     ld [nes_fit_mt_next], a
 
 .alloc_done:

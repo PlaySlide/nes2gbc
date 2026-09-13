@@ -229,6 +229,11 @@ nes_gbc_vblank_isr:
     ld [nes_bg_pattern_committed], a
     call nes_video_toggle_bg_pattern_bank
 .ctrl_bank_done:
+    ; Fit-screen keeps only one sprite PT in VRAM bank 1; refresh on bit 3 change.
+    ld a, [nes_fit_screen]
+    and a
+    call nz, nes_video_fit_sync_sprite_chr
+
     ; While a raster split owns map selection, a global PPUCTRL commit must not
     ; transiently seize LCDC.3 after STAT already switched to the playfield.
     ; nes_video_update_ctrl clears/recomputes both sprite-size and map bits;
@@ -678,6 +683,9 @@ Start:
     ; projection acquires a plausible player sprite.
     xor a
     ld [nes_fit_screen], a
+    ; $FF != 0/$08 so first fit sprite-CHR sync cannot false-match.
+    dec a
+    ld [nes_fit_sprite_pt], a
     ld a, $04
     ld [nes_view_mode], a
     ld a, $30
