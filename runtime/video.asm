@@ -2446,19 +2446,12 @@ nes_video_fit_recompose_resident_page:
     ld b, 2
 
 .yloop:
+    call nes_video_fit_vblank_ok
+    jr z, .yield
+    ; LCD on: enforce per-call row budget. LCD off: b stays 0 and is ignored.
     ldh a, [rLCDC]
     bit 7, a
     jr z, .do_row
-    ldh a, [rLY]
-    cp 144
-    jr nc, .budget
-.yield:
-    ld a, [nes_fit_mt_my]
-    ld [nes_fit_recompose_my], a
-    ld a, $01
-    ld [nes_fit_dirty], a
-    ret
-.budget:
     ld a, b
     and a
     jr z, .yield
@@ -2468,6 +2461,10 @@ nes_video_fit_recompose_resident_page:
     xor a
     ld [nes_fit_mt_mx], a
 .xloop:
+    ; Re-check every metatile so a long row cannot spill into active scanout
+    ; via nes_video_wait_vram's HBlank fallback (mVL thrash signature).
+    call nes_video_fit_vblank_ok
+    jr z, .yield
     call nes_video_fit_publish_at_mx_my
     ld a, [nes_fit_mt_mx]
     inc a
@@ -2485,6 +2482,30 @@ nes_video_fit_recompose_resident_page:
     ld [nes_fit_dirty], a
     ld a, 15
     ld [nes_fit_recompose_my], a
+    ret
+
+.yield:
+    ; Stop before active scanout. mVL showed 80+ bank0 VRAM dumps/frame when
+    ; compose continued via HBlank waits after LY wrapped past 144.
+    ld a, [nes_fit_mt_my]
+    ld [nes_fit_recompose_my], a
+    ld a, $01
+    ld [nes_fit_dirty], a
+    ret
+
+; NZ = safe to write fit BG CHR (LCD off or LY>=144). Z = active scanout.
+nes_video_fit_vblank_ok:
+    ldh a, [rLCDC]
+    bit 7, a
+    jr z, .ok
+    ldh a, [rLY]
+    cp 144
+    jr c, .bad
+.ok:
+    or $01
+    ret
+.bad:
+    xor a
     ret
 
 nes_video_fit_sync_nametable_write:
@@ -2510,8 +2531,13 @@ nes_video_fit_sync_nametable_write:
     and a
     ret nz
 
+    ; Incremental publish only while unlocked AND still in VBlank/LCD-off.
+    ; Unlocked queue drains that spill into mode-0 HBlank were rewriting bank0
+    ; CHR on ~every scanline (smb-fit.mvl: ~59k active-line VRAM0 flushes).
     ld a, [nes_vram_unlocked]
     and a
+    jr z, nes_video_fit_mark_dirty_if_resident
+    call nes_video_fit_vblank_ok
     jr z, nes_video_fit_mark_dirty_if_resident
 
     ; Incremental: compose the 2x2 metatile containing this NT byte.
