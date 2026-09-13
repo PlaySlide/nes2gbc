@@ -1706,6 +1706,13 @@ nes_video_update_mask:
 ; surface and synthesize the lower playfield into $9C00. Rebuild only when the
 ; coarse horizontal key changes or virtual nametable data changed.
 nes_video_update_horizontal_stitch:
+    ; Fit-screen identity maps own $9800/$9C00. SMB's stitched playfield would
+    ; overwrite them with raw NES tile IDs and explode into garbage the moment
+    ; horizontal scrolling / HUD split starts.
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .disable
+
     ld a, [nes_mirroring]
     cp $01
     jr z, .vertical

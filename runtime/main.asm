@@ -80,6 +80,9 @@ nes_gbc_vblank_isr:
     ; withheld host frames constructing it in hidden $9C00. A handled step
     ; deliberately leaves the previous completed frame completely untouched:
     ; no new split, no new scroll, and no LCD shutdown.
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .initial_hstitch_prep_done
     call nes_gbc_prepare_initial_hstitch_hidden_step
     and a
     jr z, .initial_hstitch_prep_done
@@ -92,6 +95,11 @@ nes_gbc_vblank_isr:
     ; Arm the HUD/playfield raster state before any potentially long
     ; completed-frame publication. The long BG path below temporarily allows
     ; only STAT to nest so this armed split can still fire exactly at LYC.
+    ; Fit-screen: do not arm SMB HUD/playfield split — it rewrites SCX/SCY/maps
+    ; against the half-scale fit path.
+    ld a, [nes_fit_screen]
+    and a
+    jp nz, .early_split_done
     ldh a, [nes_split_active]
     and a
     jp z, .early_split_done
@@ -241,6 +249,12 @@ nes_gbc_vblank_isr:
     and a
     call nz, nes_video_fit_sync_sprite_chr
 
+    ; Fit-screen owns map select via fit_apply_scroll; do not let SMB split
+    ; logic preserve/reassert LCDC.3 independently.
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .ctrl_update_global
+
     ; While a raster split owns map selection, a global PPUCTRL commit must not
     ; transiently seize LCDC.3 after STAT already switched to the playfield.
     ; nes_video_update_ctrl clears/recomputes both sprite-size and map bits;
@@ -272,6 +286,9 @@ nes_gbc_vblank_isr:
     ; A completed PPUCTRL commit may change LCDC's map bit. During a captured
     ; raster split, restore whichever half of the split currently owns scanout:
     ; top/HUD while LYC is still armed, bottom/playfield after STAT consumed it.
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .ctrl_done
     ldh a, [nes_split_active]
     and a
     jr z, .ctrl_done
@@ -295,6 +312,12 @@ nes_gbc_vblank_isr:
     ; A proven HUD/playfield split is persistent display state, not merely a
     ; reaction to a fresh $2005 write. The LYC source is one-shot, so once a
     ; split has been detected it must be re-armed on every presented host frame.
+    ; Fit-screen: never take the SMB split/hstitch scroll path — it fights the
+    ; half-scale identity maps. Keep applying fit single-scroll every frame.
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .scroll_fit
+
     ldh a, [nes_split_active]
     and a
     jp nz, .scroll_split
@@ -310,6 +333,13 @@ nes_gbc_vblank_isr:
     and a
     jp z, .scroll_done
     call nes_video_rearm_vertical_seam
+    jp .scroll_done
+
+.scroll_fit:
+    ; Always refresh fit scroll while presenting; ignore split_active.
+    xor a
+    ldh [nes_scroll_dirty], a
+    call nes_video_apply_single_scroll
     jp .scroll_done
 
 .scroll_single:
@@ -507,6 +537,10 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
 nes_gbc_stat_isr:
     push af
     push bc
+
+    ld a, [nes_fit_screen]
+    and a
+    jr nz, .check_vertical_seam
 
     ldh a, [nes_split_active]
     and a
