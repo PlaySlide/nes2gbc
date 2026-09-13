@@ -358,6 +358,14 @@ ENDC
     jp .loop
 
 .done:
+    ; Fit-screen: coalesce all staged NT/attr touches into one resident-page
+    ; recompose while VRAM is still unlocked. Per-byte compose was hanging
+    ; Balloon Fight on full-screen fills and corrupting SMB once scroll queued
+    ; column updates.
+    ld a, [nes_fit_screen]
+    and a
+    call nz, nes_video_fit_flush_dirty
+
     xor a
     ld [nes_vram_unlocked], a
 IF DEF(NES2GBC_DEBUG_TRACE)
@@ -394,6 +402,20 @@ nes_video_rebuild_generic_maps_atomic:
     ldh [rLCDC], a
 
 .rebuild_lcd_off:
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .rebuild_generic
+
+    ; Fit: one resident recompose instead of 2048 per-byte composes.
+    ld a, $01
+    ld [nes_fit_dirty], a
+    ld [nes_vram_unlocked], a
+    call nes_video_fit_flush_dirty
+    xor a
+    ld [nes_vram_unlocked], a
+    jr .rebuild_fit_done
+
+.rebuild_generic:
     ld a, $01
     ldh [rSVBK], a
     ld hl, $D000
@@ -407,6 +429,8 @@ nes_video_rebuild_generic_maps_atomic:
     ld a, h
     cp $D8
     jr nz, .rebuild_loop
+
+.rebuild_fit_done:
 
     ; The rebuilt attributes used the current global PPUCTRL.4, so make that
     ; state the committed baseline and avoid an immediate redundant full-bank
@@ -2229,6 +2253,7 @@ nes_video_fit_init_identity:
 
     xor a
     ld [nes_fit_vram_page], a
+    ld [nes_fit_dirty], a
 
     xor a
     sub 16
@@ -2302,6 +2327,11 @@ nes_video_fit_apply_scroll:
     ld a, [nes_ppuctrl]
     call nes_video_apply_map_select_a
 
+    ; Apply any coalesced NT dirty before sampling the new scroll regs.
+    ld a, $01
+    ld [nes_vram_unlocked], a
+    call nes_video_fit_flush_dirty
+
     call nes_video_fit_displayed_page
     ld b, a
     ld a, [nes_fit_vram_page]
@@ -2314,6 +2344,8 @@ nes_video_fit_apply_scroll:
     pop bc
 
 .regs:
+    xor a
+    ld [nes_vram_unlocked], a
     ld a, [nes_ppu_scroll_x]
     srl a
     sub 16
@@ -2345,8 +2377,19 @@ nes_video_fit_displayed_page:
     add a
     ret
 
+; If nes_fit_dirty set, rebuild all identity slots for the resident page.
+nes_video_fit_flush_dirty:
+    ld a, [nes_fit_dirty]
+    and a
+    ret z
+    xor a
+    ld [nes_fit_dirty], a
+    ; fall through
+
 ; Recompose all 16x15 soft tiles for nes_fit_vram_page from NT WRAM.
 nes_video_fit_recompose_resident_page:
+    xor a
+    ld [nes_fit_dirty], a
     ld a, [nes_fit_vram_page]
     ld [nes_fit_mt_page], a
     xor a
@@ -2378,19 +2421,19 @@ nes_video_fit_sync_nametable_write:
     jp nc, nes_video_fit_sync_attribute_write
 
 .fit_tile:
-    ; Only update resident page.
+nes_video_fit_mark_dirty_if_resident:
+    ; Only the displayed physical page owns identity-slot CHR.
     ld a, h
     and $04
     ld b, a
     ld a, [nes_fit_vram_page]
     cp b
     ret nz
+    ld a, $01
+    ld [nes_fit_dirty], a
+    ret
 
-    ld a, l
-    and $DE
-    ld l, a
-    ; fall through using HL as aligned TL
-
+; Kept for call sites that already have TL in HL (unused by dirty path).
 nes_video_fit_publish_metatile_hl:
     ld a, $01
     ldh [rSVBK], a
@@ -2736,55 +2779,7 @@ nes_video_fit_upload_tile_a:
     ret
 
 nes_video_fit_sync_attribute_write:
-    ld a, h
-    and $04
-    ld b, a
-    ld a, [nes_fit_vram_page]
-    cp b
-    ret nz
-    ld [nes_fit_mt_page], a
-
-    ld a, l
-    sub $C0
-    ld c, a
-    and $07
-    add a
-    ld [nes_fit_mt_quad], a ; reuse as attr_mx base
-    ld a, c
-    srl a
-    srl a
-    srl a
-    and $07
-    add a
-    ld [nes_fit_mt_quad + 1], a
-
-    xor a
-.meta_loop:
-    cp 4
-    ret z
-    ld [nes_fit_mt_quad + 2], a
-
-    and $01
-    ld c, a
-    ld a, [nes_fit_mt_quad]
-    add c
-    ld [nes_fit_mt_mx], a
-
-    ld a, [nes_fit_mt_quad + 2]
-    and $02
-    srl a
-    ld c, a
-    ld a, [nes_fit_mt_quad + 1]
-    add c
-    cp 15
-    jr nc, .next
-    ld [nes_fit_mt_my], a
-    call nes_video_fit_publish_at_mx_my
-
-.next:
-    ld a, [nes_fit_mt_quad + 2]
-    inc a
-    jr .meta_loop
+    jp nes_video_fit_mark_dirty_if_resident
 
 nes_video_fit_sync_sprite_chr:
     ld a, [nes_fit_screen]
