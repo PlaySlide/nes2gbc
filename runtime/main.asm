@@ -375,10 +375,14 @@ nes_gbc_vblank_isr:
     xor a
     ldh [nes_scroll_dirty], a
     ; When SMB HUD/playfield split is live, early_split+STAT own SCX/SCY.
-    ; Only continue chunked dirty flush here — do not overwrite half-scale split.
+    ; Still refresh play_scx, pin LCDC.3, and continue chunked dirty flush.
     ldh a, [nes_split_active]
     and a
     jr z, .scroll_fit_single
+    ldh a, [rLCDC]
+    and $F7
+    ldh [rLCDC], a
+    call nes_video_fit_update_scroll_window
     ld a, [nes_fit_dirty]
     and a
     jp z, .scroll_done
