@@ -4,6 +4,7 @@ TRACE ?= 0
 PROFILE ?= 0
 PROFILE_TRACE ?= 0
 PEEPHOLE ?= 1
+BANK_LOCALITY ?= 1
 
 .PHONY: help generate gbc test clean
 
@@ -15,6 +16,7 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE_TRACE=1 # expensive rolling block trace'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
 	@echo '  make gbc ROM="path/to/game.nes" PEEPHOLE=0      # disable generated-asm perf pass'
+	@echo '  make gbc ROM="path/to/game.nes" BANK_LOCALITY=0 # skip exhaustive bank repack for fast iteration'
 	@echo '  make test'
 
 generate:
@@ -25,7 +27,7 @@ generate:
 		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
-		python3 tools/repack_code_banks.py runtime/generated.asm; \
+		if [ "$(BANK_LOCALITY)" = "1" ]; then python3 tools/repack_code_banks.py runtime/generated.asm; fi; \
 		python3 tools/peephole_generated.py runtime/generated.asm; \
 		python3 tools/collapse_conditional_jp.py runtime/generated.asm; \
 		python3 tools/tighten_stack_generated.py runtime/generated.asm; \
