@@ -3,7 +3,6 @@ name: Apply dispatcher bank critical-section fix
 on:
   push:
     branches: [debug/video-copy-invariant]
-    paths: ['.github/workflows/apply-dispatch-atomic.yml']
   workflow_dispatch:
 
 permissions:
@@ -78,13 +77,6 @@ jobs:
           PY
       - name: Run tests
         run: cargo test --all-targets
-      - name: Smoke assemble runtime
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
-          if command -v rgbasm >/dev/null; then
-            make -C runtime clean all
-          fi
       - name: Commit and push
         run: |
           git config user.name 'ChatGPT'
