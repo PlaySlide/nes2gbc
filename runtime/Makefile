@@ -1,5 +1,6 @@
 OUTPUT := build/runtime.gbc
 OBJ := build/runtime.o
+HEADER_OBJ := build/header_reserve.o
 TRACE ?= 0
 PROFILE ?= 0
 PROFILE_TRACE ?= 0
@@ -24,8 +25,11 @@ build:
 $(OBJ): main.asm hardware.inc io.asm profile.asm cpu.asm ppu.asm video.asm input.asm generated.asm | build
 	rgbasm $(RGBASM_FLAGS) -o "$@" main.asm
 
-$(OUTPUT): $(OBJ)
-	rgblink -o "$@" -n build/runtime.sym -m build/runtime.map "$<"
+$(HEADER_OBJ): header_reserve.asm | build
+	rgbasm -o "$@" header_reserve.asm
+
+$(OUTPUT): $(OBJ) $(HEADER_OBJ)
+	rgblink -o "$@" -n build/runtime.sym -m build/runtime.map $(OBJ) $(HEADER_OBJ)
 	rgbfix -v -p 0 -C -m 0x19 -r 0x00 -t NES2GBC "$@"
 
 clean:
