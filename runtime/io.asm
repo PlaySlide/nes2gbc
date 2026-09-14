@@ -41,7 +41,7 @@ nes_generic_map_rebuild_dirty: ds 1 ; changed NT data while generic rendering wa
 nes_hstitch_seen: ds 1 ; title has successfully established horizontal stitched presentation
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
-nes_host_vblank_pending: ds 1
+nes_reset_count:           ds 1 ; was HRAM; cold reset counter
 nes_current_code_bank: ds 1
 
 ; Debug breadcrumbs. These live in the gap before palette RAM so they do not
@@ -140,7 +140,7 @@ nes_oam_ppuctrl_tmp:       ds 1
 nes_oam_emit_count:        ds 1
 nes_oam_proj_y_tmp:        ds 1
 nes_oam_proj_x_tmp:        ds 1
-nes_reset_count:           ds 1 ; $FF92
+nes_host_vblank_pending:  ds 1 ; $FF92 hot NMI poll flag
 nes_fault_hram:            ds 1 ; $FF93, $FF if nes_unimplemented is reached
 nes_last_indirect_lo:      ds 1 ; $FF94
 nes_last_indirect_hi:      ds 1 ; $FF95
@@ -194,10 +194,15 @@ nes_fault_kind:            ds 1   ; $FFFE, $01 = nes_unimplemented
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]
 nes_gbc_oam_shadow: ds $00A0
 
-SECTION "Host native stack reserve", WRAM0[$CBA0]
+; Set during host publish bursts while LY is still in VBlank. wait_vram
+; treats this as a fast path and clears it if scanout resumes.
+SECTION "NES VRAM unlock", WRAM0[$CBA0]
+nes_vram_unlocked:     ds 1
+
+SECTION "Host native stack reserve", WRAM0[$CBA1]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA0-$CFFF leaves 1120 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $0460
+; $CBA1-$CFFF leaves 1119 bytes of native stack below the OAM shadow.
+nes_host_stack_reserve: ds $045F
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32

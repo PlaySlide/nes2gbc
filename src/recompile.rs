@@ -140,14 +140,42 @@ fn flag_mask(flag: Flag) -> u8 {
     }
 }
 
+fn approx_code_bytes(asm: &str) -> usize {
+    // Overestimate so backward `jr` range checks stay conservative.
+    asm.lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with(';')
+                && !l.starts_with("IF ")
+                && !l.starts_with("ENDC")
+                && !l.starts_with("SECTION")
+                && !l.ends_with(':')
+        })
+        .map(|_| 2usize)
+        .sum()
+}
+
 fn emit_static_target(
     out: &mut String,
     target: u16,
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
+    section_offs: Option<&BTreeMap<u16, usize>>,
+    section_pc: usize,
 ) -> bool {
     match banks.get(&target).copied() {
         Some(bank) if bank == current_bank => {
+            if let Some(offs) = section_offs {
+                if let Some(&target_off) = offs.get(&target) {
+                    // `jr` is 2 bytes; offset is from the following instruction.
+                    let delta = target_off as isize - (section_pc + 2) as isize;
+                    if (-128..128).contains(&delta) {
+                        writeln!(out, "    jr nes_{target:04X}").unwrap();
+                        return true;
+                    }
+                }
+            }
             writeln!(out, "    jp nes_{target:04X}").unwrap();
             true
         }
@@ -166,6 +194,8 @@ fn emit_static_control(
     ops: &[IrOp],
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
+    section_offs: Option<&BTreeMap<u16, usize>>,
+    section_pc: usize,
 ) -> bool {
     if ops.len() != 1 {
         return false;
@@ -195,18 +225,18 @@ fn emit_static_control(
                     writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
                 }
             }
-            emit_static_target(out, target, current_bank, banks);
+            emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             writeln!(out, ":").unwrap();
             true
         }
         IrOp::Jump(target) if banks.contains_key(&target) => {
-            emit_static_target(out, target, current_bank, banks);
+            emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             true
         }
         IrOp::Call { target, return_addr } if banks.contains_key(&target) => {
             writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
             writeln!(out, "    call nes_stack_push_return_hl").unwrap();
-            emit_static_target(out, target, current_bank, banks);
+            emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             true
         }
         _ => false,
@@ -218,8 +248,10 @@ fn emit_known_target(
     target: u16,
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
+    section_offs: Option<&BTreeMap<u16, usize>>,
+    section_pc: usize,
 ) {
-    if !emit_static_target(out, target, current_bank, banks) {
+    if !emit_static_target(out, target, current_bank, banks, section_offs, section_pc) {
         emit_pc_dispatch(out, target);
     }
 }
@@ -261,41 +293,76 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
     writeln!(out, "nes_reset:").unwrap();
-    writeln!(out, "    ldh a, [nes_reset_count]").unwrap();
+    writeln!(out, "    ld a, [nes_reset_count]").unwrap();
     writeln!(out, "    inc a").unwrap();
-    writeln!(out, "    ldh [nes_reset_count], a").unwrap();
+    writeln!(out, "    ld [nes_reset_count], a").unwrap();
     emit_pc_dispatch(&mut out, options.reset);
     writeln!(out).unwrap();
 
-    for addr in &selected {
-        let block = graph.blocks.get(addr).expect("selected block must exist");
-        let bank = banks[addr];
+    let selected_list: Vec<u16> = selected.iter().copied().collect();
+    // Defer fallthrough jumps so consecutive same-bank blocks can share a
+    // SECTION and fall through in place instead of paying `jp nes_XXXX`.
+    let mut pending_fallthrough: Option<(u16 /*target*/, u16 /*from_bank*/)> = None;
+    let mut section_offs: BTreeMap<u16, usize> = BTreeMap::new();
+    let mut section_pc: usize = 0;
 
-        writeln!(
-            out,
-            "SECTION \"NES block {addr:04X}\", ROMX, BANK[{bank}]"
-        )
-        .unwrap();
+    for (idx, addr) in selected_list.iter().copied().enumerate() {
+        let block = graph.blocks.get(&addr).expect("selected block must exist");
+        let bank = banks[&addr];
+
+        let continue_fallthrough = matches!(
+            pending_fallthrough,
+            Some((target, from_bank)) if target == addr && from_bank == bank
+        );
+        if continue_fallthrough {
+            pending_fallthrough = None;
+        } else {
+            if let Some((target, from_bank)) = pending_fallthrough.take() {
+                // Section is closing; range for jr no longer matters after reset.
+                emit_known_target(
+                    &mut out,
+                    target,
+                    from_bank,
+                    &banks,
+                    Some(&section_offs),
+                    section_pc,
+                );
+                writeln!(out).unwrap();
+            }
+            writeln!(
+                out,
+                "SECTION \"NES block {addr:04X}\", ROMX, BANK[{bank}]"
+            )
+            .unwrap();
+            section_offs.clear();
+            section_pc = 0;
+        }
+
+        section_offs.insert(block.start, section_pc);
         writeln!(out, "nes_{:04X}:", block.start).unwrap();
 
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
         writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
         writeln!(out, "    call nes_profile_trace_pc").unwrap();
         writeln!(out, "ENDC").unwrap();
+        // Profile-trace body is stripped in release; do not charge section_pc.
 
         if options.debug_trace {
             // Keep an exact current NES-PC breadcrumb even when optimized direct
             // jumps bypass the dynamic dispatcher.
+            let before = out.len();
             writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
             writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
             writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
             writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+            section_pc += approx_code_bytes(&out[before..]);
         }
 
         if poll_points.contains(&block.start) {
             // Usually there is no pending frame, so loop safe-points pay only
-            // a WRAM byte test instead of a helper call and live LY polling.
-            writeln!(out, "    ld a, [nes_host_vblank_pending]").unwrap();
+            // an HRAM byte test instead of a helper call and live LY polling.
+            let before = out.len();
+            writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jr z, :+").unwrap();
             writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
@@ -303,9 +370,11 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
             writeln!(out, ":").unwrap();
+            section_pc += approx_code_bytes(&out[before..]);
         }
 
-        for instruction in &block.instructions {
+        let mut pending: Vec<IrOp> = Vec::new();
+        let write_insn_comment = |out: &mut String, instruction: &crate::cpu6502::DecodedInstruction| {
             writeln!(
                 out,
                 "    ; ${:04X}: ${:02X} {:?} {:?}",
@@ -315,23 +384,61 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 instruction.def.mode
             )
             .unwrap();
+        };
 
+        for instruction in &block.instructions {
             match ir::lower_instruction(*instruction) {
                 Ok(ops) => {
-                    if !emit_static_control(&mut out, &ops, bank, &banks) {
-                        out.push_str(&lr35902::emit_ops(&ops));
+                    // Probe without writing: static control (branch/jmp) clobbers A.
+                    let mut probe = String::new();
+                    if emit_static_control(&mut probe, &ops, bank, &banks, None, 0) {
+                        if !pending.is_empty() {
+                            let before = out.len();
+                            out.push_str(&lr35902::emit_ops(&pending));
+                            section_pc += approx_code_bytes(&out[before..]);
+                            pending.clear();
+                        }
+                        write_insn_comment(&mut out, instruction);
+                        let before = out.len();
+                        let _ = emit_static_control(
+                            &mut out,
+                            &ops,
+                            bank,
+                            &banks,
+                            Some(&section_offs),
+                            section_pc,
+                        );
+                        section_pc += approx_code_bytes(&out[before..]);
+                    } else {
+                        write_insn_comment(&mut out, instruction);
+                        pending.extend(ops);
                     }
                 }
                 Err(err) => {
+                    if !pending.is_empty() {
+                        let before = out.len();
+                        out.push_str(&lr35902::emit_ops(&pending));
+                        section_pc += approx_code_bytes(&out[before..]);
+                        pending.clear();
+                    }
+                    write_insn_comment(&mut out, instruction);
+                    let before = out.len();
                     writeln!(out, "    ; TODO {err}").unwrap();
                     writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
                     writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
                     writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
                     writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
                     writeln!(out, "    jp nes_unimplemented").unwrap();
+                    section_pc += approx_code_bytes(&out[before..]);
                     break;
                 }
             }
+        }
+        if !pending.is_empty() {
+            let before = out.len();
+            out.push_str(&lr35902::emit_ops(&pending));
+            section_pc += approx_code_bytes(&out[before..]);
+            pending.clear();
         }
 
         if let Some(last) = block.instructions.last() {
@@ -342,10 +449,40 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                     .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                     .and_then(|edge| edge.target)
                 {
-                    emit_known_target(&mut out, target, bank, &banks);
+                    let next = selected_list.get(idx + 1).copied();
+                    if next == Some(target) && banks.get(&target) == Some(&bank) {
+                        // Next emitted block is this fallthrough and shares our
+                        // bank — keep the section open and fall through.
+                        pending_fallthrough = Some((target, bank));
+                    } else {
+                        let before = out.len();
+                        emit_known_target(
+                            &mut out,
+                            target,
+                            bank,
+                            &banks,
+                            Some(&section_offs),
+                            section_pc,
+                        );
+                        section_pc += approx_code_bytes(&out[before..]);
+                    }
                 }
             }
         }
+        writeln!(out).unwrap();
+    }
+
+    if let Some((target, from_bank)) = pending_fallthrough.take() {
+        let before = out.len();
+        emit_known_target(
+            &mut out,
+            target,
+            from_bank,
+            &banks,
+            Some(&section_offs),
+            section_pc,
+        );
+        let _ = approx_code_bytes(&out[before..]);
         writeln!(out).unwrap();
     }
 
@@ -537,5 +674,25 @@ mod tests {
         assert!(asm.contains("SECTION \"NES dispatch table 0\", ROMX[$4000], BANK[32]"));
         assert!(asm.contains("db BANK(nes_8000), $00"));
         assert!(asm.contains("dw nes_8000"));
+    }
+
+    #[test]
+    fn fallthrough_chains_share_section_without_jp() {
+        // LDA #$00 / BEQ +1 / RTS / RTS → $8000 falls through into $8004.
+        let mut prg = vec![0xEA; 0x8000];
+        prg[0..6].copy_from_slice(&[0xA9, 0x00, 0xF0, 0x01, 0x60, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg(
+            &graph,
+            EmitOptions {
+                reset: 0x8000,
+                max_blocks: Some(8),
+                debug_trace: false,
+            },
+        );
+        assert!(asm.contains("SECTION \"NES block 8000\", ROMX, BANK["));
+        assert!(asm.contains("nes_8004:"));
+        assert!(!asm.contains("SECTION \"NES block 8004\""));
+        assert!(!asm.contains("jp nes_8004"));
     }
 }

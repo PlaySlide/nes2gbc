@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Cache hot 6502 X/Y values in unused LR35902 B/C within a basic block.
+
+This is intentionally local and conservative. We only use B/C because both
+host interrupt handlers preserve BC; D/E are not safe across STAT. Blocks that
+contain any ordinary CALL are skipped because runtime helpers do not promise to
+preserve BC. The optional profile-trace helper is allowed: it explicitly saves
+and restores BC.
+
+For an eligible block, a cache is only worthwhile when the estimated cycle
+saving is positive. Cache initialization is lazy:
+
+* if the first X/Y access is a load, keep that first HRAM load and copy A into
+  the cache register; later reloads become `ld a,b/c`;
+* if the first X/Y access is a store, the canonical store also initializes the
+  cache, so no HRAM seed load is needed at all.
+
+This avoids the old redundant block-entry seed followed by an immediate cached
+reload at the first real use, and admits some blocks where a write establishes
+the cached value before the first read.
+
+Canonical HRAM state remains authoritative. Every write to nes_x/nes_y still
+happens normally and is mirrored into the chosen host register afterward.
+
+Validated indexed-address passes create three exact composition opportunities
+where the cached index can be copied straight into L instead of moving through
+A first:
+
+* 256-byte-aligned same-bank PRG mirrors;
+* page-aligned absolute RAM bases ($xx00 + X/Y);
+* zero-page base $00 + X/Y.
+
+All three are address formation only. Replacing `ld a,b/c ; ld l,a` with
+`ld l,b/c` changes neither LR35902 flags nor any NES-visible state.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+
+BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+CACHED_INDEX_RE = re.compile(r"ld a, ([bc])\s*;\s*cached nes_([xy])$", re.IGNORECASE)
+PAGE_BASE_RE = re.compile(r"ld hl, \$[0-9A-Fa-f]{2}00$", re.IGNORECASE)
+
+
+def code(line: str) -> str:
+    return line.split(";", 1)[0].strip()
+
+
+def next_code_index(lines: list[str], start: int, ceiling: int | None = None) -> int | None:
+    end = len(lines) if ceiling is None else min(ceiling, len(lines))
+    for i in range(start, end):
+        if code(lines[i]):
+            return i
+    return None
+
+
+def prev_code_index(lines: list[str], start: int, floor: int = 0) -> int | None:
+    for i in range(start, floor - 1, -1):
+        if code(lines[i]):
+            return i
+    return None
+
+
+@dataclass
+class Block:
+    start: int
+    end: int
+    addr: int
+
+
+def blocks(lines: list[str]) -> list[Block]:
+    labels: list[tuple[int, int]] = []
+    for i, line in enumerate(lines):
+        m = BLOCK_RE.fullmatch(code(line))
+        if m:
+            labels.append((i, int(m.group(1), 16)))
+
+    out: list[Block] = []
+    for n, (start, addr) in enumerate(labels):
+        end = labels[n + 1][0] if n + 1 < len(labels) else len(lines)
+        # Do not let the last canonical block absorb later dispatch/mirror data.
+        for j in range(start + 1, end):
+            if code(lines[j]).startswith("SECTION "):
+                end = j
+                break
+        out.append(Block(start, end, addr))
+    return out
+
+
+def uses_reg(body: list[str], reg: str) -> bool:
+    r = reg.lower()
+    single = re.compile(rf"\b{r}\b")
+    pair = re.compile(r"\bbc\b")
+    for line in body:
+        c = code(line).lower()
+        if not c or c.endswith(":"):
+            continue
+        if single.search(c):
+            return True
+        if pair.search(c):
+            return True
+    return False
+
+
+def has_unsafe_call(body: list[str]) -> bool:
+    for line in body:
+        c = code(line)
+        if not c.startswith("call "):
+            continue
+        if c == "call nes_profile_trace_pc":
+            continue
+        return True
+    return False
+
+
+def access_kind(line: str, state: str) -> str | None:
+    c = code(line)
+    if c in {f"ldh a, [{state}]", f"ld a, [{state}]"}:
+        return "load"
+    if c in {f"ldh [{state}], a", f"ld [{state}], a"}:
+        return "store"
+    return None
+
+
+def state_stats(body: list[str], state: str) -> tuple[int, int, str | None]:
+    loads = 0
+    stores = 0
+    first: str | None = None
+    for line in body:
+        kind = access_kind(line, state)
+        if kind is None:
+            continue
+        if first is None:
+            first = kind
+        if kind == "load":
+            loads += 1
+        else:
+            stores += 1
+    return loads, stores, first
+
+
+def estimated_saving(loads: int, stores: int, first: str | None) -> int:
+    """Estimated M-cycle saving relative to canonical HRAM reloads.
+
+    HRAM load costs 3 M-cycles; cached `ld a,r` costs 1; cache refresh `ld r,a`
+    costs 1. If the first access is a load, that load remains and pays one extra
+    cache-copy cycle, so saving is 2*loads - 3 - stores. If the first access is
+    a store, that store initializes the cache for free apart from its required
+    mirror, so saving is 2*loads - stores.
+    """
+    if first == "load":
+        return 2 * loads - 3 - stores
+    if first == "store":
+        return 2 * loads - stores
+    return -1
+
+
+def fold_direct_cached_indexes(lines: list[str]) -> tuple[int, int, int]:
+    """Feed cached X/Y directly into L at exact proven low-byte index sites."""
+    prg = 0
+    page = 0
+    zp0 = 0
+
+    for i in range(len(lines)):
+        m = CACHED_INDEX_RE.fullmatch(lines[i].strip())
+        if not m:
+            continue
+        reg = m.group(1).lower()
+        j = next_code_index(lines, i + 1, min(len(lines), i + 10))
+        if j is None or code(lines[j]) != "ld l, a":
+            continue
+
+        kind: str | None = None
+
+        # PRG mirror pass marks the LD L,A itself and only emits this form for
+        # an aligned 256-byte read table. Retain the following [HL] read check.
+        if "256-byte-aligned table: low byte is index" in lines[j]:
+            k = next_code_index(lines, j + 1, min(len(lines), j + 5))
+            if k is not None and code(lines[k]) == "ld a, [hl]":
+                kind = "prg"
+
+        # Zero-page $00 has its dead address-only AND removed immediately
+        # between the cached index load and LD L,A.
+        if kind is None and any(
+            "dead host-flag scaffold removed: zero-page $00 index" in lines[k]
+            for k in range(i + 1, j)
+        ):
+            kind = "zp0"
+
+        # Page-aligned absolute indexing retains LD HL,$xx00 immediately before
+        # the X/Y reload, and the exact index-math marker immediately after
+        # LD L,A. Requiring both keeps this fold tied to the validated rewrite.
+        if kind is None:
+            p = prev_code_index(lines, i - 1, max(0, i - 4))
+            page_marker = any(
+                "dead host-flag scaffold removed: page-aligned index" in lines[k]
+                for k in range(j + 1, min(len(lines), j + 6))
+            )
+            if p is not None and PAGE_BASE_RE.fullmatch(code(lines[p])) and page_marker:
+                kind = "page"
+
+        if kind is None:
+            continue
+
+        indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+        lines[i] = f"{indent}; cached index moved directly into L\n"
+        if kind == "prg":
+            lines[j] = f"{indent}ld l, {reg} ; cached X/Y + 256-byte-aligned PRG table\n"
+            prg += 1
+        elif kind == "page":
+            lines[j] = f"{indent}ld l, {reg} ; cached X/Y + page-aligned RAM base\n"
+            page += 1
+        else:
+            lines[j] = f"{indent}ld l, {reg} ; cached X/Y + zero-page $00 base\n"
+            zp0 += 1
+
+    return prg, page, zp0
+
+
+def optimize(lines: list[str]) -> tuple[int, int, int, int, int, int, int, int]:
+    bs = blocks(lines)
+    cached_x_blocks = 0
+    cached_y_blocks = 0
+    replaced_loads = 0
+    load_seeds = 0
+    store_seeds = 0
+
+    # Rewrite bottom-up even though we no longer insert list elements; keeping
+    # this order makes the pass robust if a later refinement adds local inserts.
+    for block in reversed(bs):
+        body = lines[block.start + 1 : block.end]
+        if has_unsafe_call(body):
+            continue
+
+        free_regs = [r for r in ("b", "c") if not uses_reg(body, r)]
+        if not free_regs:
+            continue
+
+        candidates: list[tuple[int, str, int, int, str]] = []
+        for state in ("nes_x", "nes_y"):
+            loads, stores, first = state_stats(body, state)
+            saving = estimated_saving(loads, stores, first)
+            if saving > 0 and first is not None:
+                candidates.append((saving, state, loads, stores, first))
+
+        if not candidates:
+            continue
+        candidates.sort(reverse=True)
+
+        assignment: dict[str, str] = {}
+        for (_saving, state, _loads, _stores, _first), reg in zip(candidates, free_regs):
+            assignment[state] = reg
+        if not assignment:
+            continue
+
+        initialized: set[str] = set()
+        i = block.start + 1
+        while i < block.end:
+            c = code(lines[i])
+            for state, reg in assignment.items():
+                load_forms = {f"ldh a, [{state}]", f"ld a, [{state}]"}
+                store_forms = {f"ldh [{state}], a", f"ld [{state}], a"}
+
+                if c in load_forms:
+                    indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                    if state in initialized:
+                        lines[i] = f"{indent}ld a, {reg} ; cached {state}\n"
+                        replaced_loads += 1
+                    else:
+                        # Keep the first canonical HRAM load, then seed the cache
+                        # from the exact value now in A. LD does not affect flags.
+                        lines[i] = lines[i] + f"{indent}ld {reg}, a ; seed {state} cache\n"
+                        initialized.add(state)
+                        load_seeds += 1
+                    break
+
+                if c in store_forms:
+                    indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                    was_initialized = state in initialized
+                    # Keep the canonical write exactly as-is, then mirror the
+                    # new value into the host cache without touching flags.
+                    lines[i] = lines[i] + f"{indent}ld {reg}, a ; refresh {state} cache\n"
+                    initialized.add(state)
+                    if not was_initialized:
+                        store_seeds += 1
+                    break
+            i += 1
+
+        if "nes_x" in assignment:
+            cached_x_blocks += 1
+        if "nes_y" in assignment:
+            cached_y_blocks += 1
+
+    prg_direct, page_direct, zp0_direct = fold_direct_cached_indexes(lines)
+    return (
+        cached_x_blocks,
+        cached_y_blocks,
+        replaced_loads,
+        load_seeds,
+        store_seeds,
+        prg_direct,
+        page_direct,
+        zp0_direct,
+    )
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("asm", type=Path)
+    args = p.parse_args()
+
+    lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
+    (
+        x_blocks,
+        y_blocks,
+        loads,
+        load_seeds,
+        store_seeds,
+        prg_direct,
+        page_direct,
+        zp0_direct,
+    ) = optimize(lines)
+    args.asm.write_text("".join(lines), encoding="utf-8")
+    print(
+        f"xy-cache: cached X in {x_blocks} blocks, Y in {y_blocks} blocks, "
+        f"replaced {loads} HRAM index reloads; seeded {load_seeds} on first load / "
+        f"{store_seeds} from prior store; fed cached index directly into "
+        f"{prg_direct} aligned PRG, {page_direct} page-aligned RAM, "
+        f"{zp0_direct} zero-page-$00 site(s)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

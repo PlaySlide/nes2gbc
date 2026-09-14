@@ -165,8 +165,10 @@ nes_video_flush_nametable_queue_atomic:
     or NES_DIAG_EVENT_QUEUE_FLUSH
     ld [nes_diag_event_flags], a
 
+IF DEF(NES2GBC_DEBUG_TRACE)
     ; Start a fresh diagnostic summary for exactly the transaction that is
-    ; about to become visible.
+    ; about to become visible. TRACE builds only — release used to pay this
+    ; (and the per-tile update below) on every published nametable byte.
     xor a
     ld [nes_ntdiag_tile_count], a
     ld [nes_ntdiag_phys_mask], a
@@ -191,40 +193,16 @@ nes_video_flush_nametable_queue_atomic:
     xor a
 .diag_display_store:
     ld [nes_ntdiag_display_map], a
+ENDC
 
-    ; Fixed-screen games have no raster deadline to preserve. Their staged
-    ; NMI updates are often a short vertical column; publishing that column
-    ; through HBlank can visibly expose one tile at a time for 60+ scanlines.
-    ; For frames with no split, no synthetic vertical seam, and no SMB stitch,
-    ; make the transaction truly atomic by disabling LCD during this VBlank.
-    ;
-    ; Raster/seam/stitch users must keep LCD timing alive because resetting LY
-    ; would destroy their presentation timing.
-    xor a
-    ld [nes_saved_lcdc], a
-
-    ldh a, [nes_split_active]
-    and a
-    jr nz, .flush_keep_lcd
-    ldh a, [nes_seam_active]
-    and a
-    jr nz, .flush_keep_lcd
-    ld a, [nes_hstitch_valid]
-    and a
-    jr nz, .flush_keep_lcd
-    ld a, [nes_hstitch_seen]
-    and a
-    jr nz, .flush_keep_lcd
-
-    ldh a, [rLCDC]
-    ld [nes_saved_lcdc], a
-    bit 7, a
-    jr z, .flush_keep_lcd
-    and $7F
-    ldh [rLCDC], a
-
-.flush_keep_lcd:
+    ; Keep the physical LCD running while publishing the staged transaction.
+    ; Start with the VBlank fast path; if publication runs past VBlank,
+    ; nes_video_wait_vram falls back to waiting around mode 3 safely.
+    ; Never disable LCD here: real GBC hardware visibly flashes white when
+    ; LCDC.7 is cleared, even when the transition begins during VBlank.
+    ; Prefer unlocked VRAM writes while this host VBlank still owns the bus.
     ld a, $01
+    ld [nes_vram_unlocked], a
     ldh [rSVBK], a
     ld de, nes_nametable_queue
 
@@ -245,6 +223,7 @@ nes_video_flush_nametable_queue_atomic:
     inc de
     ld h, a
 
+IF DEF(NES2GBC_DEBUG_TRACE)
     ; Record only tile-cell destinations; attribute writes use a different
     ; address geometry and would muddy the column range.
     ld a, h
@@ -334,6 +313,7 @@ nes_video_flush_nametable_queue_atomic:
     ld [nes_ntdiag_max_row], a
 
 .diag_done:
+ENDC
     push de
     ld a, [hl]
 
@@ -360,11 +340,15 @@ nes_video_flush_nametable_queue_atomic:
     jp .loop
 
 .done:
+    xor a
+    ld [nes_vram_unlocked], a
+IF DEF(NES2GBC_DEBUG_TRACE)
     ld a, [nes_ntdiag_commit_serial]
     inc a
     ld [nes_ntdiag_commit_serial], a
+ENDC
 
-    ; Reset transaction before re-enabling scanout.
+    ; Reset the completed transaction. Scanout stayed enabled throughout.
     xor a
     ld [nes_nametable_queue_ptr_lo], a
     ld [nes_nametable_queue_overflow], a
@@ -373,13 +357,6 @@ nes_video_flush_nametable_queue_atomic:
 
     xor a
     ldh [rVBK], a
-
-    ; Restore LCD only when this flush took the fixed-screen atomic path.
-    ; A saved value with bit 7 clear means no active LCD was disabled here.
-    ld a, [nes_saved_lcdc]
-    bit 7, a
-    ret z
-    ldh [rLCDC], a
     ret
 
 ; Rebuild both physical GBC background maps from authoritative NES
@@ -434,6 +411,17 @@ nes_video_rebuild_generic_maps_atomic:
 ; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
 ; entire frame waiting for LY>=144 for every translated NES PPU write.
 nes_video_wait_vram:
+    ; Host publish can set nes_vram_unlocked while still in VBlank. Skip the
+    ; STAT poll until scanout resumes (LY < 144), then fall back to waiting.
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, .locked
+    ldh a, [rLY]
+    cp 144
+    ret nc
+    xor a
+    ld [nes_vram_unlocked], a
+.locked:
     ldh a, [rLCDC]
     bit 7, a
     ret z
@@ -1803,13 +1791,12 @@ nes_video_refresh_stitch_column:
     ld [nes_hstitch_copy_skip], a
 
     ld a, $01
+    ld [nes_vram_unlocked], a
     ldh [rSVBK], a
 
     ; Rebuild this stitched column row-by-row from authoritative NES state.
-    ; Tile ID and palette attribute are published together for each cell.
-    ; The old two-pass implementation could reuse a destination cell for a new
-    ; world tile while leaving its previous question/coin palette attached
-    ; until a later attribute pass or full rebuild.
+    ; Tile ID and palette are published together. One VRAM wait covers both
+    ; VBK writes for the row; unlocked mode skips waits while LY stays in VB.
     ld a, [nes_hstitch_copy_len]
     and a
     jr z, .tile_source0
@@ -1825,7 +1812,6 @@ nes_video_refresh_stitch_column:
     ld b, $1E                    ; 30 NES tile rows
 
 .tile_loop:
-    ; Publish tile ID.
     ld a, [hl]
     ld c, a
     call nes_video_wait_vram
@@ -1834,8 +1820,6 @@ nes_video_refresh_stitch_column:
     ld a, c
     ld [de], a
 
-    ; Derive this exact tile's palette directly from authoritative NES
-    ; attribute RAM, then combine it with the captured playfield pattern bank.
     push bc
     push de
     push hl
@@ -1847,14 +1831,13 @@ nes_video_refresh_stitch_column:
     pop hl
     pop de
 
-    call nes_video_wait_vram
+    ; Same accessibility window as the tile-id write above.
     ld a, $01
     ldh [rVBK], a
     ld a, c
     ld [de], a
     pop bc
 
-    ; Advance source and destination by one tile row.
     ld a, l
     add $20
     ld l, a
@@ -1871,6 +1854,7 @@ nes_video_refresh_stitch_column:
     jr nz, .tile_loop
 
     xor a
+    ld [nes_vram_unlocked], a
     ldh [rVBK], a
     ret
 
