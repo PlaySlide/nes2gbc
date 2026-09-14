@@ -1,0 +1,80 @@
+name: Merge perf branch-fusion into APU branch
+on:
+  push:
+    branches: [apu/correctness-pass-2]
+    paths: [.github/workflows/merge-perf-branch-fusion.yml]
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure git
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin perf/branch-fusion
+      - name: Merge perf branch and resolve APU dispatch conflict
+        shell: bash
+        run: |
+          set +e
+          git merge --no-commit --no-ff origin/perf/branch-fusion
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            test "$conflicts" = "src/lr35902.rs"
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/lr35902.rs')
+          s = p.read_text()
+          start = s.index('<<<<<<< HEAD\n')
+          end_marker = '>>>>>>> origin/perf/branch-fusion\n'
+          end = s.index(end_marker, start) + len(end_marker)
+          block = s[start:end]
+          assert '0x4000..=0x4013 | 0x4015 | 0x4017' in block
+          assert '_ => {}' in block
+          replacement = '''                    0x4000..=0x4013 | 0x4015 | 0x4017 => {
+                        if src == Register::A {
+                            if !a_live {
+                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            }
+                        } else {
+                            writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                        }
+                        writeln!(out, "    ld e, a").unwrap();
+                        writeln!(out, "    ld l, ${:02X}", addr as u8).unwrap();
+                        writeln!(out, "    call nes_apu_write").unwrap();
+                        a_live = false;
+                    }
+                    _ => {}
+'''
+          p.write_text(s[:start] + replacement + s[end:])
+          PY
+            git add src/lr35902.rs
+          fi
+          test -z "$(git diff --name-only --diff-filter=U)"
+          ! grep -R -n '^<<<<<<<\|^=======\|^>>>>>>>' src runtime
+      - name: Rust tests
+        run: cargo test --all-targets
+      - name: Rust check
+        run: cargo check --all-targets
+      - name: Generate synthetic NES ROM
+        run: python3 tools/make_smoke_rom.py /tmp/nes2gbc-smoke.nes
+      - name: Recompile to RGBDS source
+        run: cargo run -- /tmp/nes2gbc-smoke.nes --emit-asm runtime/generated.asm --max-blocks 16
+      - name: Assemble generated GBC ROM with RGBDS
+        run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make
+      - name: Verify ROM exists
+        run: test -s runtime/build/runtime.gbc
+      - name: Commit merge and remove temporary workflows
+        run: |
+          rm -f .github/workflows/inspect-perf-branch-fusion-merge.yml
+          rm -f .github/workflows/merge-perf-branch-fusion.yml
+          git add -A
+          git commit -m "Merge perf/branch-fusion into APU correctness branch"
+          git push origin HEAD:apu/correctness-pass-2
