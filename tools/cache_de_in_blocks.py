@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Use otherwise-free LR35902 D/E as a second block-local cache tier.
+"""Use LR35902 D/E as short-lived caches between native D/E uses.
 
-The validated B/C cache passes run first and retain priority. This pass fills
-only D/E with profitable remaining values from:
-  * canonical 6502 X/Y/A HRAM state; and
-  * direct NES zero-page WRAM bytes ($C000-$C0FF).
+The validated B/C cache passes run first and retain priority.  The original DE
+prototype required D or E to be unused for an entire generated basic block; in
+practice the emitter uses E as an ALU/compare temporary and D/E for address work,
+so useful blocks almost never qualified.
 
-It skips any block containing a CALL, so runtime helper register conventions are
-irrelevant. D/E are safe across enabled hardware interrupts: VBlank saves DE,
-and the STAT ISR plus its split/map callees do not touch D/E.
+This pass instead treats every native D/E use, helper call, and local host
+control-flow edge as a hard cache barrier.  Inside each straight-line window
+between barriers, the selected register is otherwise dead and may cache one
+profitable remaining value from:
+  * canonical 6502 X/Y/A HRAM state; or
+  * direct NES zero-page WRAM ($C000-$C0FF).
 
-Canonical state remains authoritative. Stores are preserved and mirrored into
-the cache. For zero-page values, blocks with any indirect host-memory access are
-not considered for ZP caching because that access could alias the cached byte.
+A barrier simply discards the cache; canonical NES state is always authoritative.
+Stores remain in place and refresh an active cache, so no writeback is required.
+VBlank saves DE and the STAT ISR plus its split/map callees do not touch D/E,
+therefore an interrupt cannot invalidate a live window cache.
+
+Zero-page caching remains conservative: any indirect host-memory access inside a
+window rejects ZP candidates because it could alias the cached byte.
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
-ZP_LOAD_RE = re.compile(r"ld a, \[\$C0([0-9A-Fa-f]{2})\]$")
+ZP_LOAD_RE = re.compile(r"ld a, \[\$C0([0-9A-Fa-f]{2})\]$", re.IGNORECASE)
 ZP_STORE_RE = re.compile(r"ld \[\$C0([0-9A-Fa-f]{2})\], ([a-z0-9$]+)$", re.IGNORECASE)
 INDIRECT_MEM_RE = re.compile(r"\[(?:hl|de|bc|hli|hld)\]", re.IGNORECASE)
 CACHED_INDEX_RE = re.compile(
@@ -38,6 +45,11 @@ def code(line: str) -> str:
 
 def indent_of(line: str) -> str:
     return line[: len(line) - len(line.lstrip())]
+
+
+def normalize(lines: list[str]) -> None:
+    """Split transformations that appended a second physical asm line."""
+    lines[:] = "".join(lines).splitlines(keepends=True)
 
 
 def next_code_index(lines: list[str], start: int, ceiling: int | None = None) -> int | None:
@@ -80,27 +92,34 @@ def blocks(lines: list[str]) -> list[Block]:
     return out
 
 
-def uses_de_reg(body: list[str], reg: str) -> bool:
-    single = re.compile(rf"\b{reg}\b", re.IGNORECASE)
-    pair = re.compile(r"\bde\b", re.IGNORECASE)
-    for line in body:
-        c = code(line)
-        if not c or c.endswith(":"):
-            continue
-        if single.search(c) or pair.search(c):
-            return True
-    return False
+def line_uses_reg(c: str, reg: str) -> bool:
+    if not c:
+        return False
+    if re.search(r"\bde\b", c, re.IGNORECASE):
+        return True
+    return re.search(rf"\b{reg}\b", c, re.IGNORECASE) is not None
 
 
-def has_call(body: list[str]) -> bool:
-    return any(code(line).startswith("call ") for line in body)
+def is_control_barrier(c: str) -> bool:
+    if not c:
+        return False
+    if c.endswith(":"):
+        return True
+    low = c.lower()
+    return low.startswith(("call ", "jr ", "jp ", "ret", "reti"))
+
+
+def is_barrier(line: str, reg: str) -> bool:
+    c = code(line)
+    return is_control_barrier(c) or line_uses_reg(c, reg)
 
 
 def state_access(line: str, state: str) -> str | None:
-    c = code(line)
-    if c in {f"ldh a, [{state}]", f"ld a, [{state}]"}:
+    c = code(line).lower()
+    s = state.lower()
+    if c in {f"ldh a, [{s}]", f"ld a, [{s}]"}:
         return "load"
-    if c in {f"ldh [{state}], a", f"ld [{state}], a"}:
+    if c in {f"ldh [{s}], a", f"ld [{s}], a"}:
         return "store"
     return None
 
@@ -122,6 +141,7 @@ def state_stats(body: list[str], state: str) -> tuple[int, int, str | None]:
 
 
 def hram_gain(loads: int, stores: int, first: str | None) -> int:
+    # HRAM load 3M -> register load 1M.  Seed/refresh copies cost 1M.
     if first == "load":
         return 2 * loads - 3 - stores
     if first == "store":
@@ -158,11 +178,114 @@ def zp_stats(body: list[str]) -> dict[int, tuple[int, int, bool, str | None]]:
 
 
 def zp_gain(loads: int, stores: int, first: str | None) -> int:
+    # Absolute WRAM load 4M -> register load 1M.
     if first == "load":
         return 3 * loads - 4 - stores
     if first == "store":
         return 3 * loads - stores
     return -1
+
+
+@dataclass
+class Stats:
+    windows: int = 0
+    state_values: int = 0
+    zp_values: int = 0
+    replaced_loads: int = 0
+    mirrored_stores: int = 0
+    load_seeds: int = 0
+    store_seeds: int = 0
+
+
+def optimize_window(lines: list[str], start: int, end: int, reg: str, stats: Stats) -> None:
+    if end <= start:
+        return
+    body = lines[start:end]
+
+    candidates: list[tuple[int, str, str | int]] = []
+    for state in ("nes_x", "nes_y", "nes_a"):
+        loads, stores, first = state_stats(body, state)
+        gain = hram_gain(loads, stores, first)
+        if gain > 0:
+            candidates.append((gain, "state", state))
+
+    zp_allowed = not any(INDIRECT_MEM_RE.search(code(line)) for line in body)
+    if zp_allowed:
+        for addr, (loads, stores, bad, first) in zp_stats(body).items():
+            if bad or loads == 0:
+                continue
+            gain = zp_gain(loads, stores, first)
+            if gain > 0:
+                candidates.append((gain, "zp", addr))
+
+    if not candidates:
+        return
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _gain, kind, key = candidates[0]
+    initialized = False
+
+    for i in range(start, end):
+        ind = indent_of(lines[i])
+
+        if kind == "state":
+            assert isinstance(key, str)
+            access = state_access(lines[i], key)
+            if access == "load":
+                if initialized:
+                    lines[i] = f"{ind}ld a, {reg} ; DE cache {key}\n"
+                    stats.replaced_loads += 1
+                else:
+                    lines[i] = lines[i] + f"{ind}ld {reg}, a ; seed DE cache {key}\n"
+                    initialized = True
+                    stats.load_seeds += 1
+            elif access == "store":
+                was_initialized = initialized
+                lines[i] = lines[i] + f"{ind}ld {reg}, a ; refresh DE cache {key}\n"
+                stats.mirrored_stores += 1
+                initialized = True
+                if not was_initialized:
+                    stats.store_seeds += 1
+        else:
+            assert isinstance(key, int)
+            c = code(lines[i])
+            lm = ZP_LOAD_RE.fullmatch(c)
+            if lm and int(lm.group(1), 16) == key:
+                if initialized:
+                    lines[i] = f"{ind}ld a, {reg} ; DE cache NES ZP ${key:02X}\n"
+                    stats.replaced_loads += 1
+                else:
+                    lines[i] = lines[i] + f"{ind}ld {reg}, a ; seed DE cache NES ZP ${key:02X}\n"
+                    initialized = True
+                    stats.load_seeds += 1
+                continue
+            sm = ZP_STORE_RE.fullmatch(c)
+            if sm and int(sm.group(1), 16) == key and sm.group(2).lower() == "a":
+                was_initialized = initialized
+                lines[i] = lines[i] + f"{ind}ld {reg}, a ; refresh DE cache NES ZP ${key:02X}\n"
+                stats.mirrored_stores += 1
+                initialized = True
+                if not was_initialized:
+                    stats.store_seeds += 1
+
+    stats.windows += 1
+    if kind == "state":
+        stats.state_values += 1
+    else:
+        stats.zp_values += 1
+
+
+def optimize_reg(lines: list[str], reg: str, stats: Stats) -> None:
+    # Work backwards so appending seed/refresh text cannot invalidate later
+    # block boundaries.  Each straight-line window ends at a native use of the
+    # register or at host control flow.
+    for block in reversed(blocks(lines)):
+        window_start = block.start + 1
+        for i in range(block.start + 1, block.end):
+            if is_barrier(lines[i], reg):
+                optimize_window(lines, window_start, i, reg, stats)
+                window_start = i + 1
+        optimize_window(lines, window_start, block.end, reg, stats)
 
 
 def fold_direct_cached_indexes(lines: list[str]) -> tuple[int, int, int]:
@@ -177,7 +300,6 @@ def fold_direct_cached_indexes(lines: list[str]) -> tuple[int, int, int]:
             continue
 
         kind: str | None = None
-
         if "256-byte-aligned table: low byte is index" in lines[j]:
             k = next_code_index(lines, j + 1, min(len(lines), j + 5))
             if k is not None and code(lines[k]) == "ld a, [hl]":
@@ -216,131 +338,14 @@ def fold_direct_cached_indexes(lines: list[str]) -> tuple[int, int, int]:
     return prg, page, zp0
 
 
-def optimize(lines: list[str]) -> tuple[int, int, int, int, int, int, int, int, int, int]:
-    cached_blocks = cached_state = cached_zp = 0
-    replaced_loads = mirrored_stores = load_seeds = store_seeds = 0
-
-    for block in reversed(blocks(lines)):
-        body = lines[block.start + 1 : block.end]
-        if has_call(body):
-            continue
-
-        free_regs = [r for r in ("d", "e") if not uses_de_reg(body, r)]
-        if not free_regs:
-            continue
-
-        candidates: list[tuple[int, str, str | int]] = []
-
-        for state in ("nes_x", "nes_y", "nes_a"):
-            loads, stores, first = state_stats(body, state)
-            gain = hram_gain(loads, stores, first)
-            if gain > 0:
-                candidates.append((gain, "state", state))
-
-        zp_allowed = not any(INDIRECT_MEM_RE.search(code(line)) for line in body)
-        if zp_allowed:
-            for addr, (loads, stores, bad, first) in zp_stats(body).items():
-                if bad or loads == 0:
-                    continue
-                gain = zp_gain(loads, stores, first)
-                if gain > 0:
-                    candidates.append((gain, "zp", addr))
-
-        if not candidates:
-            continue
-
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        chosen = candidates[: len(free_regs)]
-        assignment: dict[tuple[str, str | int], str] = {
-            (kind, key): reg for (_gain, kind, key), reg in zip(chosen, free_regs)
-        }
-        initialized: set[tuple[str, str | int]] = set()
-
-        i = block.start + 1
-        while i < block.end:
-            c = code(lines[i])
-            handled = False
-
-            for state in ("nes_x", "nes_y", "nes_a"):
-                key = ("state", state)
-                reg = assignment.get(key)
-                if reg is None:
-                    continue
-                kind = state_access(lines[i], state)
-                if kind is None:
-                    continue
-
-                ind = indent_of(lines[i])
-                if kind == "load":
-                    if key in initialized:
-                        lines[i] = f"{ind}ld a, {reg} ; DE cache {state}\n"
-                        replaced_loads += 1
-                    else:
-                        lines[i] = lines[i] + f"{ind}ld {reg}, a ; seed DE cache {state}\n"
-                        initialized.add(key)
-                        load_seeds += 1
-                else:
-                    was_initialized = key in initialized
-                    lines[i] = lines[i] + f"{ind}ld {reg}, a ; refresh DE cache {state}\n"
-                    mirrored_stores += 1
-                    initialized.add(key)
-                    if not was_initialized:
-                        store_seeds += 1
-                handled = True
-                break
-
-            if handled:
-                i += 1
-                continue
-
-            if m := ZP_LOAD_RE.fullmatch(c):
-                addr = int(m.group(1), 16)
-                key = ("zp", addr)
-                reg = assignment.get(key)
-                if reg is not None:
-                    ind = indent_of(lines[i])
-                    if key in initialized:
-                        lines[i] = f"{ind}ld a, {reg} ; DE cache NES ZP ${addr:02X}\n"
-                        replaced_loads += 1
-                    else:
-                        lines[i] = lines[i] + f"{ind}ld {reg}, a ; seed DE cache NES ZP ${addr:02X}\n"
-                        initialized.add(key)
-                        load_seeds += 1
-                    i += 1
-                    continue
-
-            if m := ZP_STORE_RE.fullmatch(c):
-                addr = int(m.group(1), 16)
-                key = ("zp", addr)
-                reg = assignment.get(key)
-                if reg is not None and m.group(2).lower() == "a":
-                    ind = indent_of(lines[i])
-                    was_initialized = key in initialized
-                    lines[i] = lines[i] + f"{ind}ld {reg}, a ; refresh DE cache NES ZP ${addr:02X}\n"
-                    mirrored_stores += 1
-                    initialized.add(key)
-                    if not was_initialized:
-                        store_seeds += 1
-
-            i += 1
-
-        cached_blocks += 1
-        cached_state += sum(1 for kind, _key in assignment if kind == "state")
-        cached_zp += sum(1 for kind, _key in assignment if kind == "zp")
-
+def optimize(lines: list[str]) -> tuple[Stats, int, int, int]:
+    stats = Stats()
+    optimize_reg(lines, "d", stats)
+    normalize(lines)
+    optimize_reg(lines, "e", stats)
+    normalize(lines)
     prg, page, zp0 = fold_direct_cached_indexes(lines)
-    return (
-        cached_blocks,
-        cached_state,
-        cached_zp,
-        replaced_loads,
-        mirrored_stores,
-        load_seeds,
-        store_seeds,
-        prg,
-        page,
-        zp0,
-    )
+    return stats, prg, page, zp0
 
 
 def main() -> int:
@@ -349,25 +354,14 @@ def main() -> int:
     args = p.parse_args()
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
-    stats = optimize(lines)
+    s, prg, page, zp0 = optimize(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
-    (
-        blocks_n,
-        state_n,
-        zp_n,
-        loads_n,
-        stores_n,
-        load_seeds,
-        store_seeds,
-        prg,
-        page,
-        zp0,
-    ) = stats
     print(
-        f"de-cache: cached {state_n} CPU-state + {zp_n} ZP value(s) across {blocks_n} blocks, "
-        f"replaced {loads_n} loads, mirrored {stores_n} stores; "
-        f"seeded {load_seeds} on first load / {store_seeds} from prior store; "
-        f"fed {prg}/{page}/{zp0} cached X/Y index(es) directly into PRG/page/ZP00 addresses"
+        f"de-cache: cached {s.state_values} CPU-state + {s.zp_values} ZP value(s) "
+        f"across {s.windows} straight-line window(s), replaced {s.replaced_loads} loads, "
+        f"mirrored {s.mirrored_stores} stores; seeded {s.load_seeds} on first load / "
+        f"{s.store_seeds} from prior store; fed {prg}/{page}/{zp0} cached X/Y "
+        f"index(es) directly into PRG/page/ZP00 addresses"
     )
     return 0
 
