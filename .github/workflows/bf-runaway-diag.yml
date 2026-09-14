@@ -1,0 +1,103 @@
+name: BF runaway diagnostic
+
+on:
+  push:
+    branches: [debug/bf-fit-runaway]
+
+permissions:
+  contents: write
+
+jobs:
+  instrument:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: debug/bf-fit-runaway
+          fetch-depth: 0
+      - name: Instrument PRG cache copy loop
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('runtime/cpu.asm')
+          s = p.read_text()
+          old = '''.copy_byte:
+              ld a, [de]
+              ld [hli], a
+              inc de
+              dec bc
+          '''
+          new = '''.copy_byte:
+              ; Diagnostic invariant: this startup-only PRG cache loop may write
+              ; only to WRAMX $D000-$DFFF.  The BF fit crash mVL shows a raw
+              ; bank-1 PRG stream walking through VRAM and later hardware I/O;
+              ; trap the instant this loop ever runs with an impossible HL.
+              ld a, h
+              and $F0
+              cp $D0
+              jr z, .copy_byte_ok
+
+              ld a, $C1
+              ld [nes_debug_fault], a
+              ld a, h
+              ld [$C830], a
+              ld a, l
+              ld [$C831], a
+              ld a, d
+              ld [$C832], a
+              ld a, e
+              ld [$C833], a
+              ld a, b
+              ld [$C834], a
+              ld a, c
+              ld [$C835], a
+              ld hl, sp+0
+              ld a, [hli]
+              ld [$C836], a
+              ld a, [hl]
+              ld [$C837], a
+              ld a, [nes_current_code_bank]
+              ld [$C838], a
+              ld a, [nes_chr_gbc_bank_base]
+              ld [$C839], a
+              ldh a, [rSVBK]
+              ld [$C83A], a
+              ldh a, [rVBK]
+              ld [$C83B], a
+              di
+          .copy_byte_fault_hang:
+              halt
+              jr .copy_byte_fault_hang
+
+          .copy_byte_ok:
+              ld a, [de]
+              ld [hli], a
+              inc de
+              dec bc
+          '''
+          if new in s:
+              raise SystemExit(0)
+          if old not in s:
+              raise SystemExit('cache copy loop signature not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Validate
+        shell: bash
+        run: |
+          git diff --check
+          cargo test --quiet
+          python3 tools/make_smoke_rom.py /tmp/nes2gbc-smoke.nes
+          cargo run --quiet -- /tmp/nes2gbc-smoke.nes --emit-asm runtime/generated.asm --max-blocks 16
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make
+      - name: Commit instrumentation
+        shell: bash
+        run: |
+          git checkout -- runtime/generated.asm || true
+          rm -rf runtime/build runtime/generated.prg.bin runtime/generated.chr.bin runtime/generated.chr.gbc.bin Cargo.lock
+          if git diff --quiet; then exit 0; fi
+          git config user.name "ChatGPT"
+          git config user.email "chatgpt@users.noreply.github.com"
+          git add runtime/cpu.asm
+          git commit -m "debug: trap BF runaway PRG cache copy"
+          git push origin HEAD:debug/bf-fit-runaway
