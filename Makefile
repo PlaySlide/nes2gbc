@@ -43,6 +43,7 @@ generate:
 		python3 tools/inline_ppustatus_generated.py runtime/generated.asm; \
 		python3 tools/specialize_sprite0_poll.py runtime/generated.asm; \
 		python3 tools/fuse_sprite0_branch.py runtime/generated.asm; \
+		python3 tools/virtualize_sprite0_waits.py runtime/generated.asm; \
 		python3 tools/dead_terminal_zn.py runtime/generated.asm; \
 		python3 tools/dead_terminal_n.py runtime/generated.asm; \
 		python3 tools/dead_terminal_carry_zn.py runtime/generated.asm; \
