@@ -111,7 +111,7 @@ fn emit_follow_hint_init(asm: &mut String, follow_slot: Option<u8>) {
 }
 
 fn emit_fit_screen_init(asm: &mut String, fit_screen: bool) {
-    asm.push_str("\n; Build-time half-scale fit-screen mode\n");
+    asm.push_str("\n; Build-time 160x120 4:3 fit-screen mode\n");
     asm.push_str("SECTION \"Generated fit-screen metadata\", ROM0\n");
     asm.push_str("nes_generated_fit_init:\n");
     if fit_screen {
@@ -302,8 +302,8 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         let converted_chr = if fit_screen {
-            println!("Fit-screen: half-scale CHR (4x4 content in 8x8 GBC tiles)");
-            assets::convert_chr_to_gbc_fit_half(cart.chr_rom)
+            println!("Fit-screen: 160x120 4:3 CHR (5x4 content in 8x8 GBC tiles)");
+            assets::convert_chr_to_gbc_fit_wide(cart.chr_rom)
         } else {
             assets::convert_chr_to_gbc(cart.chr_rom)
         };

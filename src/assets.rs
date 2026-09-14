@@ -1,10 +1,10 @@
 //! CHR asset conversion for the GBC host.
 //!
 //! `convert_chr_to_gbc` only reorders NES bitplanes into GBC row format.
-//! `convert_chr_to_gbc_fit_half` also nearest-neighbor shrinks each 8x8 tile
-//! to a 4x4 (2x2 pixel boxes), then parks that content in the top-left of an
-//! 8x8 GBC tile with color-0 padding. Pair with runtime OAM coordinate
-//! halving so multi-sprite objects still abut.
+//! `convert_chr_to_gbc_fit_wide` scales each 8x8 NES tile to a 5x4 crumb.
+//! The runtime places those crumbs at X*5/8, Y/2, producing a 160x120 4:3
+//! presentation from the NES 256x240 raster while preserving 12px letterbox
+//! bars vertically. Content is parked top-left in an 8x8 GBC sprite tile.
 
 fn nes_tile_pixels(tile: &[u8]) -> [[u8; 8]; 8] {
     let mut px = [[0u8; 8]; 8];
@@ -40,27 +40,29 @@ fn encode_gbc_tile(px: &[[u8; 8]; 8], out: &mut Vec<u8>) {
     }
 }
 
-/// 2x2 box sample: prefer any non-zero pixel so thin outlines survive.
-fn sample_2x2(px: &[[u8; 8]; 8], r: usize, c: usize) -> u8 {
-    let mut best = 0u8;
-    for dr in 0..2 {
-        for dc in 0..2 {
-            let p = px[r + dr][c + dc];
+/// Box sample used by fit scaling: prefer a non-zero pixel so one-pixel
+/// outlines survive reduction instead of disappearing into color 0.
+fn sample_box(px: &[[u8; 8]; 8], r0: usize, r1: usize, c0: usize, c1: usize) -> u8 {
+    for r in r0..r1 {
+        for c in c0..c1 {
+            let p = px[r][c];
             if p != 0 {
                 return p;
             }
-            best = best.max(p);
         }
     }
-    best
+    0
 }
 
-fn shrink_tile_half(tile: &[u8]) -> [[u8; 8]; 8] {
+fn shrink_tile_wide(tile: &[u8]) -> [[u8; 8]; 8] {
     let src = nes_tile_pixels(tile);
     let mut dst = [[0u8; 8]; 8];
+    // floor(x*5/8) bins: 0-1, 2-3, 4, 5-6, 7.
+    const X0: [usize; 5] = [0, 2, 4, 5, 7];
+    const X1: [usize; 5] = [2, 4, 5, 7, 8];
     for r in 0..4 {
-        for c in 0..4 {
-            dst[r][c] = sample_2x2(&src, r * 2, c * 2);
+        for c in 0..5 {
+            dst[r][c] = sample_box(&src, r * 2, r * 2 + 2, X0[c], X1[c]);
         }
     }
     dst
@@ -84,15 +86,15 @@ pub fn convert_chr_to_gbc(chr: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Build-time half-resolution CHR for fit-screen mode.
-pub fn convert_chr_to_gbc_fit_half(chr: &[u8]) -> Vec<u8> {
+/// Build-time 5x4 CHR crumbs for the 160x120 fit-screen mode.
+pub fn convert_chr_to_gbc_fit_wide(chr: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(chr.len());
     for tile in chr.chunks(16) {
         if tile.len() < 16 {
             out.extend_from_slice(tile);
             continue;
         }
-        let shrunk = shrink_tile_half(tile);
+        let shrunk = shrink_tile_wide(tile);
         encode_gbc_tile(&shrunk, &mut out);
     }
     out
@@ -110,15 +112,15 @@ mod tests {
     }
 
     #[test]
-    fn fit_half_keeps_tile_size_and_collapses_to_top_left() {
+    fn fit_wide_keeps_tile_size_and_collapses_to_top_left() {
         // Solid color-3 tile.
         let tile = vec![0xFFu8; 16];
-        let out = convert_chr_to_gbc_fit_half(&tile);
+        let out = convert_chr_to_gbc_fit_wide(&tile);
         assert_eq!(out.len(), 16);
-        // Rows 0..3: left nibble solid (cols 0..3), right clear.
+        // Rows 0..3: five left pixels solid, three padded transparent.
         for row in 0..4 {
-            assert_eq!(out[row * 2], 0xF0, "lo plane row {row}");
-            assert_eq!(out[row * 2 + 1], 0xF0, "hi plane row {row}");
+            assert_eq!(out[row * 2], 0xF8, "lo plane row {row}");
+            assert_eq!(out[row * 2 + 1], 0xF8, "hi plane row {row}");
         }
         // Rows 4..7 padded transparent.
         for row in 4..8 {
@@ -128,11 +130,11 @@ mod tests {
     }
 
     #[test]
-    fn fit_half_preserves_nonzero_in_2x2() {
+    fn fit_wide_preserves_nonzero_in_box() {
         // Only pixel (0,0) set to color 1 in NES tile.
         let mut tile = vec![0u8; 16];
         tile[0] = 0x80; // lo plane row0 bit7
-        let out = convert_chr_to_gbc_fit_half(&tile);
+        let out = convert_chr_to_gbc_fit_wide(&tile);
         assert_eq!(out[0] & 0x80, 0x80);
         assert_eq!(out[1] & 0x80, 0);
     }

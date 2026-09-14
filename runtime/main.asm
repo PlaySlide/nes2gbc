@@ -156,10 +156,12 @@ nes_gbc_vblank_isr:
     jr .early_split_done
 
 .early_split_apply_fit:
-    ; Half-scale + letterbox top/HUD scroll. Same physical identity map.
+    ; 160x120 fit: X uses 5/8 NES scale; Y stays half-scale with 12px bars.
     ldh a, [nes_split_armed_top_x]
-    srl a
-    sub 16
+    ld c, a
+    ld b, $00
+    call nes_video_fit_scale_x_bc
+    ld a, l
     ldh [rSCX], a
     ldh a, [nes_split_armed_top_y]
     srl a
