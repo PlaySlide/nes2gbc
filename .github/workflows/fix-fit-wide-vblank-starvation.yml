@@ -1,0 +1,64 @@
+name: Fix wide fit VBlank starvation
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-final]
+    paths: [.github/workflows/fix-fit-wide-vblank-starvation.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+
+      - name: Give fit split compositor first VBlank budget
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('runtime/main.asm')
+          s = p.read_text()
+          old = '''.oam_done:\n\n    ; SMB's stitched BG publication can run well past the line-32 HUD split.\n'''
+          new = '''.oam_done:\n\n    ; FIT_SCREEN + a vertical-mirroring raster split (SMB) must advance its\n    ; chunked resident-page compositor before the staged nametable queue gets\n    ; the rest of VBlank.  The queue can legally run into visible scanout; when\n    ; fit catch-up was left until .scroll_fit below, nes_video_fit_vblank_ok\n    ; rejected every attempt and dirty=1/recompose_row=0 could remain stuck for\n    ; hundreds of frames while SCX walked into the still-blank map columns.\n    ; The authoritative NES nametable already contains the completed NMI state,\n    ; so composing here is safe even though the publication queue follows.\n    ld a, [nes_fit_screen]\n    and a\n    jr z, .fit_early_bg_done\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_early_bg_done\n    ldh a, [nes_split_active]\n    and a\n    jr z, .fit_early_bg_done\n    call nes_video_fit_update_scroll_window\n    ld a, [nes_fit_dirty]\n    and a\n    jr z, .fit_early_bg_done\n    ld a, $01\n    ld [nes_vram_unlocked], a\n    call nes_video_fit_flush_dirty\n    xor a\n    ld [nes_vram_unlocked], a\n.fit_early_bg_done:\n\n    ; SMB's stitched BG publication can run well past the line-32 HUD split.\n'''
+          if old not in s:
+              raise SystemExit('target snippet not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
+          if ! command -v rgbasm >/dev/null; then
+            sudo apt-get install -y -qq bison flex libpng-dev pkg-config >/dev/null
+            git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+            make -C /tmp/rgbds -j2 >/dev/null
+            sudo make -C /tmp/rgbds install >/dev/null
+          fi
+
+      - name: Generate and assemble synthetic fit ROM
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=bytearray(b'NES\x1a')+bytearray([2,1,1,0])+bytearray(8)
+          p=bytearray([0xEA])*0x8000
+          p[:3]=bytes([0x4C,0,0x80]); p[-6:]=bytes([0,0x80]*3)
+          Path('/tmp/test.nes').write_bytes(h+p+bytes(0x2000))
+          PY
+          cargo run -- /tmp/test.nes --emit-asm runtime/generated.asm --fit-screen
+          make -C runtime clean all
+          cargo test --all-targets
+
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/main.asm
+          git commit -m 'FIT_SCREEN: service split catch-up at VBlank entry'
+          git push origin HEAD:dev/fit-screen-wide-160
