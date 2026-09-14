@@ -33,12 +33,12 @@ jobs:
           cargo run -- /tmp/nes2gbc-smoke.nes --emit-asm runtime/generated.asm --max-blocks 16
       - name: Build normal-speed audio
         run: |
-          rm -rf runtime/build
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean
           docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make APU_TEST_SPEED=1
           cp runtime/build/runtime.gbc /tmp/runtime-apu-1x.gbc
       - name: Build 2x-compensated audio
         run: |
-          rm -rf runtime/build
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean
           docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make APU_TEST_SPEED=2
           cp runtime/build/runtime.gbc /tmp/runtime-apu-2x.gbc
           if cmp -s /tmp/runtime-apu-1x.gbc /tmp/runtime-apu-2x.gbc; then
@@ -47,7 +47,7 @@ jobs:
           fi
       - name: Build 4x-compensated audio
         run: |
-          rm -rf runtime/build
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean
           docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make APU_TEST_SPEED=4
           cp runtime/build/runtime.gbc /tmp/runtime-apu-4x.gbc
           if cmp -s /tmp/runtime-apu-2x.gbc /tmp/runtime-apu-4x.gbc; then
@@ -58,7 +58,7 @@ jobs:
         run: |
           git checkout -- runtime/generated.asm
           rm -f runtime/generated.prg.bin runtime/generated.chr.bin runtime/generated.chr.gbc.bin
-          rm -rf runtime/build
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean
           rm -f tools/apply_apu_test_speed.py
           rm -f .github/workflows/apply-apu-test-speed.yml
           git add runtime/apu.asm tools/apply_apu_test_speed.py .github/workflows/apply-apu-test-speed.yml
