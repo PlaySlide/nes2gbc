@@ -3,8 +3,13 @@ OBJ := build/runtime.o
 TRACE ?= 0
 PROFILE ?= 0
 PROFILE_TRACE ?= 0
+APU_TEST_SPEED ?= 1
 
-RGBASM_FLAGS :=
+ifeq ($(filter $(APU_TEST_SPEED),1 2 4),)
+$(error APU_TEST_SPEED must be 1, 2, or 4)
+endif
+
+RGBASM_FLAGS := -D NES2GBC_APU_TEST_SPEED=$(APU_TEST_SPEED)
 ifeq ($(TRACE),1)
 RGBASM_FLAGS += -D NES2GBC_DEBUG_TRACE=1
 endif
