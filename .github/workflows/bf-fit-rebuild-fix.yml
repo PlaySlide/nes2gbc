@@ -1,0 +1,36 @@
+name: Apply BF fit rebuild fix
+
+on:
+  push:
+    branches:
+      - chatgpt/bf-fit-rebuild-surgical
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/fit-screen-scale
+          fetch-depth: 0
+      - name: Apply surgical Balloon Fight fix
+        run: |
+          git show origin/chatgpt/bf-fit-rebuild-surgical:.chatgpt/bf_fit_rebuild_fix.py > /tmp/bf_fit_rebuild_fix.py
+          python3 /tmp/bf_fit_rebuild_fix.py
+      - name: Validate exact scope
+        run: |
+          git diff --check
+          test "$(git diff --name-only)" = "runtime/video.asm"
+          git diff -- runtime/video.asm
+      - name: Run tests
+        run: cargo test --quiet
+      - name: Commit fix
+        run: |
+          git config user.name "ChatGPT"
+          git config user.email "chatgpt@users.noreply.github.com"
+          git add runtime/video.asm
+          git commit -m "FIT_SCREEN: keep LCD on during hidden-screen rebuild"
+          git push origin HEAD:feat/fit-screen-scale
