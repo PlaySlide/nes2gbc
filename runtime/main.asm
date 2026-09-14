@@ -229,6 +229,35 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
+    ; Wide FIT smooth scrolling owns a 21st entering-edge column. Give only
+    ; that incremental column update (dirty=2/3) first use of VBlank before
+    ; SMB's staged nametable publication can run into visible scanout. Full
+    ; dirty rebuilds are deliberately not attempted here: the SMB offscreen
+    ; parser is filtered below and legitimate full rebuilds use their normal
+    ; transition path.
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .fit_edge_done
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .fit_edge_done
+    ldh a, [nes_split_active]
+    and a
+    jr z, .fit_edge_done
+    call nes_video_fit_update_scroll_window
+    ld a, [nes_fit_dirty]
+    cp $02
+    jr z, .fit_edge_service
+    cp $03
+    jr nz, .fit_edge_done
+.fit_edge_service:
+    ld a, $01
+    ld [nes_vram_unlocked], a
+    call nes_video_fit_flush_dirty
+    xor a
+    ld [nes_vram_unlocked], a
+.fit_edge_done:
+
     ; SMB's stitched BG publication can run well past the line-32 HUD split.
     ; While a game-authored split is armed, allow only STAT to preempt this
     ; long section. Mask VBlank itself so this ISR cannot recursively re-enter

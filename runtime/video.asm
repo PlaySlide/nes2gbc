@@ -2877,6 +2877,7 @@ nes_video_fit_publish_source_tile_hl:
     and $04
     ld b, a
     ld a, [nes_fit_vram_page]
+    and $04
     cp b
     ret nz
     jr .src_x_ready

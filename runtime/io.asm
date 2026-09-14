@@ -207,7 +207,7 @@ nes_fit_mt_tmp_l:      ds 1
 nes_fit_mt_tmp_h:      ds 1
 nes_fit_mt_mx:         ds 1  ; wide viewport offset X 0..20
 nes_fit_mt_my:         ds 1  ; half-res Y 0..14
-nes_fit_mt_page:       ds 1  ; 0 or 4
+nes_fit_mt_page:       ds 1  ; scratch physical GBC map column 0..31
 nes_fit_dirty:         ds 1  ; 0=clean 1=full 2=enter-right-col 3=enter-left-col
 nes_fit_recompose_my:  ds 1  ; next metatile row to compose (0..14); chunked flush
 nes_fit_origin_mx:     ds 1  ; scaled world tile origin 0..39
