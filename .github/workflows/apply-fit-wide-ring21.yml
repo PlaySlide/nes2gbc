@@ -1,0 +1,159 @@
+name: Apply wide fit 21-column ring
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-ring21]
+    paths: [.github/workflows/apply-fit-wide-ring21.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+
+      - name: Rework wide fit viewport ring
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def rep(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{path}: expected 1 match, got {n}: {old[:80]!r}')
+              p.write_text(s.replace(old, new, 1))
+
+          # The previous experiment tried to squeeze a full recompose in ahead of
+          # the queue. The ring fix below removes the cause (SMB parser floods
+          # becoming full-dirty), so remove that timing workaround.
+          p = Path('runtime/main.asm')
+          s = p.read_text()
+          start = s.index('    ; FIT_SCREEN + a vertical-mirroring raster split (SMB) must advance its\n')
+          end_marker = '.fit_early_bg_done:\n\n'
+          end = s.index(end_marker, start) + len(end_marker)
+          s = s[:start] + s[end:]
+          p.write_text(s)
+
+          # Wide-fit storage model: use all 32 physical map columns as identity
+          # slots (32x15=480) and keep a 21-column live viewport. This avoids the
+          # impossible 20-column alias when SCX has a fine offset.
+          rep('runtime/video.asm',
+          '''; BG uses signed tile addressing ($8800-$97FF). 20x15 = 300 identity slots are\n; split across VRAM bank0 (slots 0-255) and bank1 (slots 256-299). The lower\n; $8000-$87FF half of both banks remains independent sprite storage; the active\n; 256-tile NES sprite PT is split 128/128 across those two banks.\n''',
+          '''; BG uses signed tile addressing ($8800-$97FF). Each physical $9800 map\n; column owns one pattern slot per row: 32x15 = 480 identity slots, split across\n; VRAM bank0 (slots 0-255) and bank1 (slots 256-479). Only 21 consecutive columns\n; are live at once (20 full tiles plus the fine-scroll edge). The lower\n; $8000-$87FF half of both banks remains independent sprite storage; the active\n; 256-tile NES sprite PT is split 128/128 across those two banks.\n''')
+
+          rep('runtime/video.asm',
+          '''; Clear signed BG tile storage and both maps. Blank map cells use spare bank1\n; signed tile $AC (local slot 44, immediately after the 300 live BG slots).\n''',
+          '''; Clear signed BG tile storage and both maps. Blank map cells use spare bank1\n; signed tile $60 (local slot 224, immediately after the 480 physical BG slots).\n''')
+          rep('runtime/video.asm', '    ld d, $AC\n.map_blank:\n', '    ld d, $60\n.map_blank:\n')
+
+          # Pack the physical 32-column ring head into nes_fit_vram_page bits 3-7.
+          # Bit 2 remains the ordinary resident physical NES page selector.
+          rep('runtime/video.asm',
+          '''    call nes_video_fit_displayed_page\n    ld b, a\n    ld a, [nes_fit_vram_page]\n    cp b\n    jr z, .page_done\n    ld a, b\n    ld [nes_fit_vram_page], a\n''',
+          '''    call nes_video_fit_displayed_page\n    ld b, a\n    ld a, [nes_fit_vram_page]\n    and $04\n    cp b\n    jr z, .page_done\n    ld a, [nes_fit_vram_page]\n    and $F8\n    or b\n    ld [nes_fit_vram_page], a\n''')
+
+          rep('runtime/video.asm',
+          '''; 20-column circular visible window over the 40 GBC tile columns that represent\n; the 512px two-nametable horizontal NES world at 5/8 scale.\n''',
+          '''; 21-column circular live window over the 40 GBC tile columns that represent\n; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport needs\n; 20 full tiles plus one partial entering tile whenever SCX has a fine offset.\n''')
+
+          rep('runtime/video.asm',
+          '''.resident:\n    ld a, [nes_fit_origin_mx]\n    and a\n    jr z, .resident_origin_ok\n    xor a\n    ld [nes_fit_origin_mx], a\n    ld a, $01\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n.resident_origin_ok:\n''',
+          '''.resident:\n    ld a, [nes_fit_origin_mx]\n    and a\n    jr nz, .resident_reset\n    ld a, [nes_fit_vram_page]\n    and $F8\n    jr z, .resident_origin_ok\n.resident_reset:\n    xor a\n    ld [nes_fit_origin_mx], a\n    ld a, [nes_fit_vram_page]\n    and $04\n    ld [nes_fit_vram_page], a\n    ld a, $01\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n.resident_origin_ok:\n''')
+
+          old_scroll = '''    ld a, [nes_fit_origin_mx]\n    cp c\n    jr z, .scx_from_origin\n    ld b, a\n    ld a, c\n    ld [nes_fit_origin_mx], a\n\n    ld a, [nes_fit_dirty]\n    and a\n    jr nz, .origin_while_dirty\n\n    ld a, c\n    sub b\n    cp 1\n    jr z, .delta_plus1\n    cp $FF\n    jr z, .delta_minus1\n    jr .full_dirty\n\n.delta_plus1:\n    ld a, 2\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld a, 19\n    ld [nes_fit_mt_mx], a\n    jr .scx_from_origin\n.delta_minus1:\n    ld a, 3\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jr .scx_from_origin\n.origin_while_dirty:\n    ld a, [nes_fit_dirty]\n    cp 1\n    jr z, .scx_from_origin\n.full_dirty:\n    ld a, $01\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n\n.scx_from_origin:\n    ld a, [nes_fit_origin_mx]\n    and $1F\n    add a\n    add a\n    add a\n    add e\n    ld [nes_fit_play_scx], a\n'''
+          new_scroll = '''    ld a, [nes_fit_origin_mx]\n    cp c\n    jr z, .scx_from_ring\n    ld b, a                    ; old world origin 0..39\n    ld a, c\n    ld [nes_fit_origin_mx], a\n\n    ; If a previous entering-column update is still unfinished, fall back to a\n    ; coherent 21-column rebuild at the new origin rather than exposing a slot\n    ; whose ownership is ambiguous. SMB parser floods no longer create this\n    ; state in steady scrolling, so this is now an exceptional catch-up path.\n    ld a, [nes_fit_dirty]\n    and a\n    jr nz, .full_dirty_rebase\n\n    ; Treat the 39->0/0->39 wrap as an ordinary one-column move in the 40-column\n    ; scaled NES world.\n    ld a, b\n    cp 39\n    jr nz, .check_wrap_minus\n    ld a, c\n    and a\n    jr z, .delta_plus1\n.check_wrap_minus:\n    ld a, b\n    and a\n    jr nz, .delta_regular\n    ld a, c\n    cp 39\n    jr z, .delta_minus1\n.delta_regular:\n    ld a, c\n    sub b\n    cp 1\n    jr z, .delta_plus1\n    cp $FF\n    jr z, .delta_minus1\n    jr .full_dirty_rebase\n\n.delta_plus1:\n    ; Advance the physical GBC map ring one column. Bits 3-7 hold ring head;\n    ; bit 2 retains the resident NES physical-page selector.\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, 2\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld a, 20                   ; entering partial/right-edge column\n    ld [nes_fit_mt_mx], a\n    jr .scx_from_ring\n\n.delta_minus1:\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    sub $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, 3\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jr .scx_from_ring\n\n.full_dirty_rebase:\n    ; A discontinuity gets a fresh physical ring head. With a full rebuild in\n    ; progress, rebasing keeps SCX and map ownership coherent.\n    ld a, c\n    and $1F\n    add a\n    add a\n    add a\n    ld b, a\n    ld a, [nes_fit_vram_page]\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, $01\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n\n.scx_from_ring:\n    ; Hardware SCX follows the physical map ring, not the modulo-40 world\n    ; column. This is what lets world columns 32..39 and wrapped 0.. coexist.\n    ld a, [nes_fit_vram_page]\n    and $F8\n    add e\n    ld [nes_fit_play_scx], a\n'''
+          rep('runtime/video.asm', old_scroll, new_scroll)
+
+          rep('runtime/video.asm',
+          '''    ; Full rebuild: at most one 20-tile row per LCD-on call. Entering columns\n    ; get four tiles per call so ordinary horizontal scroll can catch up.\n''',
+          '''    ; Full rebuild covers the 21 potentially scanned columns. Entering columns\n    ; get four tiles per call so ordinary horizontal scroll can catch up.\n''')
+          rep('runtime/video.asm', '.col_right:\n    ld a, 19\n', '.col_right:\n    ld a, 20\n')
+          rep('runtime/video.asm', '    cp 20\n    jr c, .xloop\n', '    cp 21\n    jr c, .xloop\n')
+
+          # Offscreen SMB parser construction must stay authoritative in WRAM
+          # instead of turning a large queue into a full resident-page rebuild.
+          rep('runtime/video.asm',
+          '''    ld a, [nes_fit_screen]\n    and a\n    jr z, .fit_bulk_done\n    ld a, [nes_nametable_queue_ptr_hi]\n''',
+          '''    ld a, [nes_fit_screen]\n    and a\n    jr z, .fit_bulk_done\n    ; SMB-style vertical-mirroring raster scroll deliberately constructs future\n    ; columns offscreen. Do not classify those parser transactions as a screen-\n    ; wide flood; exact visibility filtering below will publish only live cells.\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_bulk_size\n    ldh a, [nes_split_active]\n    and a\n    jr nz, .fit_bulk_done\n.fit_bulk_size:\n    ld a, [nes_nametable_queue_ptr_hi]\n''')
+
+          # During that staged SMB transaction, run visibility filtering before
+          # the VBlank gate. Offscreen source writes then remain no-ops instead of
+          # poisoning the whole page dirty as publication crosses visible scanout.
+          rep('runtime/video.asm',
+          '''.fit_tile:\n    ld a, [nes_fit_dirty]\n    and a\n    ret nz\n    ld a, [nes_vram_unlocked]\n    and a\n    jr z, nes_video_fit_mark_dirty_if_resident\n    call nes_video_fit_vblank_ok\n    jr z, nes_video_fit_mark_dirty_if_resident\n    jp nes_video_fit_publish_source_tile_hl\n''',
+          '''.fit_tile:\n    ld a, [nes_fit_dirty]\n    and a\n    ret nz\n    ld a, [nes_vram_unlocked]\n    and a\n    jr z, nes_video_fit_mark_dirty_if_resident\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_tile_vblank\n    ldh a, [nes_split_active]\n    and a\n    jp nz, nes_video_fit_publish_source_tile_hl\n.fit_tile_vblank:\n    call nes_video_fit_vblank_ok\n    jr z, nes_video_fit_mark_dirty_if_resident\n    jp nes_video_fit_publish_source_tile_hl\n''')
+
+          # 21 offsets (0..20) are potentially visible/prefetched.
+          rep('runtime/video.asm',
+          '''    cp 20\n    jr nc, .second_done\n    ld [nes_fit_mt_quad + 3], a\n''',
+          '''    cp 21\n    jr nc, .second_done\n    ld [nes_fit_mt_quad + 3], a\n''')
+          rep('runtime/video.asm',
+          '''    ; First destination if visible in [origin, origin+20).\n''',
+          '''    ; First destination if visible in [origin, origin+21).\n''')
+          rep('runtime/video.asm',
+          '''    cp 20\n    jr nc, .after_first\n    ld [nes_fit_mt_mx], a\n''',
+          '''    cp 21\n    jr nc, .after_first\n    ld [nes_fit_mt_mx], a\n''')
+
+          # Each physical map cell owns its pattern slot. This removes the old
+          # world_col % 20 alias between the first and fine-scroll edge columns.
+          old_slot = '''    ; slot_col = world_col % 20.\n    call nes_video_fit_world_col\n    cp 20\n    jr c, .slot_col_ready\n    sub 20\n.slot_col_ready:\n    ld [nes_fit_mt_page], a\n\n    ; slot = my*20 + slot_col. D=0/1 selects BG VRAM bank.\n    ld a, [nes_fit_mt_my]\n    ld b, a\n    swap a\n    and $F0\n    ld e, a\n    ld a, b\n    add a\n    add a\n    ld d, $00\n    add e\n    jr nc, .slot_no_carry0\n    inc d\n.slot_no_carry0:\n    ld b, a\n    ld a, [nes_fit_mt_page]\n    add b\n    jr nc, .slot_no_carry1\n    inc d\n.slot_no_carry1:\n    add $80\n    ld [nes_fit_mt_tmp_l], a   ; signed BG tile number\n\n    ld a, c\n    ld b, a\n    ld a, d\n    and a\n    ld a, b\n    jr z, .slot_attr_ready\n    or $08\n.slot_attr_ready:\n    ld [nes_fit_mt_tmp_h], a\n'''
+          new_slot = '''    ; Physical map column = ring_head + viewport offset (mod 32).\n    ld a, [nes_fit_vram_page]\n    and $F8\n    srl a\n    srl a\n    srl a\n    ld b, a\n    ld a, [nes_fit_mt_mx]\n    add b\n    and $1F\n    ld [nes_fit_mt_page], a\n\n    ; Pattern slot = my*32 + physical_map_col (0..479). H=0/1 chooses\n    ; BG VRAM bank; L becomes the signed local tile ID after adding $80.\n    ld a, [nes_fit_mt_my]\n    ld l, a\n    ld h, $00\n    add hl, hl\n    add hl, hl\n    add hl, hl\n    add hl, hl\n    add hl, hl\n    ld a, [nes_fit_mt_page]\n    ld e, a\n    ld d, $00\n    add hl, de\n    ld a, l\n    add $80\n    ld [nes_fit_mt_tmp_l], a   ; signed BG tile number\n\n    ld a, c\n    ld b, a\n    ld a, h\n    and a\n    ld a, b\n    jr z, .slot_attr_ready\n    or $08\n.slot_attr_ready:\n    ld [nes_fit_mt_tmp_h], a\n'''
+          rep('runtime/video.asm', old_slot, new_slot)
+
+          rep('runtime/video.asm',
+          '''.map_cell:\n    call nes_video_fit_vblank_ok\n    jp z, nes_video_fit_defer_dirty\n    call nes_video_fit_world_col\n    and $1F\n    call nes_video_fit_map_addr_a\n''',
+          '''.map_cell:\n    call nes_video_fit_vblank_ok\n    jp z, nes_video_fit_defer_dirty\n    ld a, [nes_fit_mt_page]\n    call nes_video_fit_map_addr_a\n''')
+
+          # Update fixed-layout comments only; no WRAM addresses move.
+          rep('runtime/io.asm',
+          'nes_fit_vram_page:     ds 1  ; resident physical page (0 or 4)\n',
+          'nes_fit_vram_page:     ds 1  ; bit2=resident page, bits3-7=physical map ring head\n')
+          rep('runtime/io.asm',
+          'nes_fit_mt_mx:         ds 1  ; half-res X 0..15\n',
+          'nes_fit_mt_mx:         ds 1  ; wide viewport offset X 0..20\n')
+          rep('runtime/io.asm',
+          'nes_fit_origin_mx:     ds 1  ; world metatile X (0..31) mapped to identity slot 0\n',
+          'nes_fit_origin_mx:     ds 1  ; scaled world tile origin 0..39\n')
+
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
+          if ! command -v rgbasm >/dev/null; then
+            sudo apt-get install -y -qq bison flex libpng-dev pkg-config >/dev/null
+            git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+            make -C /tmp/rgbds -j2 >/dev/null
+            sudo make -C /tmp/rgbds install >/dev/null
+          fi
+
+      - name: Generate and assemble synthetic fit ROM
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=bytearray(b'NES\x1a')+bytearray([2,1,1,0])+bytearray(8)
+          p=bytearray([0xEA])*0x8000
+          p[:3]=bytes([0x4C,0,0x80]); p[-6:]=bytes([0,0x80]*3)
+          Path('/tmp/test.nes').write_bytes(h+p+bytes(0x2000))
+          PY
+          cargo run -- /tmp/test.nes --emit-asm runtime/generated.asm --fit-screen
+          make -C runtime clean all
+          cargo test --all-targets
+
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/main.asm runtime/video.asm runtime/io.asm
+          git commit -m 'FIT_SCREEN: use 21-column physical map ring'
+          git push origin HEAD:dev/fit-screen-wide-160
