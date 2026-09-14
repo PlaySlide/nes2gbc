@@ -8,6 +8,13 @@
 ; nes_apu_read_status:
 ;   Output A = $4015-style active-channel status from length counters.
 ;   DMC/IRQ status is currently unsupported and reads as 0.
+;
+; NES2GBC_APU_TEST_SPEED is a compile-time host-fast-forward compensation.
+; 1 = normal hardware timing, 2 = compensate mGBA 2x, 4 = compensate mGBA 4x.
+; It changes only the GBC audio renderer/timing, never NES-side register state.
+IF !DEF(NES2GBC_APU_TEST_SPEED)
+    DEF NES2GBC_APU_TEST_SPEED EQU 1
+ENDC
 
 SECTION "NES APU state", WRAM0[$CA00]
 ; Mirror of $4000-$4017 indexed by low address byte.
@@ -595,6 +602,13 @@ nes_apu_write_noise_period:
     ld hl, nes_apu_noise_nr43
     add hl, de
     ld a, [hl]
+IF NES2GBC_APU_TEST_SPEED == 2
+    ; One NR43 shift step halves the GBC noise clock.
+    add $10
+ELIF NES2GBC_APU_TEST_SPEED == 4
+    ; Two shift steps quarter it for 4x host fast-forward.
+    add $20
+ENDC
     bit 7, b
     jr z, .write
     or $08
@@ -724,6 +738,20 @@ nes_apu_vol_to_nrx2:
     ld hl, nes_apu_gb_env_period
     add hl, de
     ld a, [hl]
+IF NES2GBC_APU_TEST_SPEED == 2
+    add a
+    cp $08
+    jr c, .env_scaled
+    ld a, $07
+.env_scaled:
+ELIF NES2GBC_APU_TEST_SPEED == 4
+    add a
+    add a
+    cp $08
+    jr c, .env_scaled
+    ld a, $07
+.env_scaled:
+ENDC
     or $F0
     ret
 
@@ -787,6 +815,18 @@ nes_apu_timer_to_period:
     adc d
     ld d, a
 
+    ; Fast-forward compensation operates on the GB frequency divisor only.
+    ; Doubling the divisor lowers pitch one octave; x4 lowers two octaves.
+IF NES2GBC_APU_TEST_SPEED == 2
+    sla e
+    rl d
+ELIF NES2GBC_APU_TEST_SPEED == 4
+    sla e
+    rl d
+    sla e
+    rl d
+ENDC
+
     ; GB period divisor cannot exceed 2047.
     ld a, d
     cp $08
@@ -842,11 +882,18 @@ nes_apu_update_frame_counter:
     call nes_apu_clock_quarter
     jp nes_apu_clock_half
 
-; Host VBlank is ~60 Hz, so advance four ~240 Hz frame-sequencer slots each
-; VBlank. Keeping phase across calls gives mode 0 four slots (240/120 Hz) and
-; mode 1 five slots including its blank step (192/96 Hz average).
+; Host VBlank is ~60 Hz at normal speed. Advance enough ~240 Hz sequencer
+; slots to preserve wall-clock APU timing at the selected emulator test speed.
+; 1x: 4 slots/VBlank, 2x: 2, 4x: 1. Keeping phase across calls preserves the
+; same effective NES quarter/half-frame rates while mGBA is fast-forwarding.
 nes_apu_frame_tick:
+IF NES2GBC_APU_TEST_SPEED == 2
+    ld b, 2
+ELIF NES2GBC_APU_TEST_SPEED == 4
+    ld b, 1
+ELSE
     ld b, 4
+ENDC
 .step:
     push bc
     call nes_apu_frame_step
