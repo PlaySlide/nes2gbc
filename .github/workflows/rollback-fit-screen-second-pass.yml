@@ -17,7 +17,9 @@ jobs:
           ref: feat/fit-screen-scale
           fetch-depth: 0
       - name: Restore first-pass fit-screen state
-        run: python3 .chatgpt/rollback_second.py
+        run: |
+          git show origin/chatgpt/rollback-fit-screen-second-pass:.chatgpt/rollback_second.py > /tmp/rollback_second.py
+          python3 /tmp/rollback_second.py
       - name: Validate diff
         run: |
           git diff --check
