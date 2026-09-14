@@ -4,6 +4,7 @@ on:
   push:
     branches: [debug/video-copy-invariant]
     paths: ['.github/workflows/apply-dispatch-atomic.yml']
+  workflow_dispatch:
 
 permissions:
   contents: write
