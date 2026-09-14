@@ -33,6 +33,7 @@ generate:
 		python3 tools/tighten_stack_generated.py runtime/generated.asm; \
 		python3 tools/shrink_compare_generated.py runtime/generated.asm; \
 		python3 tools/hot_alu_generated.py runtime/generated.asm; \
+		python3 tools/fast_oam_dma_generated.py runtime/generated.asm; \
 		python3 tools/lazy_overflow_updates.py runtime/generated.asm; \
 		python3 tools/fold_fixed_prg_reads.py runtime/generated.asm "$(ROM)"; \
 		python3 tools/trim_indexed_ram_bus.py runtime/generated.asm; \
