@@ -20,15 +20,27 @@ jobs:
         run: |
           git show origin/chatgpt/bf-fit-rebuild-surgical:.chatgpt/bf_fit_rebuild_fix.py > /tmp/bf_fit_rebuild_fix.py
           python3 /tmp/bf_fit_rebuild_fix.py
-      - name: Validate exact scope
+      - name: Validate scope
         run: |
           git diff --check
-          test "$(git diff --name-only)" = "runtime/video.asm"
-          git diff -- runtime/video.asm
-      - name: Run tests
+          changed="$(git diff --name-only)"
+          if [ -n "$changed" ]; then
+            test "$changed" = "runtime/video.asm"
+            git diff -- runtime/video.asm
+          fi
+      - name: Run Rust tests
         run: cargo test --quiet
-      - name: Commit fix
+      - name: RGBDS smoke build
         run: |
+          python3 tools/make_smoke_rom.py /tmp/nes2gbc-smoke.nes
+          cargo run --quiet -- /tmp/nes2gbc-smoke.nes --emit-asm runtime/generated.asm --max-blocks 16
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make
+          test -s runtime/build/runtime.gbc
+      - name: Commit fix if needed
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
           git config user.name "ChatGPT"
           git config user.email "chatgpt@users.noreply.github.com"
           git add runtime/video.asm
