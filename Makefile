@@ -46,6 +46,7 @@ generate:
 		python3 tools/dead_terminal_n.py runtime/generated.asm; \
 		python3 tools/dead_terminal_carry_zn.py runtime/generated.asm; \
 		python3 tools/dead_terminal_overflow_zn.py runtime/generated.asm; \
+		python3 tools/dead_global_zn.py runtime/generated.asm; \
 		python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm; \
 		python3 tools/fast_subroutine_rts_dispatch.py runtime/generated.asm; \
 		python3 tools/defer_subroutine_rts_increment.py runtime/generated.asm; \
