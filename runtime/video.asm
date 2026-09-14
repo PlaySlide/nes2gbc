@@ -3219,50 +3219,47 @@ nes_video_fit_compose_half:
     xor a
     ld [nes_fit_mt_page], a
 .row:
+    ; Fetch all three source crumbs and use the native stack for temporary
+    ; plane bytes. This avoids overlapping bottom output rows 5/6.
     ld a, [nes_fit_mt_page]
     ld c, a
     ld a, [nes_fit_mt_quad]
     call nes_video_fit_get_scaled_row_a_c
-    ld a, d
-    ld [nes_fit_mt_compose + 10], a
-    ld a, e
-    ld [nes_fit_mt_compose + 11], a
-
+    push de
     ld a, [nes_fit_mt_page]
     ld c, a
     ld a, [nes_fit_mt_quad + 1]
     call nes_video_fit_get_scaled_row_a_c
-    ld a, d
-    ld [nes_fit_mt_compose + 12], a
-    ld a, e
-    ld [nes_fit_mt_compose + 13], a
-
+    push de
     ld a, [nes_fit_mt_page]
     ld c, a
     ld a, [nes_fit_mt_quad + 2]
     call nes_video_fit_get_scaled_row_a_c
-    ld a, d
-    ld [nes_fit_mt_compose + 14], a
+    push de
+
+    pop hl
+    pop de
+    pop bc
+    ; BC = tile0 lo/hi, DE = tile1 lo/hi, HL = tile2 lo/hi.
+    ld a, c
+    push af
     ld a, e
-    ld [nes_fit_mt_compose + 15], a
-
-    ld a, [nes_fit_mt_compose + 10]
-    ld b, a
-    ld a, [nes_fit_mt_compose + 12]
-    ld c, a
-    ld a, [nes_fit_mt_compose + 14]
-    ld d, a
+    push af
+    ld a, l
+    push af
+    ld c, d
+    ld d, h
     call nes_video_fit_pack_plane
-    ld [nes_fit_mt_compose + 10], a
-
-    ld a, [nes_fit_mt_compose + 11]
-    ld b, a
-    ld a, [nes_fit_mt_compose + 13]
-    ld c, a
-    ld a, [nes_fit_mt_compose + 15]
+    ld h, a
+    pop af
     ld d, a
+    pop af
+    ld c, a
+    pop af
+    ld b, a
     call nes_video_fit_pack_plane
-    ld [nes_fit_mt_compose + 11], a
+    ld d, h
+    ld e, a
 
     ld a, [nes_fit_mt_tmp_h]
     ld b, a
@@ -3277,9 +3274,9 @@ nes_video_fit_compose_half:
     jr nc, .dst_ok
     inc h
 .dst_ok:
-    ld a, [nes_fit_mt_compose + 10]
+    ld a, d
     ld [hli], a
-    ld a, [nes_fit_mt_compose + 11]
+    ld a, e
     ld [hl], a
 
     ld a, [nes_fit_mt_page]
