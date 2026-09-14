@@ -18,6 +18,83 @@ SECTION "SMB split grace state", WRAM0[$C817]
 nes_split_retire_grace_used: ds 1
 
 SECTION "Runtime", ROM0[$0150]
+; OAM DMA owns the main buses while active, so the wait loop must execute from
+; HRAM. Keep a position-independent 8-byte image in ROM and borrow the first
+; eight bytes of the palette shadow as execution scratch for the short VBlank
+; transfer. The bytes are saved on the native stack and restored immediately
+; after DMA, before palette publication is allowed to run.
+nes_oam_dma_hram_image:
+    ldh [$FF46], a
+    ld a, $28
+.wait:
+    dec a
+    jr nz, .wait
+    ret
+nes_oam_dma_hram_image_end:
+
+nes_video_sync_oam_hw:
+    ; Save palette-shadow bytes 0-7 in four register-pair stack slots.
+    ld hl, nes_gbc_palette_shadow
+    ld a, [hli]
+    ld b, a
+    ld a, [hli]
+    ld c, a
+    push bc
+    ld a, [hli]
+    ld b, a
+    ld a, [hli]
+    ld c, a
+    push bc
+    ld a, [hli]
+    ld b, a
+    ld a, [hli]
+    ld c, a
+    push bc
+    ld a, [hli]
+    ld b, a
+    ld a, [hl]
+    ld c, a
+    push bc
+
+    ; Copy the tiny DMA routine into HRAM while all buses are still available.
+    ld hl, nes_oam_dma_hram_image
+    ld c, LOW(nes_gbc_palette_shadow)
+    ld b, nes_oam_dma_hram_image_end - nes_oam_dma_hram_image
+.copy_dma_hram:
+    ld a, [hli]
+    ldh [c], a
+    inc c
+    dec b
+    jr nz, .copy_dma_hram
+
+    ; Projected OAM is deliberately page-aligned at $CB00. FF46 copies exactly
+    ; $A0 bytes to hardware OAM; the HRAM routine waits until the transfer ends.
+    ld a, HIGH(nes_gbc_oam_shadow)
+    call nes_gbc_palette_shadow
+
+    ; Restore the temporarily borrowed palette-shadow bytes in reverse order.
+    ld hl, nes_gbc_palette_shadow + 7
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    dec hl
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    dec hl
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    dec hl
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    ret
+
 nes_gbc_vblank_isr:
     push af
     push bc
@@ -157,11 +234,9 @@ nes_gbc_vblank_isr:
     or NES_DIAG_EVENT_COMMIT
     ld [nes_diag_event_flags], a
 
-    ; Sprite OAM has a hard scanout deadline: once visible lines begin, a
-    ; 160-byte hardware-OAM copy can mix two NES metasprite states in one GBC
-    ; frame. Publish ONLY OAM before the heavier BG transaction. Palette,
-    ; control, scroll, and all BG ordering remain unchanged from the stable
-    ; renderer baseline.
+    ; Sprite OAM has a hard scanout deadline. Publish only OAM before the
+    ; heavier BG transaction. The projected shadow is copied with hardware
+    ; FF46 DMA from its page-aligned $CB00 backing store.
     ld a, [nes_oam_dirty]
     and a
     jp z, .oam_done
@@ -173,7 +248,7 @@ nes_gbc_vblank_isr:
     jp nz, .oam_shadow_ready
     call nes_video_build_oam_shadow
 .oam_shadow_ready:
-    call nes_video_sync_oam
+    call nes_video_sync_oam_hw
 .oam_done:
 
     ; SMB's stitched BG publication can run well past the line-32 HUD split.
