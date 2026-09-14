@@ -1,0 +1,39 @@
+name: Validate 160x120 fit-screen assembly
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-final]
+    paths:
+      - .github/workflows/validate-fit-wide.yml
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bison flex libpng-dev pkg-config >/dev/null
+          git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+          make -C /tmp/rgbds -j2 >/dev/null
+          sudo make -C /tmp/rgbds install >/dev/null
+          rgbasm --version
+      - name: Generate minimal NROM test ROM
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h = bytearray(b'NES\x1a') + bytearray([2,1,0,0]) + bytearray(8)
+          prg = bytearray([0xEA])*0x8000
+          # $8000: JMP $8000; vectors all $8000.
+          prg[0:3] = bytes([0x4C,0x00,0x80])
+          prg[-6:] = bytes([0x00,0x80, 0x00,0x80, 0x00,0x80])
+          chr_ = bytes(0x2000)
+          Path('/tmp/fit-wide-test.nes').write_bytes(h + prg + chr_)
+          PY
+      - name: Generate FIT_SCREEN assembly
+        run: cargo run -- /tmp/fit-wide-test.nes --emit-asm runtime/generated.asm --fit-screen
+      - name: Assemble and link GBC runtime
+        run: make -C runtime clean all
