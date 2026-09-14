@@ -235,6 +235,16 @@ ENDC
     ld a, [nes_fit_screen]
     and a
     jr z, .fit_bulk_done
+    ; SMB-style vertical-mirroring raster scroll deliberately constructs future
+    ; columns offscreen. Do not classify those parser transactions as a screen-
+    ; wide flood; exact visibility filtering below will publish only live cells.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .fit_bulk_size
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .fit_bulk_done
+.fit_bulk_size:
     ld a, [nes_nametable_queue_ptr_hi]
     cp $D8
     jr nz, .fit_bulk
@@ -2310,8 +2320,10 @@ nes_video_update_ctrl:
 ; 12px letterbox bars above/below. Each NES 8x8 CHR tile is preconverted to a
 ; 5x4 crumb. Two NES tile rows therefore align exactly with one 8px GBC row.
 ;
-; BG uses signed tile addressing ($8800-$97FF). 20x15 = 300 identity slots are
-; split across VRAM bank0 (slots 0-255) and bank1 (slots 256-299). The lower
+; BG uses signed tile addressing ($8800-$97FF). Each physical $9800 map
+; column owns one pattern slot per row: 32x15 = 480 identity slots, split across
+; VRAM bank0 (slots 0-255) and bank1 (slots 256-479). Only 21 consecutive columns
+; are live at once (20 full tiles plus the fine-scroll edge). The lower
 ; $8000-$87FF half of both banks remains independent sprite storage; the active
 ; 256-tile NES sprite PT is split 128/128 across those two banks.
 
@@ -2340,7 +2352,7 @@ nes_video_fit_upload_sprite_chr:
     ret
 
 ; Clear signed BG tile storage and both maps. Blank map cells use spare bank1
-; signed tile $AC (local slot 44, immediately after the 300 live BG slots).
+; signed tile $60 (local slot 224, immediately after the 480 physical BG slots).
 nes_video_fit_init_identity:
     xor a
     ldh [rVBK], a
@@ -2357,7 +2369,7 @@ nes_video_fit_init_identity:
     ldh [rVBK], a
     ld hl, $9800
     ld bc, $0800
-    ld d, $AC
+    ld d, $60
 .map_blank:
     ld a, d
     ld [hli], a
@@ -2401,9 +2413,12 @@ nes_video_fit_apply_scroll:
     call nes_video_fit_displayed_page
     ld b, a
     ld a, [nes_fit_vram_page]
+    and $04
     cp b
     jr z, .page_done
-    ld a, b
+    ld a, [nes_fit_vram_page]
+    and $F8
+    or b
     ld [nes_fit_vram_page], a
     ld a, $01
     ld [nes_fit_dirty], a
@@ -2445,8 +2460,9 @@ nes_video_fit_scale_x_bc:
     rr l
     ret
 
-; 20-column circular visible window over the 40 GBC tile columns that represent
-; the 512px two-nametable horizontal NES world at 5/8 scale.
+; 21-column circular live window over the 40 GBC tile columns that represent
+; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport needs
+; 20 full tiles plus one partial entering tile whenever SCX has a fine offset.
 nes_video_fit_update_scroll_window:
     ld a, [nes_mirroring]
     cp $01
@@ -2459,9 +2475,16 @@ nes_video_fit_update_scroll_window:
 .resident:
     ld a, [nes_fit_origin_mx]
     and a
+    jr nz, .resident_reset
+    ld a, [nes_fit_vram_page]
+    and $F8
     jr z, .resident_origin_ok
+.resident_reset:
     xor a
     ld [nes_fit_origin_mx], a
+    ld a, [nes_fit_vram_page]
+    and $04
+    ld [nes_fit_vram_page], a
     ld a, $01
     ld [nes_fit_dirty], a
     xor a
@@ -2513,55 +2536,106 @@ nes_video_fit_update_scroll_window:
 
     ld a, [nes_fit_origin_mx]
     cp c
-    jr z, .scx_from_origin
-    ld b, a
+    jp z, .scx_from_ring
+    ld b, a                    ; old world origin 0..39
     ld a, c
     ld [nes_fit_origin_mx], a
 
+    ; If a previous entering-column update is still unfinished, fall back to a
+    ; coherent 21-column rebuild at the new origin rather than exposing a slot
+    ; whose ownership is ambiguous. SMB parser floods no longer create this
+    ; state in steady scrolling, so this is now an exceptional catch-up path.
     ld a, [nes_fit_dirty]
     and a
-    jr nz, .origin_while_dirty
+    jp nz, .full_dirty_rebase
 
+    ; Treat the 39->0/0->39 wrap as an ordinary one-column move in the 40-column
+    ; scaled NES world.
+    ld a, b
+    cp 39
+    jr nz, .check_wrap_minus
+    ld a, c
+    and a
+    jp z, .delta_plus1
+.check_wrap_minus:
+    ld a, b
+    and a
+    jr nz, .delta_regular
+    ld a, c
+    cp 39
+    jp z, .delta_minus1
+.delta_regular:
     ld a, c
     sub b
     cp 1
-    jr z, .delta_plus1
+    jp z, .delta_plus1
     cp $FF
-    jr z, .delta_minus1
-    jr .full_dirty
+    jp z, .delta_minus1
+    jp .full_dirty_rebase
 
 .delta_plus1:
+    ; Advance the physical GBC map ring one column. Bits 3-7 hold ring head;
+    ; bit 2 retains the resident NES physical-page selector.
+    ld a, [nes_fit_vram_page]
+    ld d, a
+    and $F8
+    add $08
+    and $F8
+    ld b, a
+    ld a, d
+    and $04
+    or b
+    ld [nes_fit_vram_page], a
     ld a, 2
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
-    ld a, 19
+    ld a, 20                   ; entering partial/right-edge column
     ld [nes_fit_mt_mx], a
-    jr .scx_from_origin
+    jp .scx_from_ring
+
 .delta_minus1:
+    ld a, [nes_fit_vram_page]
+    ld d, a
+    and $F8
+    sub $08
+    and $F8
+    ld b, a
+    ld a, d
+    and $04
+    or b
+    ld [nes_fit_vram_page], a
     ld a, 3
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
     ld [nes_fit_mt_mx], a
-    jr .scx_from_origin
-.origin_while_dirty:
-    ld a, [nes_fit_dirty]
-    cp 1
-    jr z, .scx_from_origin
-.full_dirty:
+    jp .scx_from_ring
+
+.full_dirty_rebase:
+    ; A discontinuity gets a fresh physical ring head. With a full rebuild in
+    ; progress, rebasing keeps SCX and map ownership coherent.
+    ld a, c
+    and $1F
+    add a
+    add a
+    add a
+    ld b, a
+    ld a, [nes_fit_vram_page]
+    and $04
+    or b
+    ld [nes_fit_vram_page], a
     ld a, $01
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
     ld [nes_fit_mt_mx], a
 
-.scx_from_origin:
-    ld a, [nes_fit_origin_mx]
-    and $1F
-    add a
-    add a
-    add a
+.scx_from_ring:
+    ; Hardware SCX follows the physical map ring, not the modulo-40 world
+    ; column. This is what lets world columns 32..39 and wrapped 0.. coexist.
+    ld a, [nes_fit_vram_page]
+    and $F8
     add e
     ld [nes_fit_play_scx], a
 
@@ -2606,7 +2680,7 @@ nes_video_fit_recompose_resident_page:
 .have_row:
     ld [nes_fit_mt_my], a
 
-    ; Full rebuild: at most one 20-tile row per LCD-on call. Entering columns
+    ; Full rebuild covers the 21 potentially scanned columns. Entering columns
     ; get four tiles per call so ordinary horizontal scroll can catch up.
     ld b, 0
     ldh a, [rLCDC]
@@ -2622,7 +2696,7 @@ nes_video_fit_recompose_resident_page:
     jr .yloop
 
 .col_right:
-    ld a, 19
+    ld a, 20
     jr .col_set
 .col_left:
     xor a
@@ -2683,7 +2757,7 @@ nes_video_fit_recompose_resident_page:
     ld a, [nes_fit_mt_mx]
     inc a
     ld [nes_fit_mt_mx], a
-    cp 20
+    cp 21
     jr c, .xloop
 
     xor a
@@ -2735,6 +2809,13 @@ nes_video_fit_sync_nametable_write:
     ld a, [nes_vram_unlocked]
     and a
     jr z, nes_video_fit_mark_dirty_if_resident
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .fit_tile_vblank
+    ldh a, [nes_split_active]
+    and a
+    jp nz, nes_video_fit_publish_source_tile_hl
+.fit_tile_vblank:
     call nes_video_fit_vblank_ok
     jr z, nes_video_fit_mark_dirty_if_resident
     jp nes_video_fit_publish_source_tile_hl
@@ -2851,12 +2932,12 @@ nes_video_fit_publish_source_tile_hl:
     jr nc, .second_delta_ready
     add 40
 .second_delta_ready:
-    cp 20
+    cp 21
     jr nc, .second_done
     ld [nes_fit_mt_quad + 3], a
 .second_done:
 
-    ; First destination if visible in [origin, origin+20).
+    ; First destination if visible in [origin, origin+21).
     ld a, [nes_fit_origin_mx]
     ld c, a
     ld a, d
@@ -2864,7 +2945,7 @@ nes_video_fit_publish_source_tile_hl:
     jr nc, .first_delta_ready
     add 40
 .first_delta_ready:
-    cp 20
+    cp 21
     jr nc, .after_first
     ld [nes_fit_mt_mx], a
     call nes_video_fit_publish_at_mx_my
@@ -2927,40 +3008,39 @@ nes_video_fit_publish_at_mx_my:
     ld c, a
     pop hl
 
-    ; slot_col = world_col % 20.
-    call nes_video_fit_world_col
-    cp 20
-    jr c, .slot_col_ready
-    sub 20
-.slot_col_ready:
+    ; Physical map column = ring_head + viewport offset (mod 32).
+    ld a, [nes_fit_vram_page]
+    and $F8
+    srl a
+    srl a
+    srl a
+    ld b, a
+    ld a, [nes_fit_mt_mx]
+    add b
+    and $1F
     ld [nes_fit_mt_page], a
 
-    ; slot = my*20 + slot_col. D=0/1 selects BG VRAM bank.
+    ; Pattern slot = my*32 + physical_map_col (0..479). H=0/1 chooses
+    ; BG VRAM bank; L becomes the signed local tile ID after adding $80.
     ld a, [nes_fit_mt_my]
-    ld b, a
-    swap a
-    and $F0
-    ld e, a
-    ld a, b
-    add a
-    add a
-    ld d, $00
-    add e
-    jr nc, .slot_no_carry0
-    inc d
-.slot_no_carry0:
-    ld b, a
+    ld l, a
+    ld h, $00
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
     ld a, [nes_fit_mt_page]
-    add b
-    jr nc, .slot_no_carry1
-    inc d
-.slot_no_carry1:
+    ld e, a
+    ld d, $00
+    add hl, de
+    ld a, l
     add $80
     ld [nes_fit_mt_tmp_l], a   ; signed BG tile number
 
     ld a, c
     ld b, a
-    ld a, d
+    ld a, h
     and a
     ld a, b
     jr z, .slot_attr_ready
@@ -2975,8 +3055,7 @@ nes_video_fit_publish_at_mx_my:
 .map_cell:
     call nes_video_fit_vblank_ok
     jp z, nes_video_fit_defer_dirty
-    call nes_video_fit_world_col
-    and $1F
+    ld a, [nes_fit_mt_page]
     call nes_video_fit_map_addr_a
     call nes_video_fit_write_map_cell_de
     or $01

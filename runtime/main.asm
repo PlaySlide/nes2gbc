@@ -229,34 +229,6 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
-    ; FIT_SCREEN + a vertical-mirroring raster split (SMB) must advance its
-    ; chunked resident-page compositor before the staged nametable queue gets
-    ; the rest of VBlank.  The queue can legally run into visible scanout; when
-    ; fit catch-up was left until .scroll_fit below, nes_video_fit_vblank_ok
-    ; rejected every attempt and dirty=1/recompose_row=0 could remain stuck for
-    ; hundreds of frames while SCX walked into the still-blank map columns.
-    ; The authoritative NES nametable already contains the completed NMI state,
-    ; so composing here is safe even though the publication queue follows.
-    ld a, [nes_fit_screen]
-    and a
-    jr z, .fit_early_bg_done
-    ld a, [nes_mirroring]
-    cp $01
-    jr nz, .fit_early_bg_done
-    ldh a, [nes_split_active]
-    and a
-    jr z, .fit_early_bg_done
-    call nes_video_fit_update_scroll_window
-    ld a, [nes_fit_dirty]
-    and a
-    jr z, .fit_early_bg_done
-    ld a, $01
-    ld [nes_vram_unlocked], a
-    call nes_video_fit_flush_dirty
-    xor a
-    ld [nes_vram_unlocked], a
-.fit_early_bg_done:
-
     ; SMB's stitched BG publication can run well past the line-32 HUD split.
     ; While a game-authored split is armed, allow only STAT to preempt this
     ; long section. Mask VBlank itself so this ISR cannot recursively re-enter

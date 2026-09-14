@@ -200,17 +200,17 @@ nes_gbc_oam_shadow: ds $00A0
 SECTION "NES fit screen", WRAM0[$CBA0]
 nes_fit_screen:        ds 1
 nes_fit_sprite_pt:     ds 1  ; last sprite PT select (0 or $08)
-nes_fit_vram_page:     ds 1  ; resident physical page (0 or 4)
+nes_fit_vram_page:     ds 1  ; bit2=resident page, bits3-7=physical map ring head
 nes_fit_mt_quad:       ds 4  ; TL,TR,BL,BR NES tile indices
 nes_fit_mt_compose:    ds 16 ; scratch composed GBC tile
 nes_fit_mt_tmp_l:      ds 1
 nes_fit_mt_tmp_h:      ds 1
-nes_fit_mt_mx:         ds 1  ; half-res X 0..15
+nes_fit_mt_mx:         ds 1  ; wide viewport offset X 0..20
 nes_fit_mt_my:         ds 1  ; half-res Y 0..14
 nes_fit_mt_page:       ds 1  ; 0 or 4
 nes_fit_dirty:         ds 1  ; 0=clean 1=full 2=enter-right-col 3=enter-left-col
 nes_fit_recompose_my:  ds 1  ; next metatile row to compose (0..14); chunked flush
-nes_fit_origin_mx:     ds 1  ; world metatile X (0..31) mapped to identity slot 0
+nes_fit_origin_mx:     ds 1  ; scaled world tile origin 0..39
 nes_fit_play_scx:      ds 1  ; last half-scale playfield SCX (for STAT split)
 ; 32 bytes -> $CBA0-$CBBF
 
