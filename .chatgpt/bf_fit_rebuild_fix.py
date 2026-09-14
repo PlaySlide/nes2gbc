@@ -3,7 +3,10 @@ from pathlib import Path
 p = Path('runtime/video.asm')
 s = p.read_text()
 
-old = '''nes_video_rebuild_generic_maps_atomic:
+# Previous surgical fix: fit rebuilds must never clear LCDC.7. Keep this
+# idempotent so the helper can run against either the old baseline or the
+# already-fixed branch.
+old_rebuild = '''nes_video_rebuild_generic_maps_atomic:
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
     bit 7, a
@@ -29,14 +32,9 @@ old = '''nes_video_rebuild_generic_maps_atomic:
     ld [nes_vram_unlocked], a
     jr .rebuild_fit_done
 '''
-
-new = '''nes_video_rebuild_generic_maps_atomic:
+new_rebuild = '''nes_video_rebuild_generic_maps_atomic:
     ; FIT_SCREEN composes a 16x15 resident surface and is intentionally
-    ; chunked across host VBlanks. Never clear LCDC.7 before that work: doing
-    ; so leaves Balloon Fight Game A with the physical LCD disabled for the
-    ; duration of a very expensive full fit recompose (mVL: $90 -> $10, then
-    ; no more scanlines). Schedule a fresh authoritative pass and return; the
-    ; normal VBlank fit flusher will publish it incrementally.
+    ; chunked across host VBlanks. Never clear LCDC.7 before that work.
     ld a, [nes_fit_screen]
     and a
     jr z, .rebuild_generic_entry
@@ -65,19 +63,50 @@ new = '''nes_video_rebuild_generic_maps_atomic:
 
 .rebuild_lcd_off:
 '''
-
-if old in s:
-    s = s.replace(old, new, 1)
-
-# Repair the first run's accidental duplicate local label if present.
+if old_rebuild in s:
+    s = s.replace(old_rebuild, new_rebuild, 1)
 s = s.replace('.rebuild_lcd_off:\n.rebuild_generic:\n\n.rebuild_generic:\n',
               '.rebuild_lcd_off:\n.rebuild_generic:\n', 1)
 
-marker = '''nes_video_rebuild_generic_maps_atomic:
-    ; FIT_SCREEN composes a 16x15 resident surface'''
-if marker not in s:
-    raise SystemExit('FIT_SCREEN rebuild guard not present after transform')
-if '.rebuild_lcd_off:\n.rebuild_generic:\n\n.rebuild_generic:\n' in s:
-    raise SystemExit('duplicate rebuild label still present')
+# Balloon Fight Game A still crashes after the LCD-off rebuild fix. The new
+# mVL gives a stronger signature: starting around frame 422, writes march
+# sequentially through VRAM $8000-$9FFF for ~4 host frames; at frame 434 the
+# same runaway reaches FF40 and writes LCDC=0. Every intentional caller of
+# nes_video_copy copies exactly one 4 KiB pattern table to $8000, so $9000 is
+# an invariant boundary. Enforce it here. This does not reject fit bank-0
+# writes (the bad second-pass experiment did); it merely prevents a clobbered
+# copy count from escaping the pattern-table window into BG maps / I/O.
+old_copy = '''nes_video_copy:
+.loop:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .loop
+    ret
+'''
+new_copy = '''nes_video_copy:
+.loop:
+    ; All callers target one 4 KiB pattern table at $8000-$8FFF. A corrupt
+    ; count must never walk into $9000+ and eventually wrap into hardware I/O.
+    ld a, d
+    cp $90
+    ret nc
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .loop
+    ret
+'''
+if old_copy in s:
+    s = s.replace(old_copy, new_copy, 1)
+
+if 'cp $90\n    ret nc\n    ld a, [hli]' not in s:
+    raise SystemExit('bounded nes_video_copy guard missing after transform')
 
 p.write_text(s)
