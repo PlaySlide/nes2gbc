@@ -227,6 +227,25 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
+    ; FIT_SCREEN background composition used to run only after the staged
+    ; nametable transaction and the rest of the VBlank publication work. On
+    ; SMB there was often no VBlank left by then: origin_mx advanced and SCX
+    ; panned, but the entering identity column never reached VRAM. Service
+    ; carried fit work here, near the front of VBlank, from completed NES state.
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .fit_early_flush_done
+    call nes_video_fit_update_scroll_window
+    ld a, [nes_fit_dirty]
+    and a
+    jr z, .fit_early_flush_done
+    ld a, $01
+    ld [nes_vram_unlocked], a
+    call nes_video_fit_flush_dirty
+    xor a
+    ld [nes_vram_unlocked], a
+.fit_early_flush_done:
+
     ; SMB's stitched BG publication can run well past the line-32 HUD split.
     ; While a game-authored split is armed, allow only STAT to preempt this
     ; long section. Mask VBlank itself so this ISR cannot recursively re-enter

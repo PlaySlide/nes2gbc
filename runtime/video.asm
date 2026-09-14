@@ -154,8 +154,24 @@ nes_upload_chr_bank:
     ldh [rLCDC], a
     ret
 
+; All intentional callers copy exactly one converted 4 KiB pattern table to
+; $8000. In FIT_SCREEN there is never a legitimate bank-0 call to this helper
+; (fit BG tiles are composed, not copied). Reject that shape and also stop at
+; $9000 even if BC is corrupted so a bad copy cannot eat the GBC BG map.
 nes_video_copy:
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .loop
+    ldh a, [rVBK]
+    and $01
+    jr nz, .loop
+    ld a, $C2
+    ld [nes_debug_fault], a
+    ret
 .loop:
+    ld a, d
+    cp $90
+    jr nc, .overflow
     ld a, [hli]
     ld [de], a
     inc de
@@ -163,6 +179,10 @@ nes_video_copy:
     ld a, b
     or c
     jr nz, .loop
+    ret
+.overflow:
+    ld a, $C3
+    ld [nes_debug_fault], a
     ret
 
 ; Publish every nametable address staged by the completed translated NES NMI.
@@ -246,6 +266,7 @@ ENDC
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
     jr .fit_bulk_done
 .fit_bulk_keep:
     ld a, $01
@@ -420,6 +441,22 @@ ENDC
 ; finishes a rendering-off screen construction and re-enables the background.
 ; It tells us whether incremental publication has drifted from virtual NES state.
 nes_video_rebuild_generic_maps_atomic:
+    ; FIT_SCREEN must never inherit the generic renderer's LCD-off rebuild.
+    ; Schedule a fresh chunked recompose and leave scanout running.
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .rebuild_generic_entry
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
+    ld a, [nes_ppuctrl]
+    and $10
+    srl a
+    ld [nes_bg_pattern_committed], a
+    ret
+.rebuild_generic_entry:
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
     bit 7, a
@@ -1499,6 +1536,26 @@ nes_video_build_oam_shadow:
     ldh [nes_oam_proj_x_tmp], a
 
 .x_ready:
+    ; Half-CHR lives in the top-left 4x4 quadrant of an 8x8 GBC tile.
+    ; Hardware H/V flip mirrors the whole box, so compensate the anchor by
+    ; four pixels to keep a flipped fit sprite on the same NES/2 coordinate.
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .fit_flip_done
+    ldh a, [nes_sprite_attr_tmp]
+    bit 7, a
+    jr z, .fit_no_vflip_adjust
+    ldh a, [nes_oam_proj_y_tmp]
+    sub 4
+    ldh [nes_oam_proj_y_tmp], a
+.fit_no_vflip_adjust:
+    ldh a, [nes_sprite_attr_tmp]
+    bit 6, a
+    jr z, .fit_flip_done
+    ldh a, [nes_oam_proj_x_tmp]
+    sub 4
+    ldh [nes_oam_proj_x_tmp], a
+.fit_flip_done:
 
     ; Visible sprite: pack it into the next CGB OAM slot.
     ldh a, [nes_oam_proj_y_tmp]
@@ -1663,6 +1720,7 @@ nes_video_toggle_bg_pattern_bank:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
     ret
 .toggle_normal:
 
@@ -2303,6 +2361,7 @@ nes_video_fit_init_identity:
     ld [nes_fit_vram_page], a
     ld [nes_fit_dirty], a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
     ld [nes_fit_origin_mx], a
     xor a
     sub 16
@@ -2395,6 +2454,7 @@ nes_video_fit_apply_scroll:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
 .page_done:
 
     ; Origin/SCX first so flush sees the current window. LCD-on row budget is
@@ -2432,11 +2492,9 @@ nes_video_fit_update_scroll_window:
     ld a, [nes_mirroring]
     cp $01
     jr nz, .resident
-    ; Require split so single-screen vertical titles (if any) never slide.
-    ldh a, [nes_split_active]
-    and a
-    jr z, .resident
-
+    ; Vertical mirroring represents horizontal world adjacency. Track coarse
+    ; X even when no HUD/playfield split is currently recognized; otherwise
+    ; SCX can pan straight into the blank letterbox half of the map.
     jr .slide_vert
 
 .resident:
@@ -2529,6 +2587,7 @@ nes_video_fit_update_scroll_window:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
     jr .scx_from_origin
 
 .delta_minus1:
@@ -2536,6 +2595,7 @@ nes_video_fit_update_scroll_window:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
     jr .scx_from_origin
 
 .origin_while_dirty:
@@ -2549,6 +2609,7 @@ nes_video_fit_update_scroll_window:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
 
 .scx_from_origin:
     ; play_scx = (origin_mx & 15)*8 + fine - 16 (continuous pan in 16 slots)
@@ -2650,7 +2711,9 @@ nes_video_fit_recompose_resident_page:
 .col_do:
     call nes_video_fit_vblank_ok
     jr z, .yield_col
+    push bc
     call nes_video_fit_publish_at_mx_my
+    pop bc
     jr z, .yield_col
     ld a, [nes_fit_mt_my]
     inc a
@@ -2682,14 +2745,14 @@ nes_video_fit_recompose_resident_page:
     dec b
 
 .do_row:
-    xor a
-    ld [nes_fit_mt_mx], a
 .xloop:
     ; Re-check every metatile so a long row cannot spill into active scanout
     ; via nes_video_wait_vram's HBlank fallback (mVL thrash signature).
     call nes_video_fit_vblank_ok
     jr z, .yield
+    push bc
     call nes_video_fit_publish_at_mx_my
+    pop bc
     ; Publish returns Z when it deferred (VBlank ended). Do NOT advance mx —
     ; otherwise this metatile is skipped until a full dirty reset (holes/mush).
     jr z, .yield
@@ -2699,6 +2762,8 @@ nes_video_fit_recompose_resident_page:
     cp 16
     jr c, .xloop
 
+    xor a
+    ld [nes_fit_mt_mx], a
     ld a, [nes_fit_mt_my]
     inc a
     ld [nes_fit_mt_my], a
@@ -2780,6 +2845,7 @@ nes_video_fit_mark_dirty_if_resident:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
     ret
 
 ; HL = NES NT WRAM addr. Z = column belongs in the current fit window (publish
@@ -3074,6 +3140,7 @@ nes_video_fit_defer_dirty:
     ld [nes_fit_dirty], a
     xor a
     ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
 .keep:
     xor a
     ret
@@ -3278,13 +3345,18 @@ nes_video_fit_upload_tile_a:
     ret
 
 nes_video_fit_sync_attribute_write:
-    ; Tile publishes already sample authoritative attrs. While unlocked
-    ; (incremental column flush), skip — avoids restarting a full-page chunk
-    ; on every SMB attribute touch. Deferred/locked paths still coalesce.
-    ld a, [nes_vram_unlocked]
+    ; Attribute-only writes still change the palette of fit metatiles. Never
+    ; drop them merely because the queue is unlocked. Coalesce them into one
+    ; full pass, preserving an already-running cursor.
+    ld a, [nes_fit_dirty]
     and a
     ret nz
-    jp nes_video_fit_mark_dirty_if_resident
+    ld a, $01
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
+    ret
 
 nes_video_fit_sync_sprite_chr:
     ld a, [nes_fit_screen]
@@ -3297,6 +3369,18 @@ nes_video_fit_sync_sprite_chr:
     cp b
     ret z
 
+    ; A whole 4 KiB PT swap cannot run through active scanout. Wait for
+    ; VBlank, briefly disable LCD, perform the raw copy, then restore LCDC.
+    ; This keeps DKC's legitimate PT change without the live-copy corruption.
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    bit 7, a
+    jr z, .sprite_lcd_safe
+    call nes_video_wait_oam
+    ldh a, [rLCDC]
+    and $7F
+    ldh [rLCDC], a
+.sprite_lcd_safe:
     ld a, [nes_vram_unlocked]
     ld c, a
     ld a, $01
@@ -3311,6 +3395,8 @@ nes_video_fit_sync_sprite_chr:
     call nes_video_fit_upload_sprite_chr
     call nes_restore_code_bank
 
+    ld a, [nes_saved_lcdc]
+    ldh [rLCDC], a
     pop bc
     ld a, c
     ld [nes_vram_unlocked], a
