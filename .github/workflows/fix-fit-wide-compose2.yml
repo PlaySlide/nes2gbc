@@ -1,0 +1,136 @@
+name: Fix wide compositor scratch v2
+
+on:
+  push:
+    branches:
+      - automation/apply-fit-wide-final
+    paths:
+      - '.github/workflows/fix-fit-wide-compose2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out development branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+      - name: Replace overlapping scratch implementation
+        shell: bash
+        run: |
+          cat > /tmp/fix.py <<'PY'
+          from pathlib import Path
+          p = Path('runtime/video.asm')
+          s = p.read_text()
+          a = s.index('nes_video_fit_compose_half:')
+          b = s.index('\nnes_video_fit_compose_wide:', a)
+          new = '''nes_video_fit_compose_half:
+              ld [nes_fit_mt_tmp_h], a
+              xor a
+              ld [nes_fit_mt_page], a
+          .row:
+              ; Fetch all three source crumbs and use the native stack for temporary
+              ; plane bytes. This avoids overlapping bottom output rows 5/6.
+              ld a, [nes_fit_mt_page]
+              ld c, a
+              ld a, [nes_fit_mt_quad]
+              call nes_video_fit_get_scaled_row_a_c
+              push de
+              ld a, [nes_fit_mt_page]
+              ld c, a
+              ld a, [nes_fit_mt_quad + 1]
+              call nes_video_fit_get_scaled_row_a_c
+              push de
+              ld a, [nes_fit_mt_page]
+              ld c, a
+              ld a, [nes_fit_mt_quad + 2]
+              call nes_video_fit_get_scaled_row_a_c
+              push de
+
+              pop hl
+              pop de
+              pop bc
+              ; BC = tile0 lo/hi, DE = tile1 lo/hi, HL = tile2 lo/hi.
+              ld a, c
+              push af
+              ld a, e
+              push af
+              ld a, l
+              push af
+              ld c, d
+              ld d, h
+              call nes_video_fit_pack_plane
+              ld h, a
+              pop af
+              ld d, a
+              pop af
+              ld c, a
+              pop af
+              ld b, a
+              call nes_video_fit_pack_plane
+              ld d, h
+              ld e, a
+
+              ld a, [nes_fit_mt_tmp_h]
+              ld b, a
+              ld a, [nes_fit_mt_page]
+              add b
+              add a
+              ld l, a
+              ld h, HIGH(nes_fit_mt_compose)
+              ld a, LOW(nes_fit_mt_compose)
+              add l
+              ld l, a
+              jr nc, .dst_ok
+              inc h
+          .dst_ok:
+              ld a, d
+              ld [hli], a
+              ld a, e
+              ld [hl], a
+
+              ld a, [nes_fit_mt_page]
+              inc a
+              ld [nes_fit_mt_page], a
+              cp 4
+              jr c, .row
+              ret
+          '''
+          # Strip the Python indentation while retaining ASM indentation.
+          import textwrap
+          new = textwrap.dedent(new)
+          p.write_text(s[:a] + new + s[b:])
+          PY
+          python3 /tmp/fix.py
+          git diff --check
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bison flex libpng-dev pkg-config >/dev/null
+          git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+          make -C /tmp/rgbds -j2 >/dev/null
+          sudo make -C /tmp/rgbds install >/dev/null
+      - name: Generate and assemble synthetic fit ROM
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h = bytearray(b'NES\x1a') + bytearray([2,1,0,0]) + bytearray(8)
+          p = bytearray([0xEA]) * 0x8000
+          p[:3] = bytes([0x4C,0x00,0x80])
+          p[-6:] = bytes([0x00,0x80,0x00,0x80,0x00,0x80])
+          Path('/tmp/test.nes').write_bytes(h + p + bytes(0x2000))
+          PY
+          cargo run -- /tmp/test.nes --emit-asm runtime/generated.asm --fit-screen
+          make -C runtime clean all
+          cargo test --all-targets
+      - name: Commit to development branch
+        run: |
+          git config user.name 'ChatGPT'
+          git config user.email 'chatgpt@users.noreply.github.com'
+          git add runtime/video.asm
+          git commit -m 'FIT_SCREEN: keep wide compositor scratch off output rows'
+          git push origin HEAD:dev/fit-screen-wide-160
