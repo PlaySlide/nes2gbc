@@ -100,7 +100,6 @@ def parse_blocks(lines: list[str]) -> dict[int, Block]:
 
         v_defined = False
         if block.nmi_poll:
-            # Pending translated NMI pushes/materializes P before source op #1.
             block.v_use = True
 
         for insn in block.insns:
@@ -176,9 +175,6 @@ def dead_v_writers(blocks: dict[int, Block], live_out: dict[int, bool]) -> set[i
             if writes:
                 if insn.mnemonic in OPTIMIZABLE and not live:
                     dead_lines.add(insn.line)
-                # A V writer kills the incoming V value. None of the optimized
-                # writers reads old V; keeping `reads` here also covers future
-                # conservative additions without changing the recurrence.
                 live = reads
             elif reads:
                 live = True
