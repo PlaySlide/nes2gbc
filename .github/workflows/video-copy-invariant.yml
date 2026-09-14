@@ -1,0 +1,46 @@
+name: Video copy invariant diagnostic
+
+on:
+  push:
+    branches: [debug/video-copy-invariant]
+
+permissions:
+  contents: write
+
+jobs:
+  instrument:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: debug/video-copy-invariant
+          fetch-depth: 0
+      - name: Instrument nes_video_copy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('runtime/video.asm')
+          s = p.read_text()
+          old = '''nes_video_copy:\n.loop:\n    ld a, [hli]\n    ld [de], a\n    inc de\n    dec bc\n    ld a, b\n    or c\n    jr nz, .loop\n    ret\n'''
+          new = '''nes_video_copy:\n    ; Diagnostic only: every intentional runtime caller copies exactly one\n    ; 4 KiB pattern table from ROMX $4000/$5000 to VRAM $8000.  The BF/DKC\n    ; video logs show a writer continuing beyond $8FFF; trap that exact event\n    ; before it can destroy maps/OAM/I/O.\n.loop:\n    ld a, d\n    cp $90\n    jr c, .dest_ok\n\n    ld a, $C5\n    ld [nes_debug_fault], a\n    ld a, b\n    ld [$C830], a\n    ld a, c\n    ld [$C831], a\n    ld a, h\n    ld [$C832], a\n    ld a, l\n    ld [$C833], a\n    ld a, d\n    ld [$C834], a\n    ld a, e\n    ld [$C835], a\n    ld a, [nes_current_code_bank]\n    ld [$C836], a\n    ld a, [nes_chr_bank]\n    ld [$C837], a\n    di\n.copy_fault_hang:\n    halt\n    jr .copy_fault_hang\n\n.dest_ok:\n    ld a, [hli]\n    ld [de], a\n    inc de\n    dec bc\n    ld a, b\n    or c\n    jr nz, .loop\n    ret\n'''
+          if new in s:
+              raise SystemExit(0)
+          if old not in s:
+              raise SystemExit('nes_video_copy signature not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Validate
+        shell: bash
+        run: |
+          git diff --check
+          cargo test --quiet
+      - name: Commit instrumentation
+        shell: bash
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "ChatGPT"
+          git config user.email "chatgpt@users.noreply.github.com"
+          git add runtime/video.asm
+          git commit -m "debug: trap video copy past VRAM pattern table"
+          git push origin HEAD:debug/video-copy-invariant
