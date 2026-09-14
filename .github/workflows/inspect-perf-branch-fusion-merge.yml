@@ -1,0 +1,31 @@
+name: Inspect perf branch-fusion merge
+on:
+  push:
+    branches: [apu/correctness-pass-2]
+    paths: [.github/workflows/inspect-perf-branch-fusion-merge.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch perf branch
+        run: git fetch origin perf/branch-fusion
+      - name: Dry-run merge and report conflicts
+        shell: bash
+        run: |
+          set +e
+          git merge --no-commit --no-ff origin/perf/branch-fusion
+          rc=$?
+          echo "MERGE_RC=$rc"
+          echo "=== UNMERGED FILES ==="
+          git diff --name-only --diff-filter=U || true
+          echo "=== CONFLICT MARKER CONTEXT ==="
+          for f in $(git diff --name-only --diff-filter=U); do
+            echo "--- $f ---"
+            grep -n -B 12 -A 20 '^<<<<<<<\|^=======\|^>>>>>>>' "$f" || true
+          done
+          exit 0
