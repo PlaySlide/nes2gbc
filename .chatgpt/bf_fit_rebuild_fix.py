@@ -2,6 +2,7 @@ from pathlib import Path
 
 p = Path('runtime/video.asm')
 s = p.read_text()
+
 old = '''nes_video_rebuild_generic_maps_atomic:
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
@@ -28,6 +29,7 @@ old = '''nes_video_rebuild_generic_maps_atomic:
     ld [nes_vram_unlocked], a
     jr .rebuild_fit_done
 '''
+
 new = '''nes_video_rebuild_generic_maps_atomic:
     ; FIT_SCREEN composes a 16x15 resident surface and is intentionally
     ; chunked across host VBlanks. Never clear LCDC.7 before that work: doing
@@ -62,10 +64,20 @@ new = '''nes_video_rebuild_generic_maps_atomic:
     ldh [rLCDC], a
 
 .rebuild_lcd_off:
-.rebuild_generic:
 '''
-count = s.count(old)
-if count != 1:
-    raise SystemExit(f'expected one rebuild block, found {count}')
-s = s.replace(old, new, 1)
+
+if old in s:
+    s = s.replace(old, new, 1)
+
+# Repair the first run's accidental duplicate local label if present.
+s = s.replace('.rebuild_lcd_off:\n.rebuild_generic:\n\n.rebuild_generic:\n',
+              '.rebuild_lcd_off:\n.rebuild_generic:\n', 1)
+
+marker = '''nes_video_rebuild_generic_maps_atomic:
+    ; FIT_SCREEN composes a 16x15 resident surface'''
+if marker not in s:
+    raise SystemExit('FIT_SCREEN rebuild guard not present after transform')
+if '.rebuild_lcd_off:\n.rebuild_generic:\n\n.rebuild_generic:\n' in s:
+    raise SystemExit('duplicate rebuild label still present')
+
 p.write_text(s)
