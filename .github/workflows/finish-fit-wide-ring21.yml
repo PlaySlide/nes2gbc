@@ -1,0 +1,76 @@
+name: Finish wide fit ring edge service
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-ring21]
+    paths: [.github/workflows/finish-fit-wide-ring21.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+
+      - name: Prioritize entering edge before long SMB publication
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def rep(path, old, new):
+              p=Path(path); s=p.read_text()
+              if s.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one target, found {s.count(old)}')
+              p.write_text(s.replace(old,new,1))
+
+          rep('runtime/main.asm',
+          '''.oam_done:\n\n    ; SMB's stitched BG publication can run well past the line-32 HUD split.\n''',
+          '''.oam_done:\n\n    ; Wide FIT smooth scrolling owns a 21st entering-edge column. Give only\n    ; that incremental column update (dirty=2/3) first use of VBlank before\n    ; SMB's staged nametable publication can run into visible scanout. Full\n    ; dirty rebuilds are deliberately not attempted here: the SMB offscreen\n    ; parser is filtered below and legitimate full rebuilds use their normal\n    ; transition path.\n    ld a, [nes_fit_screen]\n    and a\n    jr z, .fit_edge_done\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_edge_done\n    ldh a, [nes_split_active]\n    and a\n    jr z, .fit_edge_done\n    call nes_video_fit_update_scroll_window\n    ld a, [nes_fit_dirty]\n    cp $02\n    jr z, .fit_edge_service\n    cp $03\n    jr nz, .fit_edge_done\n.fit_edge_service:\n    ld a, $01\n    ld [nes_vram_unlocked], a\n    call nes_video_fit_flush_dirty\n    xor a\n    ld [nes_vram_unlocked], a\n.fit_edge_done:\n\n    ; SMB's stitched BG publication can run well past the line-32 HUD split.\n''')
+
+          rep('runtime/video.asm',
+          '''    ld a, h\n    and $04\n    ld b, a\n    ld a, [nes_fit_vram_page]\n    cp b\n    ret nz\n''',
+          '''    ld a, h\n    and $04\n    ld b, a\n    ld a, [nes_fit_vram_page]\n    and $04\n    cp b\n    ret nz\n''')
+
+          rep('runtime/io.asm',
+          'nes_fit_mt_page:       ds 1  ; 0 or 4\n',
+          'nes_fit_mt_page:       ds 1  ; scratch physical GBC map column 0..31\n')
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
+          if ! command -v rgbasm >/dev/null; then
+            sudo apt-get install -y -qq bison flex libpng-dev pkg-config >/dev/null
+            git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+            make -C /tmp/rgbds -j2 >/dev/null
+            sudo make -C /tmp/rgbds install >/dev/null
+          fi
+
+      - name: Build and test
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=bytearray(b'NES\x1a')+bytearray([2,1,1,0])+bytearray(8)
+          p=bytearray([0xEA])*0x8000
+          p[:3]=bytes([0x4C,0,0x80]); p[-6:]=bytes([0,0x80]*3)
+          Path('/tmp/test.nes').write_bytes(h+p+bytes(0x2000))
+          PY
+          cargo run -- /tmp/test.nes --emit-asm runtime/generated.asm --fit-screen
+          make -C runtime clean all
+          cargo test --all-targets
+
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/main.asm runtime/video.asm runtime/io.asm
+          git commit -m 'FIT_SCREEN: prioritize 21st-column edge refresh'
+          git push origin HEAD:dev/fit-screen-wide-160
