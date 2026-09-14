@@ -1,0 +1,50 @@
+name: Apply 160x120 fit-screen scaler
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-final]
+    paths:
+      - tools/apply_fit_wide_runtime.py
+      - .github/workflows/apply-fit-wide.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: automation/apply-fit-wide-final
+          fetch-depth: 0
+      - name: Save patch driver
+        run: cp tools/apply_fit_wide_runtime.py /tmp/apply_fit_wide_runtime.py
+      - name: Check out target branch
+        run: |
+          git fetch origin dev/fit-screen-wide-160
+          git checkout -B dev/fit-screen-wide-160 origin/dev/fit-screen-wide-160
+      - name: Apply wide fit-screen implementation
+        run: python3 /tmp/apply_fit_wide_runtime.py
+      - name: Rust tests
+        run: cargo test --all-targets
+      - name: Install RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
+      - name: Smoke assemble runtime
+        run: |
+          if command -v rgbasm >/dev/null; then
+            make -C runtime clean all
+          fi
+      - name: Validate diff
+        run: |
+          git diff --check
+          git status --short
+      - name: Commit and push target branch
+        run: |
+          git config user.name 'ChatGPT'
+          git config user.email 'chatgpt@users.noreply.github.com'
+          git add src/assets.rs src/main.rs runtime/main.asm runtime/video.asm
+          git commit -m 'FIT_SCREEN: expand to 160x120 4:3 wide scaler'
+          git push origin HEAD:dev/fit-screen-wide-160
