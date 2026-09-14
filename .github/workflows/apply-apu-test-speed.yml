@@ -33,21 +33,27 @@ jobs:
           cargo run -- /tmp/nes2gbc-smoke.nes --emit-asm runtime/generated.asm --max-blocks 16
       - name: Build normal-speed audio
         run: |
-          make -C runtime clean
-          make -C runtime APU_TEST_SPEED=1
+          rm -rf runtime/build
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make APU_TEST_SPEED=1
           cp runtime/build/runtime.gbc /tmp/runtime-apu-1x.gbc
       - name: Build 2x-compensated audio
         run: |
-          make -C runtime clean
-          make -C runtime APU_TEST_SPEED=2
+          rm -rf runtime/build
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make APU_TEST_SPEED=2
           cp runtime/build/runtime.gbc /tmp/runtime-apu-2x.gbc
-          cmp -s /tmp/runtime-apu-1x.gbc /tmp/runtime-apu-2x.gbc && { echo '1x and 2x builds are unexpectedly identical' >&2; exit 1; } || true
+          if cmp -s /tmp/runtime-apu-1x.gbc /tmp/runtime-apu-2x.gbc; then
+            echo '1x and 2x builds are unexpectedly identical' >&2
+            exit 1
+          fi
       - name: Build 4x-compensated audio
         run: |
-          make -C runtime clean
-          make -C runtime APU_TEST_SPEED=4
+          rm -rf runtime/build
+          docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make APU_TEST_SPEED=4
           cp runtime/build/runtime.gbc /tmp/runtime-apu-4x.gbc
-          cmp -s /tmp/runtime-apu-2x.gbc /tmp/runtime-apu-4x.gbc && { echo '2x and 4x builds are unexpectedly identical' >&2; exit 1; } || true
+          if cmp -s /tmp/runtime-apu-2x.gbc /tmp/runtime-apu-4x.gbc; then
+            echo '2x and 4x builds are unexpectedly identical' >&2
+            exit 1
+          fi
       - name: Restore generated files and commit source only
         run: |
           git checkout -- runtime/generated.asm
