@@ -155,7 +155,39 @@ nes_upload_chr_bank:
     ret
 
 nes_video_copy:
+    ; Diagnostic only: every intentional runtime caller copies exactly one
+    ; 4 KiB pattern table from ROMX $4000/$5000 to VRAM $8000.  The BF/DKC
+    ; video logs show a writer continuing beyond $8FFF; trap that exact event
+    ; before it can destroy maps/OAM/I/O.
 .loop:
+    ld a, d
+    cp $90
+    jr c, .dest_ok
+
+    ld a, $C5
+    ld [nes_debug_fault], a
+    ld a, b
+    ld [$C830], a
+    ld a, c
+    ld [$C831], a
+    ld a, h
+    ld [$C832], a
+    ld a, l
+    ld [$C833], a
+    ld a, d
+    ld [$C834], a
+    ld a, e
+    ld [$C835], a
+    ld a, [nes_current_code_bank]
+    ld [$C836], a
+    ld a, [nes_chr_bank]
+    ld [$C837], a
+    di
+.copy_fault_hang:
+    halt
+    jr .copy_fault_hang
+
+.dest_ok:
     ld a, [hli]
     ld [de], a
     inc de
