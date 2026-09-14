@@ -56,7 +56,6 @@ generate:
 		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_bc_windows.py runtime/generated.asm; \
-		if [ "$(TRACE)" != "1" ] && [ "$(PROFILE)" != "1" ] && [ "$(PROFILE_TRACE)" != "1" ]; then python3 tools/forward_state_edges.py runtime/generated.asm; fi; \
 		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
 		python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
