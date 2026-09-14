@@ -51,6 +51,7 @@ generate:
 		python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
+		python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
 		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
 		python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
