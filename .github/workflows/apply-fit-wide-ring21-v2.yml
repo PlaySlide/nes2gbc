@@ -1,0 +1,83 @@
+name: Apply wide fit 21-column ring v2
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-ring21]
+    paths: [.github/workflows/apply-fit-wide-ring21-v2.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+
+      - name: Apply ring migration and widen generated branches
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          wf = subprocess.check_output([
+              'git', 'show',
+              'origin/automation/apply-fit-wide-ring21:.github/workflows/apply-fit-wide-ring21.yml'
+          ], text=True)
+          marker = "          python3 - <<'PY'\n"
+          start = wf.index(marker) + len(marker)
+          end = wf.index("\n          PY\n", start)
+          lines = wf[start:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines)
+          exec(compile(script, 'ring21-migration', 'exec'), {})
+
+          p = Path('runtime/video.asm')
+          s = p.read_text()
+          for old, new in [
+              ('    jr z, .scx_from_ring', '    jp z, .scx_from_ring'),
+              ('    jr nz, .full_dirty_rebase', '    jp nz, .full_dirty_rebase'),
+              ('    jr z, .delta_plus1', '    jp z, .delta_plus1'),
+              ('    jr z, .delta_minus1', '    jp z, .delta_minus1'),
+              ('    jr .full_dirty_rebase', '    jp .full_dirty_rebase'),
+              ('    jr .scx_from_ring', '    jp .scx_from_ring'),
+          ]:
+              s = s.replace(old, new)
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
+          if ! command -v rgbasm >/dev/null; then
+            sudo apt-get install -y -qq bison flex libpng-dev pkg-config >/dev/null
+            git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+            make -C /tmp/rgbds -j2 >/dev/null
+            sudo make -C /tmp/rgbds install >/dev/null
+          fi
+
+      - name: Generate and assemble synthetic fit ROM
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=bytearray(b'NES\x1a')+bytearray([2,1,1,0])+bytearray(8)
+          p=bytearray([0xEA])*0x8000
+          p[:3]=bytes([0x4C,0,0x80]); p[-6:]=bytes([0,0x80]*3)
+          Path('/tmp/test.nes').write_bytes(h+p+bytes(0x2000))
+          PY
+          cargo run -- /tmp/test.nes --emit-asm runtime/generated.asm --fit-screen
+          make -C runtime clean all
+          cargo test --all-targets
+
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/main.asm runtime/video.asm runtime/io.asm
+          git commit -m 'FIT_SCREEN: use 21-column physical map ring'
+          git push origin HEAD:dev/fit-screen-wide-160
