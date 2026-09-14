@@ -223,6 +223,18 @@ ENDC
     swap a
     and $0F
     add $18
+
+    ; The dispatch-table lookup temporarily maps ROMX away from translated
+    ; code while nes_current_code_bank still names the interrupted code bank.
+    ; A host VBlank/STAT interrupt in this window can run video code that calls
+    ; nes_restore_code_bank, remapping ROMX to the old code bank before this
+    ; lookup resumes. The table read then consumes translated code bytes as a
+    ; dispatch record and jumps to an arbitrary host address. Keep this tiny
+    ; MBC/table-read/target-bank sequence atomic. EI is deliberately placed
+    ; immediately before JP HL below; SM83 enables IME after the following
+    ; instruction, so interrupts resume only after execution reaches the linked
+    ; translated target.
+    di
     ld [$2000], a
     xor a
     ld [$3000], a
@@ -265,6 +277,7 @@ ENDC
 
     ld h, d
     ld l, e
+    ei
     jp hl
 
 ; Fast path for statically known cross-bank transfers.
