@@ -6,7 +6,8 @@
 ; Clobbers: AF, BC, DE, HL (void return; cpu write path ignores result).
 ;
 ; nes_apu_read_status:
-;   Output A = $4015-style status (v1: last written enable bits 0-4).
+;   Output A = $4015-style active-channel status from length counters.
+;   DMC/IRQ status is currently unsupported and reads as 0.
 
 SECTION "NES APU state", WRAM0[$CA00]
 ; Mirror of $4000-$4017 indexed by low address byte.
@@ -90,8 +91,31 @@ nes_apu_init:
 
 ; ---------------------------------------------------------------------------
 nes_apu_read_status:
-    ld a, [nes_apu_regs + $15]
-    and $1F
+    ; NES $4015 read bits 0-3 report whether each channel length counter is
+    ; non-zero, not whether its enable bit was last written as 1. DMC and IRQ
+    ; status are not implemented yet, so bits 4, 6, and 7 remain clear.
+    ld b, $00
+    ld a, [nes_apu_len_p1]
+    and a
+    jr z, .status_p2
+    set 0, b
+.status_p2:
+    ld a, [nes_apu_len_p2]
+    and a
+    jr z, .status_tri
+    set 1, b
+.status_tri:
+    ld a, [nes_apu_len_tri]
+    and a
+    jr z, .status_noi
+    set 2, b
+.status_noi:
+    ld a, [nes_apu_len_noi]
+    and a
+    jr z, .status_done
+    set 3, b
+.status_done:
+    ld a, b
     ret
 
 ; ---------------------------------------------------------------------------
@@ -135,6 +159,10 @@ nes_apu_update_pulse1:
     ld a, [nes_apu_write_idx]
     cp $03
     jr nz, .no_preload
+    ; NES ignores length reloads while this channel is disabled in $4015.
+    ld a, [nes_apu_regs + $15]
+    and $01
+    jr z, .no_preload
     ld a, [nes_apu_regs + $03]
     ld hl, nes_apu_len_p1
     call nes_apu_load_length
@@ -328,6 +356,10 @@ nes_apu_update_pulse2:
     ld a, [nes_apu_write_idx]
     cp $07
     jr nz, .no_preload
+    ; NES ignores length reloads while this channel is disabled in $4015.
+    ld a, [nes_apu_regs + $15]
+    and $02
+    jr z, .no_preload
     ld a, [nes_apu_regs + $07]
     ld hl, nes_apu_len_p2
     call nes_apu_load_length
@@ -459,10 +491,16 @@ nes_apu_update_triangle:
     ld a, [nes_apu_write_idx]
     cp $0B
     jr nz, .no_preload
+    ; $400B sets the triangle linear reload state regardless, but the NES
+    ; length counter only reloads while triangle is enabled in $4015.
+    ld a, [nes_apu_regs + $15]
+    and $04
+    jr z, .reload_linear
     ld a, [nes_apu_regs + $0B]
     ld hl, nes_apu_len_tri
     call nes_apu_load_length
-    ; $400B also reloads the linear counter from $4008 (NES reload flag).
+.reload_linear:
+    ; Current bridge approximation reloads the working linear counter here.
     ld a, [nes_apu_regs + $08]
     and $7F
     ld [nes_apu_linear_tri], a
@@ -551,6 +589,10 @@ nes_apu_update_noise:
     ld a, [nes_apu_write_idx]
     cp $0F
     jr nz, .no_preload
+    ; NES ignores length reloads while this channel is disabled in $4015.
+    ld a, [nes_apu_regs + $15]
+    and $08
+    jr z, .no_preload
     ld a, [nes_apu_regs + $0F]
     ld hl, nes_apu_len_noi
     call nes_apu_load_length
@@ -635,7 +677,7 @@ nes_apu_retrigger_noi:
     ret
 
 ; ---------------------------------------------------------------------------
-; $4015: channel enables. Rising edge reloads/triggers that channel.
+; $4015: channel enables. Disabling clears length; enabling alone does not retrigger.
 ; ---------------------------------------------------------------------------
 nes_apu_update_status:
     ld a, [nes_apu_prev_4015]
@@ -1145,21 +1187,16 @@ nes_apu_clock_sweep_p2:
     ld h, b
     jr .store2
 .neg2:
+    ; Pulse 2 uses two's-complement negate: target = period - delta.
+    ; Only pulse 1 applies the extra -1 from its one's-complement adder.
     ld a, e
     or d
     jr z, .store2
     ld a, l
     sub e
-    ld c, a
+    ld l, a
     ld a, h
     sbc d
-    ld b, a
-    jp c, .mute2
-    ld a, c
-    sub $01
-    ld l, a
-    ld a, b
-    sbc $00
     ld h, a
     jp c, .mute2
 .store2:
@@ -1227,9 +1264,7 @@ nes_apu_clock_sweep_p2:
     ld [nes_apu_sweep2_active], a
     ld a, $10
     ld [nes_apu_last_nr12_p2], a
-    ld a, [nes_apu_regs + $05]
-    and $7F
-    ld [nes_apu_regs + $05], a
+    ; Sweep overflow/underflow mutes the channel but does not rewrite $4005.
     ret
 
 ; Official NES length counter table (bits 3-7 of $4003/$4007/$400B/$400F).
@@ -1237,8 +1272,11 @@ nes_apu_length_table:
     db 10,254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14
     db 12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
 
-; NES noise period index 0..F → rough NR43 encoding (lower = higher pitch).
+; NES noise period index 0..F → nearest GB NR43 clock setting.
+; NES index 0 is the highest clock and index F the lowest. Values below are
+; chosen by nearest log-frequency match using NTSC NES noise periods and the
+; GB clock formula 262144 / (divider * 2^shift). Bit 3 remains clear here and
+; is ORed in separately when NES short/periodic-noise mode is selected.
 nes_apu_noise_nr43:
-    ; One octave up from prior table (stage percussion was dull).
-    db $E7, $E3, $D3, $C3, $B3, $A3, $93, $83
-    db $73, $63, $53, $43, $33, $23, $13, $03
+    db $00, $01, $02, $05, $15, $17, $25, $26
+    db $27, $35, $37, $45, $47, $55, $65, $75
