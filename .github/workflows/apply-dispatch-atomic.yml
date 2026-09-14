@@ -1,0 +1,94 @@
+name: Apply dispatcher bank critical-section fix
+
+on:
+  push:
+    branches: [debug/video-copy-invariant]
+    paths: ['.github/workflows/apply-dispatch-atomic.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/fit-screen-scale
+          fetch-depth: 0
+      - name: Patch dispatcher critical section
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('runtime/cpu.asm')
+          s = p.read_text()
+          old1 = '''    ld a, h
+    swap a
+    and $0F
+    add $18
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+
+    ; Table offset = (PC & $0FFF) * 4, mapped into ROMX $4000-$7FFF.
+'''
+          new1 = '''    ld a, h
+    swap a
+    and $0F
+    add $18
+
+    ; The dispatch-table lookup temporarily maps ROMX away from translated
+    ; code while nes_current_code_bank still names the interrupted code bank.
+    ; A host VBlank/STAT interrupt in this window can run video code that calls
+    ; nes_restore_code_bank, remapping ROMX to the old code bank before this
+    ; lookup resumes. The table read then consumes translated code bytes as a
+    ; dispatch record and jumps to an arbitrary host address. Keep this tiny
+    ; MBC/table-read/target-bank sequence atomic. EI is deliberately placed
+    ; immediately before JP HL below; SM83 enables IME after the following
+    ; instruction, so interrupts resume only after execution reaches the linked
+    ; translated target.
+    di
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+
+    ; Table offset = (PC & $0FFF) * 4, mapped into ROMX $4000-$7FFF.
+'''
+          if old1 not in s:
+              raise SystemExit('dispatcher bank-select pattern not found')
+          s = s.replace(old1, new1, 1)
+          old2 = '''    ld h, d
+    ld l, e
+    jp hl
+
+; Fast path for statically known cross-bank transfers.
+'''
+          new2 = '''    ld h, d
+    ld l, e
+    ei
+    jp hl
+
+; Fast path for statically known cross-bank transfers.
+'''
+          if old2 not in s:
+              raise SystemExit('dispatcher target-jump pattern not found')
+          s = s.replace(old2, new2, 1)
+          p.write_text(s)
+          PY
+      - name: Run tests
+        run: cargo test --all-targets
+      - name: Smoke assemble runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
+          if command -v rgbasm >/dev/null; then
+            make -C runtime clean all
+          fi
+      - name: Commit and push
+        run: |
+          git config user.name 'ChatGPT'
+          git config user.email 'chatgpt@users.noreply.github.com'
+          git add runtime/cpu.asm
+          git diff --cached --check
+          git commit -m 'runtime: make dispatch-table bank lookup interrupt-safe'
+          git push origin HEAD:feat/fit-screen-scale
