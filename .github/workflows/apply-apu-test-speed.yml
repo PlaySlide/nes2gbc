@@ -1,0 +1,61 @@
+name: Apply APU test-speed compensation
+on:
+  push:
+    branches: [apu/correctness-pass-2]
+    paths: [.github/workflows/apply-apu-test-speed.yml]
+permissions:
+  contents: write
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure git
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+      - name: Apply APU test-speed patch
+        run: python3 tools/apply_apu_test_speed.py
+      - name: Verify build option validation
+        run: |
+          if make -C runtime APU_TEST_SPEED=3; then
+            echo 'APU_TEST_SPEED=3 unexpectedly succeeded' >&2
+            exit 1
+          fi
+      - name: Rust tests
+        run: cargo test --all-targets
+      - name: Generate synthetic NES runtime assets
+        run: |
+          python3 tools/make_smoke_rom.py /tmp/nes2gbc-smoke.nes
+          cargo run -- /tmp/nes2gbc-smoke.nes --emit-asm runtime/generated.asm --max-blocks 16
+      - name: Build normal-speed audio
+        run: |
+          make -C runtime clean
+          make -C runtime APU_TEST_SPEED=1
+          cp runtime/build/runtime.gbc /tmp/runtime-apu-1x.gbc
+      - name: Build 2x-compensated audio
+        run: |
+          make -C runtime clean
+          make -C runtime APU_TEST_SPEED=2
+          cp runtime/build/runtime.gbc /tmp/runtime-apu-2x.gbc
+          cmp -s /tmp/runtime-apu-1x.gbc /tmp/runtime-apu-2x.gbc && { echo '1x and 2x builds are unexpectedly identical' >&2; exit 1; } || true
+      - name: Build 4x-compensated audio
+        run: |
+          make -C runtime clean
+          make -C runtime APU_TEST_SPEED=4
+          cp runtime/build/runtime.gbc /tmp/runtime-apu-4x.gbc
+          cmp -s /tmp/runtime-apu-2x.gbc /tmp/runtime-apu-4x.gbc && { echo '2x and 4x builds are unexpectedly identical' >&2; exit 1; } || true
+      - name: Restore generated files and commit source only
+        run: |
+          git checkout -- runtime/generated.asm
+          rm -f runtime/generated.prg.bin runtime/generated.chr.bin runtime/generated.chr.gbc.bin
+          rm -rf runtime/build
+          rm -f tools/apply_apu_test_speed.py
+          rm -f .github/workflows/apply-apu-test-speed.yml
+          git add runtime/apu.asm tools/apply_apu_test_speed.py .github/workflows/apply-apu-test-speed.yml
+          git diff --cached --check
+          git commit -m 'Add APU host-speed test compensation'
+          git push origin HEAD:apu/correctness-pass-2
