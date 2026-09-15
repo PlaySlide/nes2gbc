@@ -1,0 +1,99 @@
+name: Finish wide fit safe visible publish
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-ring21]
+    paths: [.github/workflows/finish-fit-wide-safe-visible-publish.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+
+      - name: Make completed wide-fit tiles publish safely after VBlank
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('runtime/video.asm')
+          s = p.read_text()
+
+          old = '''.fit_tile:\n    ld a, [nes_fit_dirty]\n    and a\n    ret nz\n    ld a, [nes_vram_unlocked]\n    and a\n    jr z, nes_video_fit_mark_dirty_if_resident\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_tile_vblank\n    ldh a, [nes_split_active]\n    and a\n    jp nz, nes_video_fit_publish_source_tile_hl\n.fit_tile_vblank:\n    call nes_video_fit_vblank_ok\n    jr z, nes_video_fit_mark_dirty_if_resident\n    jp nes_video_fit_publish_source_tile_hl\n'''
+          new = '''.fit_tile:\n    ld a, [nes_fit_dirty]\n    and a\n    ret nz\n    ; SMB's split transaction is allowed to keep publishing visible cells after\n    ; VBlank. The wide tile uploader below falls back to mode-safe byte writes,\n    ; so do not turn a long staged transaction into dirty=1 merely because the\n    ; generic VBlank fast-path latch has expired.\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_tile_unlocked\n    ldh a, [nes_split_active]\n    and a\n    jp nz, nes_video_fit_publish_source_tile_hl\n.fit_tile_unlocked:\n    ld a, [nes_vram_unlocked]\n    and a\n    jr z, nes_video_fit_mark_dirty_if_resident\n.fit_tile_vblank:\n    call nes_video_fit_vblank_ok\n    jr z, nes_video_fit_mark_dirty_if_resident\n    jp nes_video_fit_publish_source_tile_hl\n'''
+          if old not in s:
+              raise SystemExit('fit tile snippet not found')
+          s = s.replace(old, new, 1)
+
+          old = '''    call nes_video_fit_upload_tile_a\n    jr nz, .map_cell\n    jp nes_video_fit_defer_dirty\n\n.map_cell:\n    call nes_video_fit_vblank_ok\n    jp z, nes_video_fit_defer_dirty\n    ld a, [nes_fit_mt_page]\n    call nes_video_fit_map_addr_a\n    call nes_video_fit_write_map_cell_de\n    or $01\n    ret\n'''
+          new = '''    ; Once composition has started, always finish this tile. If VBlank ended\n    ; during the expensive 5/8 compose, upload_tile_a waits around mode 3\n    ; instead of discarding the completed work and poisoning the whole page.\n    call nes_video_fit_upload_tile_a\n\n.map_cell:\n    ld a, [nes_fit_mt_page]\n    call nes_video_fit_map_addr_a\n    call nes_video_fit_write_map_cell_de\n    or $01\n    ret\n'''
+          if old not in s:
+              raise SystemExit('map cell snippet not found')
+          s = s.replace(old, new, 1)
+
+          old = '''nes_video_fit_write_map_cell_de:\n    xor a\n    ldh [rVBK], a\n    ld a, [nes_fit_mt_tmp_l]\n    ld [de], a\n    ld a, $01\n    ldh [rVBK], a\n    ld a, [nes_fit_mt_tmp_h]\n    ld [de], a\n    xor a\n    ldh [rVBK], a\n    ret\n'''
+          new = '''nes_video_fit_write_map_cell_de:\n    ; Two map bytes may land after VBlank when a wide compose straddles the\n    ; boundary. Wait out mode 3 for each banked write rather than escalating to\n    ; a full resident rebuild.\n    call nes_video_wait_vram\n    xor a\n    ldh [rVBK], a\n    ld a, [nes_fit_mt_tmp_l]\n    ld [de], a\n    call nes_video_wait_vram\n    ld a, $01\n    ldh [rVBK], a\n    ld a, [nes_fit_mt_tmp_h]\n    ld [de], a\n    xor a\n    ldh [rVBK], a\n    ret\n'''
+          if old not in s:
+              raise SystemExit('map writer snippet not found')
+          s = s.replace(old, new, 1)
+
+          old = '''nes_video_fit_upload_tile_a:\n    call nes_video_fit_vblank_ok\n    ret z\n\n    ; Signed tile number -> physical local slot: id $80 maps to $8800, id $00\n'''
+          new = '''nes_video_fit_upload_tile_a:\n    ; Fast path is the normal VBlank burst. If the expensive wide compose ran\n    ; past line 143, keep the completed tile and publish it byte-by-byte through\n    ; the existing mode-3 wait instead of returning failure/dirty=1. C=0 fast,\n    ; C=1 safe visible-scanout path.\n    call nes_video_fit_vblank_ok\n    ld c, $00\n    jr nz, .upload_access_ready\n    inc c\n.upload_access_ready:\n\n    ; Signed tile number -> physical local slot: id $80 maps to $8800, id $00\n'''
+          if old not in s:
+              raise SystemExit('upload prologue snippet not found')
+          s = s.replace(old, new, 1)
+
+          old = '''    ld hl, nes_fit_mt_compose\n    ld b, 16\n.copy:\n    ld a, [hli]\n    ld [de], a\n    inc de\n    dec b\n    jr nz, .copy\n'''
+          new = '''    ld hl, nes_fit_mt_compose\n    ld b, 16\n.copy:\n    ld a, c\n    and a\n    jr z, .copy_now\n    call nes_video_wait_vram\n.copy_now:\n    ld a, [hli]\n    ld [de], a\n    inc de\n    dec b\n    jr nz, .copy\n'''
+          if old not in s:
+              raise SystemExit('upload copy snippet not found')
+          s = s.replace(old, new, 1)
+
+          old = '''nes_video_fit_sync_attribute_write:\n    ld a, [nes_vram_unlocked]\n    and a\n    ret nz\n    jp nes_video_fit_mark_dirty_if_resident\n'''
+          new = '''nes_video_fit_sync_attribute_write:\n    ; SMB split queue attributes were already intentionally ignored while the\n    ; transaction held the VBlank fast-path latch. Keep ignoring them if a\n    ; safe visible tile write clears that latch; otherwise the next attribute\n    ; byte would immediately convert the whole page to dirty=1 again.\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .attr_unlocked\n    ldh a, [nes_split_active]\n    and a\n    ret nz\n.attr_unlocked:\n    ld a, [nes_vram_unlocked]\n    and a\n    ret nz\n    jp nes_video_fit_mark_dirty_if_resident\n'''
+          if old not in s:
+              raise SystemExit('attribute snippet not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rgbds >/dev/null 2>&1 || true
+          if ! command -v rgbasm >/dev/null; then
+            sudo apt-get install -y -qq bison flex libpng-dev pkg-config >/dev/null
+            git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+            make -C /tmp/rgbds -j2 >/dev/null
+            sudo make -C /tmp/rgbds install >/dev/null
+          fi
+
+      - name: Build and test
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=bytearray(b'NES\x1a')+bytearray([2,1,1,0])+bytearray(8)
+          p=bytearray([0xEA])*0x8000
+          p[:3]=bytes([0x4C,0,0x80]); p[-6:]=bytes([0,0x80]*3)
+          Path('/tmp/test.nes').write_bytes(h+p+bytes(0x2000))
+          PY
+          cargo run -- /tmp/test.nes --emit-asm runtime/generated.asm --fit-screen
+          make -C runtime clean all
+          cargo test --all-targets
+
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/video.asm
+          git commit -m 'FIT_SCREEN: finish wide tiles safely past VBlank'
+          git push origin HEAD:dev/fit-screen-wide-160
