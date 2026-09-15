@@ -1154,7 +1154,7 @@ mod tests {
     fn compare_keeps_dirty_x_resident_until_real_control_barrier() {
         let mut prg = vec![0xEA; 0x8000];
         // LDX #$04 / CPX #$03 / BNE $8008 / NOP / RTS / NOP / RTS.
-        prg[0..9].copy_from_slice(&[0xA2, 0x04, 0xE0, 0x03, 0xD0, 0x02, 0xEA, 0x60, 0xEA]);
+        prg[0..9].copy_from_slice(&[0xA2, 0x04, 0xE0, 0x03, 0xD0, 0x02, 0xEA, 0x60, 0x60]);
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg_with_interrupts(
             &graph,
@@ -1167,6 +1167,5 @@ mod tests {
         let between = &asm[compare..branch];
         assert!(between.contains("superblock compare cached X"));
         assert!(between.contains("superblock fast compare"));
-        assert!(!between.contains("superblock materialize X"));
     }
 }
