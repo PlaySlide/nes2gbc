@@ -430,6 +430,8 @@ fn plan_superblocks(
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct TraceState {
+    a_live: bool,
+    a_dirty: bool,
     x_b: bool,
     x_dirty: bool,
     y_c: bool,
@@ -438,6 +440,10 @@ struct TraceState {
 
 #[derive(Debug, Default)]
 struct StateStats {
+    a_seed_loads: usize,
+    a_reload_avoided: usize,
+    a_stores_deferred: usize,
+    a_materialized: usize,
     x_seed_loads: usize,
     y_seed_loads: usize,
     x_reload_avoided: usize,
@@ -468,6 +474,43 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
 fn emit_update_nz(out: &mut String) {
     writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
     writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+}
+
+fn ensure_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+    if state.a_live {
+        stats.a_reload_avoided += 1;
+        return;
+    }
+    writeln!(out, "    ldh a, [nes_a] ; superblock A cache seed").unwrap();
+    state.a_live = true;
+    state.a_dirty = false;
+    stats.a_seed_loads += 1;
+}
+
+fn write_a_resident(state: &mut TraceState, stats: &mut StateStats) {
+    state.a_live = true;
+    state.a_dirty = true;
+    stats.a_stores_deferred += 1;
+}
+
+fn discard_a(state: &mut TraceState) {
+    state.a_live = false;
+    state.a_dirty = false;
+}
+
+fn materialize_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+    if !state.a_dirty {
+        return;
+    }
+    debug_assert!(state.a_live);
+    writeln!(out, "    ldh [nes_a], a ; superblock materialize A").unwrap();
+    state.a_dirty = false;
+    stats.a_materialized += 1;
+}
+
+fn clobber_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+    materialize_a(out, state, stats);
+    state.a_live = false;
 }
 
 fn ensure_x(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
@@ -509,8 +552,17 @@ fn sync_xy(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
     }
 }
 
-fn invalidate_xy(state: &mut TraceState) {
-    debug_assert!(!state.x_dirty && !state.y_dirty);
+fn sync_state(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+    // A must be published before X/Y because their materialization uses host A.
+    materialize_a(out, state, stats);
+    sync_xy(out, state, stats);
+    // Even a clean resident A cannot be trusted after X/Y publication.
+    state.a_live = false;
+}
+
+fn invalidate_state(state: &mut TraceState) {
+    debug_assert!(!state.a_dirty && !state.x_dirty && !state.y_dirty);
+    state.a_live = false;
     state.x_b = false;
     state.y_c = false;
 }
@@ -667,7 +719,7 @@ fn load_reg_to_a(
     stats: &mut StateStats,
 ) -> bool {
     match reg {
-        Register::A => writeln!(out, "    ldh a, [nes_a]").unwrap(),
+        Register::A => ensure_a(out, state, stats),
         Register::X => {
             ensure_x(out, state, stats);
             writeln!(out, "    ld a, b ; superblock cached X").unwrap();
@@ -690,7 +742,7 @@ fn write_reg_from_a(
     stats: &mut StateStats,
 ) -> bool {
     match reg {
-        Register::A => writeln!(out, "    ldh [nes_a], a").unwrap(),
+        Register::A => write_a_resident(state, stats),
         Register::X => {
             writeln!(out, "    ld b, a ; superblock X becomes resident").unwrap();
             state.x_b = true;
@@ -880,6 +932,38 @@ fn fast_op_supported(op: &IrOp) -> bool {
 
 fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut StateStats) {
     debug_assert!(fast_op_supported(op));
+
+    match *op {
+        IrOp::SetFlag { .. }
+        | IrOp::Load {
+            dst: Register::X | Register::Y,
+            ..
+        }
+        | IrOp::Store {
+            src: Register::X | Register::Y,
+            ..
+        }
+        | IrOp::Transfer {
+            src: Register::X | Register::Y,
+            dst: Register::X | Register::Y,
+            ..
+        }
+        | IrOp::Inc(Register::X | Register::Y)
+        | IrOp::Dec(Register::X | Register::Y)
+        | IrOp::Modify {
+            target: ModifyTarget::Memory(_),
+            ..
+        }
+        | IrOp::Compare { .. } => clobber_a(out, state, stats),
+        IrOp::Load {
+            dst: Register::A, ..
+        }
+        | IrOp::Transfer {
+            dst: Register::A, ..
+        } => discard_a(state),
+        _ => {}
+    }
+
     match *op {
         IrOp::SetFlag { flag, value } => match flag {
             Flag::Carry => {
@@ -928,9 +1012,9 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             let inc = matches!(*op, IrOp::Inc(_));
             match reg {
                 Register::A => {
-                    writeln!(out, "    ldh a, [nes_a]").unwrap();
+                    ensure_a(out, state, stats);
                     writeln!(out, "    {} a", if inc { "inc" } else { "dec" }).unwrap();
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                    write_a_resident(state, stats);
                 }
                 Register::X => {
                     ensure_x(out, state, stats);
@@ -954,18 +1038,20 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             op,
             rhs: Operand::Immediate(imm),
         } => {
-            writeln!(out, "    ldh a, [nes_a]").unwrap();
+            ensure_a(out, state, stats);
             match op {
                 LogicOp::And => writeln!(out, "    and ${imm:02X}").unwrap(),
                 LogicOp::Ora => writeln!(out, "    or ${imm:02X}").unwrap(),
                 LogicOp::Eor => writeln!(out, "    xor ${imm:02X}").unwrap(),
             }
-            writeln!(out, "    ldh [nes_a], a").unwrap();
+            write_a_resident(state, stats);
             emit_update_nz(out);
         }
         IrOp::Arithmetic { op, rhs } => {
-            // Keep B/C reserved for resident X/Y. D/E/H/L are scratch here;
-            // any effective-address use is complete before arithmetic begins.
+            // Capture architectural A before operand/address work can use host A.
+            // B/C remain reserved for resident X/Y; D holds the 6502 lhs.
+            ensure_a(out, state, stats);
+            writeln!(out, "    ld d, a ; superblock resident arithmetic lhs").unwrap();
             match rhs {
                 Operand::Immediate(imm) => {
                     writeln!(out, "    ld e, ${imm:02X}").unwrap();
@@ -983,8 +1069,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                 writeln!(out, "    ld e, a").unwrap();
             }
 
-            writeln!(out, "    ldh a, [nes_a]").unwrap();
-            writeln!(out, "    ld d, a ; superblock arithmetic lhs").unwrap();
+            writeln!(out, "    ld a, d").unwrap();
             writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jr z, :+").unwrap();
@@ -1034,15 +1119,15 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             writeln!(out, ":").unwrap();
 
             writeln!(out, "    ld a, l").unwrap();
-            writeln!(out, "    ldh [nes_a], a").unwrap();
+            write_a_resident(state, stats);
             emit_update_nz(out);
             stats.fast_arithmetic += 1;
         }
         IrOp::Modify { op: modify, target } => match target {
             ModifyTarget::Accumulator => {
-                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                ensure_a(out, state, stats);
                 emit_fast_modify_value(out, modify, stats);
-                writeln!(out, "    ldh [nes_a], a").unwrap();
+                write_a_resident(state, stats);
             }
             ModifyTarget::Memory(mem) => {
                 emit_fast_modify_memory(out, mem, modify, state, stats);
@@ -1099,8 +1184,8 @@ fn emit_barrier_ops(
     if ops.is_empty() {
         return;
     }
-    sync_xy(out, state, stats);
-    invalidate_xy(state);
+    sync_state(out, state, stats);
+    invalidate_state(state);
     out.push_str(&lr35902::emit_ops(ops));
     stats.barriers += 1;
 }
@@ -1113,7 +1198,7 @@ pub fn emit_cfg_with_interrupts(
 ) -> String {
     let mut out = String::new();
     writeln!(out, "; Generated by nes2gbc stateful superblock emitter").unwrap();
-    writeln!(out, "; X lives in B, Y in C across safe trace edges; canonical HRAM is materialized at barriers").unwrap();
+    writeln!(out, "; A lives in host A, X in B, Y in C across safe trace edges; dirty canonical HRAM is materialized at barriers").unwrap();
     writeln!(out).unwrap();
 
     let limit = options.max_blocks.unwrap_or(graph.blocks.len());
@@ -1166,7 +1251,7 @@ pub fn emit_cfg_with_interrupts(
             pending_continuation = None;
         } else {
             if let Some((target, from_bank)) = pending_continuation.take() {
-                sync_xy(&mut out, &mut state, &mut stats);
+                sync_state(&mut out, &mut state, &mut stats);
                 emit_known_target(
                     &mut out,
                     target,
@@ -1192,16 +1277,32 @@ pub fn emit_cfg_with_interrupts(
         }
 
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
+        if continuing && state.a_live {
+            writeln!(
+                out,
+                "    push af ; preserve resident A across profile trace"
+            )
+            .unwrap();
+        }
         writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
         writeln!(out, "    call nes_profile_trace_pc").unwrap();
+        if continuing && state.a_live {
+            writeln!(out, "    pop af").unwrap();
+        }
         writeln!(out, "ENDC").unwrap();
 
         if options.debug_trace {
             let before = out.len();
+            if continuing && state.a_live {
+                writeln!(out, "    push af ; preserve resident A across debug trace").unwrap();
+            }
             writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
             writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
             writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
             writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+            if continuing && state.a_live {
+                writeln!(out, "    pop af").unwrap();
+            }
             section_pc += approx_code_bytes(&out[before..]);
         }
 
@@ -1272,7 +1373,7 @@ pub fn emit_cfg_with_interrupts(
                             section_pc += approx_code_bytes(&out[before..]);
                             pending.clear();
                         }
-                        sync_xy(&mut out, &mut state, &mut stats);
+                        sync_state(&mut out, &mut state, &mut stats);
                         write_insn_comment(&mut out, instruction);
                         let before = out.len();
                         let _ = emit_static_control(
@@ -1310,8 +1411,8 @@ pub fn emit_cfg_with_interrupts(
                         section_pc += approx_code_bytes(&out[before..]);
                         pending.clear();
                     }
-                    sync_xy(&mut out, &mut state, &mut stats);
-                    invalidate_xy(&mut state);
+                    sync_state(&mut out, &mut state, &mut stats);
+                    invalidate_state(&mut state);
                     write_insn_comment(&mut out, instruction);
                     let before = out.len();
                     writeln!(out, "    ; TODO {err}").unwrap();
@@ -1343,7 +1444,7 @@ pub fn emit_cfg_with_interrupts(
                     .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                     .and_then(|edge| edge.target)
                 {
-                    sync_xy(&mut out, &mut state, &mut stats);
+                    sync_state(&mut out, &mut state, &mut stats);
                     let before = out.len();
                     emit_known_target(
                         &mut out,
@@ -1361,7 +1462,7 @@ pub fn emit_cfg_with_interrupts(
     }
 
     if let Some((target, from_bank)) = pending_continuation.take() {
-        sync_xy(&mut out, &mut state, &mut stats);
+        sync_state(&mut out, &mut state, &mut stats);
         emit_known_target(
             &mut out,
             target,
@@ -1388,13 +1489,20 @@ pub fn emit_cfg_with_interrupts(
             writeln!(out, "    ldh a, [nes_y]").unwrap();
             writeln!(out, "    ld c, a ; canonical adapter Y").unwrap();
         }
+        if contract.a_live {
+            writeln!(out, "    ldh a, [nes_a] ; canonical adapter A").unwrap();
+        }
         writeln!(out, "    jp nes_{addr:04X}_trace").unwrap();
         writeln!(out).unwrap();
         stats.canonical_adapters += 1;
     }
 
     println!(
-        "superblock-state: avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares, {} ADC/SBC, {} shifts/rotates, {} indexed RMW addr reuses); barriers {}; canonical adapters {}",
+        "superblock-state: A avoided {} reload(s), deferred {} store(s), materialized {}, seeds {}; avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares, {} ADC/SBC, {} shifts/rotates, {} indexed RMW addr reuses); barriers {}; canonical adapters {}",
+        stats.a_reload_avoided,
+        stats.a_stores_deferred,
+        stats.a_materialized,
+        stats.a_seed_loads,
         stats.x_reload_avoided,
         stats.y_reload_avoided,
         stats.x_stores_deferred,
@@ -1543,5 +1651,34 @@ mod tests {
         assert!(!between.contains("push af"));
         assert!(!between.contains("superblock materialize X"));
         assert!(asm[store_x..].contains("superblock cached X"));
+    }
+    #[test]
+    fn a_stays_dirty_across_store_logic_and_private_trace_edge() {
+        let mut prg = vec![0xEA; 0x8000];
+        // LDA #$3F / STA $00 / AND #$0F / JMP $8010 ; target STA $01 / RTS.
+        prg[0..9].copy_from_slice(&[0xA9, 0x3F, 0x85, 0x00, 0x29, 0x0F, 0x4C, 0x10, 0x80]);
+        prg[0x10..0x13].copy_from_slice(&[0x85, 0x01, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg_with_interrupts(
+            &graph,
+            EmitOptions {
+                reset: 0x8000,
+                max_blocks: Some(8),
+                debug_trace: false,
+            },
+            0x8000,
+            0x8000,
+        );
+        let lda = asm.find("; $8000: $A9 Lda Immediate").unwrap();
+        let target = asm.find("nes_8010_trace:").unwrap();
+        let rts = asm.find("; $8012: $60 Rts Implied").unwrap();
+        let hot = &asm[lda..rts];
+        assert!(hot.contains("superblock: same-bank unique-entry JMP elided"));
+        assert!(!hot.contains("superblock materialize A"));
+        assert!(!hot.contains("ldh a, [nes_a]"));
+        assert!(asm[target..rts].contains("ld [$C001], a"));
+        let after_rts = &asm[rts..];
+        assert!(after_rts.contains("superblock materialize A"));
+        assert!(asm.contains("ldh a, [nes_a] ; canonical adapter A"));
     }
 }
