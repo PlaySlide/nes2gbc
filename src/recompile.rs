@@ -1,7 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
-use crate::{cfg::{ControlFlowGraph, EdgeKind}, ir::{self, Flag, IrOp}, lr35902};
+use crate::{
+    cfg::{BasicBlock, ControlFlowGraph, EdgeKind},
+    ir::{self, Flag, IrOp, ModifyTarget, Operand, Register, StackValue},
+    lr35902,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EmitOptions {
@@ -148,6 +152,7 @@ fn approx_code_bytes(asm: &str) -> usize {
             !l.is_empty()
                 && !l.starts_with(';')
                 && !l.starts_with("IF ")
+                && !l.starts_with("ELSE")
                 && !l.starts_with("ENDC")
                 && !l.starts_with("SECTION")
                 && !l.ends_with(':')
@@ -189,6 +194,34 @@ fn emit_static_target(
     }
 }
 
+fn emit_fast_a_target(
+    out: &mut String,
+    target: u16,
+    current_bank: u16,
+    banks: &BTreeMap<u16, u16>,
+) -> bool {
+    if banks.get(&target).copied() != Some(current_bank) {
+        return false;
+    }
+
+    // PROFILE_TRACE expects every canonical block entry to run its trace hook,
+    // so instrumented builds deliberately use the canonical entry. Release
+    // builds jump past the redundant nes_a reload and keep host A resident.
+    writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
+    writeln!(out, "    jp nes_{target:04X}").unwrap();
+    writeln!(out, "ELSE").unwrap();
+    writeln!(out, "    jp nes_{target:04X}_fast_a").unwrap();
+    writeln!(out, "ENDC").unwrap();
+
+    // The bank-locality repacker only understands canonical nes_XXXX labels.
+    // Keep a compile-time-dead canonical edge so its must-link analysis keeps
+    // the source and the private fast entry in the same ROM bank.
+    writeln!(out, "IF 0").unwrap();
+    writeln!(out, "    jp nes_{target:04X} ; A-residency bank-locality relation").unwrap();
+    writeln!(out, "ENDC").unwrap();
+    true
+}
+
 fn emit_static_control(
     out: &mut String,
     ops: &[IrOp],
@@ -196,6 +229,7 @@ fn emit_static_control(
     banks: &BTreeMap<u16, u16>,
     section_offs: Option<&BTreeMap<u16, usize>>,
     section_pc: usize,
+    fast_a_target: Option<u16>,
 ) -> bool {
     if ops.len() != 1 {
         return false;
@@ -230,8 +264,11 @@ fn emit_static_control(
             true
         }
         IrOp::Jump(target) if banks.contains_key(&target) => {
-            emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
-            true
+            if fast_a_target == Some(target) {
+                emit_fast_a_target(out, target, current_bank, banks)
+            } else {
+                emit_static_target(out, target, current_bank, banks, section_offs, section_pc)
+            }
         }
         IrOp::Call { target, return_addr } if banks.contains_key(&target) => {
             writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
@@ -280,7 +317,233 @@ fn nmi_poll_points(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTreeS
     points
 }
 
-pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
+fn reachable_from_roots(
+    graph: &ControlFlowGraph,
+    selected: &BTreeSet<u16>,
+    roots: &[u16],
+) -> BTreeSet<u16> {
+    let mut seen = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    for &root in roots {
+        if selected.contains(&root) {
+            queue.push_back(root);
+        }
+    }
+
+    while let Some(addr) = queue.pop_front() {
+        if !seen.insert(addr) {
+            continue;
+        }
+        let Some(block) = graph.blocks.get(&addr) else { continue };
+        for target in block.edges.iter().filter_map(|edge| edge.target) {
+            if selected.contains(&target) && !seen.contains(&target) {
+                queue.push_back(target);
+            }
+        }
+    }
+    seen
+}
+
+fn nmi_exclusive_blocks(
+    graph: &ControlFlowGraph,
+    selected: &BTreeSet<u16>,
+    reset: u16,
+    nmi: u16,
+    irq: u16,
+) -> BTreeSet<u16> {
+    let nmi_reach = reachable_from_roots(graph, selected, &[nmi]);
+    let mut other_roots = vec![reset];
+    if irq != reset && irq != nmi {
+        other_roots.push(irq);
+    }
+    let other_reach = reachable_from_roots(graph, selected, &other_roots);
+
+    // If ordinary/IRQ control reaches an unresolved computed jump, it could
+    // enter any translated block. Refuse to prove exclusivity in that case.
+    let unsafe_dynamic = other_reach.iter().any(|addr| {
+        graph.blocks.get(addr).is_some_and(|block| {
+            block.edges.iter().any(|edge| {
+                matches!(edge.kind, EdgeKind::IndirectJump { .. }) && edge.target.is_none()
+            })
+        })
+    });
+    if unsafe_dynamic {
+        return BTreeSet::new();
+    }
+
+    nmi_reach.difference(&other_reach).copied().collect()
+}
+
+fn is_static_control_ir(ops: &[IrOp], banks: &BTreeMap<u16, u16>) -> bool {
+    if ops.len() != 1 {
+        return false;
+    }
+    match ops[0] {
+        IrOp::Branch { target, .. }
+        | IrOp::Jump(target)
+        | IrOp::Call { target, .. } => banks.contains_key(&target),
+        _ => false,
+    }
+}
+
+fn pending_ops_before_static_control(
+    block: &BasicBlock,
+    banks: &BTreeMap<u16, u16>,
+) -> Option<Vec<IrOp>> {
+    let mut pending = Vec::new();
+    for instruction in &block.instructions {
+        let ops = ir::lower_instruction(*instruction).ok()?;
+        if is_static_control_ir(&ops, banks) {
+            break;
+        }
+        pending.extend(ops);
+    }
+    Some(pending)
+}
+
+fn direct_store_keeps_a(dst: Operand) -> bool {
+    matches!(dst, Operand::ZeroPage(_))
+        || matches!(dst, Operand::Absolute(addr) if addr < 0x2000)
+}
+
+fn ops_exit_with_clean_a(ops: &[IrOp]) -> bool {
+    let mut live = false;
+    for op in ops {
+        live = match *op {
+            IrOp::SetFlag { .. } => false,
+            IrOp::Load { dst, .. } => dst == Register::A,
+            IrOp::Store { src, dst } => src == Register::A && direct_store_keeps_a(dst),
+            IrOp::Transfer { src, dst, .. } => src == Register::A || dst == Register::A,
+            IrOp::Inc(reg) | IrOp::Dec(reg) => reg == Register::A,
+            IrOp::Logic { .. } | IrOp::Arithmetic { .. } => true,
+            IrOp::Modify { target, .. } => target == ModifyTarget::Accumulator,
+            IrOp::Bit { .. } | IrOp::Compare { .. } => false,
+            IrOp::StackPush(_) => false,
+            IrOp::StackPop(StackValue::A) => true,
+            IrOp::StackPop(StackValue::Status) => false,
+            IrOp::ReadIo { dst, .. } => dst == Register::A,
+            IrOp::WriteIo { addr: 0x4011, src } => src == Register::A,
+            IrOp::WriteIo { .. } => false,
+            IrOp::Nop => live,
+            IrOp::Branch { .. }
+            | IrOp::Jump(_)
+            | IrOp::JumpIndirect { .. }
+            | IrOp::Call { .. }
+            | IrOp::Return
+            | IrOp::ReturnInterrupt
+            | IrOp::Break { .. } => false,
+        };
+    }
+    live
+}
+
+fn seeded_a_asm(ops: &[IrOp]) -> Option<String> {
+    let asm = lr35902::emit_ops(ops);
+    let needle = "    ldh a, [nes_a]\n";
+    let pos = asm.find(needle)?;
+    let prefix = &asm[..pos];
+
+    // Keep the first experiment deliberately narrow. The only allowed work
+    // before the canonical A reload is immediate setup in E (CMP #imm). It
+    // does not touch A or host flags used by the translated instruction.
+    if prefix.lines().any(|line| {
+        let c = line.trim();
+        !c.is_empty() && !c.starts_with(';') && !c.starts_with("ld e, $")
+    }) {
+        return None;
+    }
+
+    let mut out = String::with_capacity(asm.len() - needle.len());
+    out.push_str(prefix);
+    out.push_str(&asm[pos + needle.len()..]);
+    Some(out)
+}
+
+fn unconditional_static_successor(block: &BasicBlock) -> Option<(u16, bool)> {
+    let last = block.instructions.last()?;
+    if last.def.mnemonic == crate::cpu6502::Mnemonic::Jmp {
+        let target = block
+            .edges
+            .iter()
+            .find(|edge| matches!(edge.kind, EdgeKind::Jump))
+            .and_then(|edge| edge.target)?;
+        return Some((target, true));
+    }
+
+    if !terminal_mnemonic(last.def.mnemonic) {
+        let target = block
+            .edges
+            .iter()
+            .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
+            .and_then(|edge| edge.target)?;
+        return Some((target, false));
+    }
+    None
+}
+
+fn clean_a_resident_edges(
+    graph: &ControlFlowGraph,
+    selected_list: &[u16],
+    banks: &BTreeMap<u16, u16>,
+    poll_points: &BTreeSet<u16>,
+    nmi_exclusive: &BTreeSet<u16>,
+) -> (BTreeMap<u16, u16>, BTreeSet<u16>) {
+    let selected: BTreeSet<u16> = selected_list.iter().copied().collect();
+    let positions: BTreeMap<u16, usize> = selected_list
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, addr)| (addr, i))
+        .collect();
+
+    let mut seedable = BTreeSet::new();
+    for &addr in selected_list {
+        let Some(block) = graph.blocks.get(&addr) else { continue };
+        let Some(ops) = pending_ops_before_static_control(block, banks) else { continue };
+        if ops.is_empty() || seeded_a_asm(&ops).is_none() {
+            continue;
+        }
+        if !poll_points.contains(&addr) || nmi_exclusive.contains(&addr) {
+            seedable.insert(addr);
+        }
+    }
+
+    let mut edges = BTreeMap::new();
+    let mut targets = BTreeSet::new();
+    for &src in selected_list {
+        let Some(block) = graph.blocks.get(&src) else { continue };
+        let Some((target, is_jump)) = unconditional_static_successor(block) else { continue };
+        if !selected.contains(&target) || !seedable.contains(&target) {
+            continue;
+        }
+        if banks.get(&src) != banks.get(&target) {
+            continue;
+        }
+
+        // A literal adjacent fallthrough already costs zero transfer cycles;
+        // forcing a JP merely to skip a 3-M-cycle HRAM load would be slower.
+        if !is_jump {
+            let next = positions.get(&src).and_then(|i| selected_list.get(i + 1)).copied();
+            if next == Some(target) {
+                continue;
+            }
+        }
+
+        let Some(ops) = pending_ops_before_static_control(block, banks) else { continue };
+        if !ops_exit_with_clean_a(&ops) {
+            continue;
+        }
+        edges.insert(src, target);
+        targets.insert(target);
+    }
+    (edges, targets)
+}
+
+fn emit_cfg_impl(
+    graph: &ControlFlowGraph,
+    options: EmitOptions,
+    interrupt_entries: Option<(u16, u16)>,
+) -> String {
     let mut out = String::new();
     writeln!(out, "; Generated by nes2gbc").unwrap();
     writeln!(out, "; Native banked LR35902 output").unwrap();
@@ -290,6 +553,31 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     let selected = select_reachable(graph, options.reset, limit);
     let banks = assign_code_banks(graph, &selected);
     let poll_points = nmi_poll_points(graph, &selected);
+    let nmi_exclusive = interrupt_entries
+        .map(|(nmi, irq)| nmi_exclusive_blocks(graph, &selected, options.reset, nmi, irq))
+        .unwrap_or_default();
+    let selected_list: Vec<u16> = selected.iter().copied().collect();
+
+    let (fast_a_edges, fast_a_targets) = if interrupt_entries.is_some() && !options.debug_trace {
+        clean_a_resident_edges(
+            graph,
+            &selected_list,
+            &banks,
+            &poll_points,
+            &nmi_exclusive,
+        )
+    } else {
+        (BTreeMap::new(), BTreeSet::new())
+    };
+
+    if interrupt_entries.is_some() {
+        println!(
+            "a-residency: kept clean 6502 A live across {} same-bank static edge(s) / {} private target entrie(s); {} block(s) proven NMI-exclusive",
+            fast_a_edges.len(),
+            fast_a_targets.len(),
+            nmi_exclusive.len()
+        );
+    }
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
     writeln!(out, "nes_reset:").unwrap();
@@ -299,7 +587,6 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
     emit_pc_dispatch(&mut out, options.reset);
     writeln!(out).unwrap();
 
-    let selected_list: Vec<u16> = selected.iter().copied().collect();
     // Defer fallthrough jumps so consecutive same-bank blocks can share a
     // SECTION and fall through in place instead of paying `jp nes_XXXX`.
     let mut pending_fallthrough: Option<(u16 /*target*/, u16 /*from_bank*/)> = None;
@@ -359,6 +646,16 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         }
 
         if poll_points.contains(&block.start) {
+            let exclusive = nmi_exclusive.contains(&block.start);
+            if exclusive {
+                // Keep the exact poll text visible to the conservative generated-
+                // ASM analyses as a liveness/call barrier, but emit zero machine
+                // code. Nested NES NMI delivery is impossible while translated
+                // NMI is active. The late elision pass may remove this dead text.
+                writeln!(out, "    ; NMI-exclusive safe-point retained as analysis barrier").unwrap();
+                writeln!(out, "IF 0").unwrap();
+            }
+
             // Usually there is no pending frame, so loop safe-points pay only
             // an HRAM byte test instead of a helper call and live LY polling.
             let before = out.len();
@@ -370,6 +667,21 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             writeln!(out, "    and a").unwrap();
             writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
             writeln!(out, ":").unwrap();
+            section_pc += approx_code_bytes(&out[before..]);
+            if exclusive {
+                writeln!(out, "ENDC").unwrap();
+            }
+        }
+
+        let seed_a_target = fast_a_targets.contains(&block.start);
+        let mut seed_a_pending = seed_a_target;
+        if seed_a_target {
+            // Canonical/dynamic entries materialize host A exactly once. Proven
+            // static predecessors enter at the private label with the same clean
+            // architectural value already resident in A.
+            let before = out.len();
+            writeln!(out, "    ldh a, [nes_a]").unwrap();
+            writeln!(out, "nes_{:04X}_fast_a:", block.start).unwrap();
             section_pc += approx_code_bytes(&out[before..]);
         }
 
@@ -386,20 +698,32 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
             .unwrap();
         };
 
+        let emit_pending = |out: &mut String, pending: &[IrOp], seed: &mut bool| {
+            if *seed {
+                let asm = seeded_a_asm(pending)
+                    .expect("A-resident target must have the precomputed seedable first batch");
+                out.push_str(&asm);
+                *seed = false;
+            } else {
+                out.push_str(&lr35902::emit_ops(pending));
+            }
+        };
+
         for instruction in &block.instructions {
             match ir::lower_instruction(*instruction) {
                 Ok(ops) => {
                     // Probe without writing: static control (branch/jmp) clobbers A.
                     let mut probe = String::new();
-                    if emit_static_control(&mut probe, &ops, bank, &banks, None, 0) {
+                    if emit_static_control(&mut probe, &ops, bank, &banks, None, 0, None) {
                         if !pending.is_empty() {
                             let before = out.len();
-                            out.push_str(&lr35902::emit_ops(&pending));
+                            emit_pending(&mut out, &pending, &mut seed_a_pending);
                             section_pc += approx_code_bytes(&out[before..]);
                             pending.clear();
                         }
                         write_insn_comment(&mut out, instruction);
                         let before = out.len();
+                        let fast_target = fast_a_edges.get(&block.start).copied();
                         let _ = emit_static_control(
                             &mut out,
                             &ops,
@@ -407,6 +731,7 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                             &banks,
                             Some(&section_offs),
                             section_pc,
+                            fast_target,
                         );
                         section_pc += approx_code_bytes(&out[before..]);
                     } else {
@@ -417,7 +742,7 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                 Err(err) => {
                     if !pending.is_empty() {
                         let before = out.len();
-                        out.push_str(&lr35902::emit_ops(&pending));
+                        emit_pending(&mut out, &pending, &mut seed_a_pending);
                         section_pc += approx_code_bytes(&out[before..]);
                         pending.clear();
                     }
@@ -436,10 +761,11 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
         }
         if !pending.is_empty() {
             let before = out.len();
-            out.push_str(&lr35902::emit_ops(&pending));
+            emit_pending(&mut out, &pending, &mut seed_a_pending);
             section_pc += approx_code_bytes(&out[before..]);
             pending.clear();
         }
+        assert!(!seed_a_pending, "A-resident target emitted no seedable body batch");
 
         if let Some(last) = block.instructions.last() {
             if is_branch(last.def.mnemonic) || !terminal_mnemonic(last.def.mnemonic) {
@@ -456,14 +782,18 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
                         pending_fallthrough = Some((target, bank));
                     } else {
                         let before = out.len();
-                        emit_known_target(
-                            &mut out,
-                            target,
-                            bank,
-                            &banks,
-                            Some(&section_offs),
-                            section_pc,
-                        );
+                        if fast_a_edges.get(&block.start).copied() == Some(target) {
+                            let _ = emit_fast_a_target(&mut out, target, bank, &banks);
+                        } else {
+                            emit_known_target(
+                                &mut out,
+                                target,
+                                bank,
+                                &banks,
+                                Some(&section_offs),
+                                section_pc,
+                            );
+                        }
                         section_pc += approx_code_bytes(&out[before..]);
                     }
                 }
@@ -488,6 +818,19 @@ pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
 
     emit_dispatch_tables(&mut out, &selected);
     out
+}
+
+pub fn emit_cfg(graph: &ControlFlowGraph, options: EmitOptions) -> String {
+    emit_cfg_impl(graph, options, None)
+}
+
+pub fn emit_cfg_with_interrupts(
+    graph: &ControlFlowGraph,
+    options: EmitOptions,
+    nmi: u16,
+    irq: u16,
+) -> String {
+    emit_cfg_impl(graph, options, Some((nmi, irq)))
 }
 
 #[derive(Debug, Clone)]
@@ -694,5 +1037,22 @@ mod tests {
         assert!(asm.contains("nes_8004:"));
         assert!(!asm.contains("SECTION \"NES block 8004\""));
         assert!(!asm.contains("jp nes_8004"));
+    }
+
+    #[test]
+    fn clean_a_residency_uses_private_same_bank_entry() {
+        let mut prg = vec![0xEA; 0x8000];
+        // LDA #$12 / JMP $8010 ... target begins with STA $00.
+        prg[0..5].copy_from_slice(&[0xA9, 0x12, 0x4C, 0x10, 0x80]);
+        prg[0x10..0x13].copy_from_slice(&[0x85, 0x00, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg_with_interrupts(
+            &graph,
+            EmitOptions { reset: 0x8000, max_blocks: Some(8), debug_trace: false },
+            0x8000,
+            0x8000,
+        );
+        assert!(asm.contains("nes_8010_fast_a:"));
+        assert!(asm.contains("jp nes_8010_fast_a"));
     }
 }
