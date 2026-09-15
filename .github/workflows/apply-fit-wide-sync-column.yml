@@ -21,32 +21,24 @@ jobs:
           vp = Path('runtime/video.asm')
           s = vp.read_text()
 
-          # 1) Normal +/-1 movement must recycle the far-offscreen physical
-          # column, exactly like the working non-scaled stitch. Do not compose
-          # the visible right edge synchronously.
           old = '''.forward_distance_ready:\n    and a\n    jp z, .scx_from_ring\n    cp 9\n    jr c, .catchup_forward\n\n    ld a, b\n    sub c\n    jr nc, .backward_distance_ready\n    add 40\n.backward_distance_ready:\n    cp 9\n    jr c, .catchup_backward\n'''
-          new = '''.forward_distance_ready:\n    and a\n    jp z, .scx_from_ring\n    cp 1\n    jr z, .delta_plus1\n    cp 9\n    jr c, .catchup_forward\n\n    ld a, b\n    sub c\n    jr nc, .backward_distance_ready\n    add 40\n.backward_distance_ready:\n    cp 1\n    jr z, .delta_minus1\n    cp 9\n    jr c, .catchup_backward\n'''
+          new = '''.forward_distance_ready:\n    and a\n    jp z, .scx_from_ring\n    cp 1\n    jr z, .delta_plus1\n    cp 9\n    jp c, .catchup_forward\n\n    ld a, b\n    sub c\n    jr nc, .backward_distance_ready\n    add 40\n.backward_distance_ready:\n    cp 1\n    jr z, .delta_minus1\n    cp 9\n    jp c, .catchup_backward\n'''
           if old not in s:
               raise SystemExit('distance gate not found')
           s = s.replace(old, new, 1)
 
           marker = '''    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.catchup_forward:\n'''
-          repl = '''    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.delta_plus1:\n    ; Same geometry as nes_video_update_horizontal_stitch: after advancing one\n    ; coarse column, the OLD leftmost physical map column is recycled as the\n    ; NEW far-right backing column (offset 31), not the visible edge (offset 20).\n    ld a, [nes_fit_origin_mx]\n    inc a\n    cp 40\n    jr c, .plus_origin_ok\n    xor a\n.plus_origin_ok:\n    ld [nes_fit_origin_mx], a\n\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    ; Rebuild the recycled far-offscreen column incrementally. It has eleven\n    ; whole backing columns of lead before a 160px viewport can ever see it.\n    ld a, $02\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld a, 31\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring\n\n.delta_minus1:\n    ld a, [nes_fit_origin_mx]\n    and a\n    jr nz, .minus_dec\n    ld a, 40\n.minus_dec:\n    dec a\n    ld [nes_fit_origin_mx], a\n\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    sub $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    ld a, $03\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring\n\n.catchup_forward:\n'''
+          repl = '''    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.delta_plus1:\n    ; Same geometry as the working non-scaled stitch: after advancing one\n    ; coarse column, recycle the OLD leftmost physical column as the NEW\n    ; far-right backing column (offset 31), never the visible edge (offset 20).\n    ld a, [nes_fit_origin_mx]\n    inc a\n    cp 40\n    jr c, .plus_origin_ok\n    xor a\n.plus_origin_ok:\n    ld [nes_fit_origin_mx], a\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, $02\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld a, 31\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring\n\n.delta_minus1:\n    ld a, [nes_fit_origin_mx]\n    and a\n    jr nz, .minus_dec\n    ld a, 40\n.minus_dec:\n    dec a\n    ld [nes_fit_origin_mx], a\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    sub $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, $03\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring\n\n.catchup_forward:\n'''
           if marker not in s:
               raise SystemExit('delta insertion marker not found')
           s = s.replace(marker, repl, 1)
 
-          # 2) Rare multi-column catch-up still uses synchronous refresh, but it
-          # must refresh the recycled offset-31 column rather than offset 20.
           old = '''    ld a, 20\n    ld [nes_fit_mt_mx], a\n    xor a\n    ld [nes_fit_mt_my], a\n.sync_right_row:\n'''
           new = '''    ld a, 31\n    ld [nes_fit_mt_mx], a\n    xor a\n    ld [nes_fit_mt_my], a\n.sync_right_row:\n'''
           if old not in s:
               raise SystemExit('sync right column not found')
           s = s.replace(old, new, 1)
 
-          # 3) The backing stitch is all 32 physical map columns. Only 21 are
-          # scanned, but the extra 11 are the future buffer that makes main/perf
-          # stable. Full rebuilds and parser-write publication must maintain all 32.
           old = '''.col_right:\n    ld a, 20\n    jr .col_set\n'''
           new = '''.col_right:\n    ld a, 31\n    jr .col_set\n'''
           if old not in s:
@@ -73,26 +65,22 @@ jobs:
 
           s = s.replace(
               '; 21-column circular live window over the 40 GBC tile columns that represent\n; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport needs\n; 20 full tiles plus one partial entering tile whenever SCX has a fine offset.\n',
-              '; 32-column stitched backing ring over the 40 scaled world columns. The\n; 160px viewport scans 20 full tiles plus one partial edge (21 columns), while\n; the remaining 11 physical columns are the same future buffer used by main.\n',
-              1)
+              '; 32-column stitched backing ring over the 40 scaled world columns. The\n; 160px viewport scans 20 full tiles plus one partial edge (21 columns), while\n; the remaining 11 physical columns are the same future buffer used by main.\n', 1)
           s = s.replace(
               '; Full rebuild covers the 21 potentially scanned columns. Entering columns\n; get four tiles per call so ordinary horizontal scroll can catch up.\n',
-              '; Full rebuild covers all 32 stitched backing columns. Only 21 are scanned;\n; the remaining 11 must stay valid so they can rotate into view without holes.\n',
-              1)
-
+              '; Full rebuild covers all 32 stitched backing columns. Only 21 are scanned;\n; the remaining 11 must stay valid so they can rotate into view without holes.\n', 1)
           vp.write_text(s)
 
           mp = Path('runtime/main.asm')
           m = mp.read_text()
           old = '''    ; SMB split mode must never fall back to the chunked resident-page rebuild.\n    ; The queue publisher above updates visible scaled tiles directly, and\n    ; update_scroll_window synchronously publishes the one entering column. A\n    ; leftover dirty flag is stale bookkeeping from construction/transition and\n    ; was the reason the same 21-column chunk kept repeating while a rebuild\n    ; crawled behind Mario.\n    xor a\n    ld [nes_fit_dirty], a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scroll_done\n'''
-          new = '''    ; Keep any offset-31/offset-0 recycled-column job alive. Unlike the old\n    ; visible-edge scheme, this work is eleven columns offscreen and has ample\n    ; time to finish before scanout can reach it. Do not erase its progress here.\n    jp .scroll_done\n'''
+          new = '''    ; Preserve recycled-column progress. It is now offset 31/0, eleven whole\n    ; columns offscreen, so it can finish incrementally without blocking scanout.\n    jp .scroll_done\n'''
           if old not in m:
               raise SystemExit('SMB FIT dirty cleanup block not found')
           m = m.replace(old, new, 1)
           m = m.replace(
               '; Wide FIT smooth scrolling owns a 21st entering-edge column. Give only\n    ; that incremental column update (dirty=2/3) first use of VBlank before\n',
-              '; Wide FIT mirrors the proven 32-column stitch. Give the recycled\n    ; far-offscreen column update (dirty=2/3) first use of VBlank before\n',
-              1)
+              '; Wide FIT mirrors the proven 32-column stitch. Give the recycled\n    ; far-offscreen column update (dirty=2/3) first use of VBlank before\n', 1)
           mp.write_text(m)
           PY
       - name: Build RGBDS
