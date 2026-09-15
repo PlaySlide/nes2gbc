@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use crate::{
     cfg::{ControlFlowGraph, EdgeKind},
-    ir::{self, Flag, IrOp, LogicOp, ModifyOp, ModifyTarget, Operand, Register},
+    ir::{self, ArithmeticOp, Flag, IrOp, LogicOp, ModifyOp, ModifyTarget, Operand, Register},
     lr35902,
     recompile::EmitOptions,
 };
@@ -20,7 +20,10 @@ fn is_branch(m: crate::cpu6502::Mnemonic) -> bool {
 
 fn terminal_mnemonic(m: crate::cpu6502::Mnemonic) -> bool {
     use crate::cpu6502::Mnemonic::*;
-    matches!(m, Bcc | Bcs | Beq | Bmi | Bne | Bpl | Bvc | Bvs | Jmp | Jsr | Rts | Rti | Brk)
+    matches!(
+        m,
+        Bcc | Bcs | Beq | Bmi | Bne | Bpl | Bvc | Bvs | Jmp | Jsr | Rts | Rti | Brk
+    )
 }
 
 fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTreeSet<u16> {
@@ -35,7 +38,9 @@ fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTree
         if selected.len() >= limit || !selected.insert(addr) {
             continue;
         }
-        let Some(block) = graph.blocks.get(&addr) else { continue };
+        let Some(block) = graph.blocks.get(&addr) else {
+            continue;
+        };
         for target in block.edges.iter().filter_map(|edge| edge.target) {
             if graph.blocks.contains_key(&target) && !selected.contains(&target) {
                 queue.push_back(target);
@@ -49,23 +54,25 @@ fn estimated_block_size(block: &crate::cfg::BasicBlock) -> usize {
     64 + block.instructions.len() * 96
 }
 
-fn assign_code_banks(
-    graph: &ControlFlowGraph,
-    selected: &BTreeSet<u16>,
-) -> BTreeMap<u16, u16> {
+fn assign_code_banks(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTreeMap<u16, u16> {
     let mut assigned = BTreeMap::new();
     let mut bank = CODE_BANK_START;
     let mut used = 0usize;
     for addr in selected {
         let block = graph.blocks.get(addr).expect("selected block must exist");
         let cost = estimated_block_size(block);
-        assert!(cost <= ESTIMATED_BANK_BUDGET,
-            "basic block ${addr:04X} is too large for conservative bank packing");
+        assert!(
+            cost <= ESTIMATED_BANK_BUDGET,
+            "basic block ${addr:04X} is too large for conservative bank packing"
+        );
         if used != 0 && used + cost > ESTIMATED_BANK_BUDGET {
             bank += 1;
             used = 0;
         }
-        assert!(bank <= 255, "translated code exceeds current 8-bit MBC5 bank allocator");
+        assert!(
+            bank <= 255,
+            "translated code exceeds current 8-bit MBC5 bank allocator"
+        );
         assigned.insert(*addr, bank);
         used += cost;
     }
@@ -76,7 +83,11 @@ fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
     for segment in 0u16..8 {
         let bank = DISPATCH_BANK_START + segment;
         let base = 0x8000u16 + segment * 0x1000;
-        writeln!(out, "SECTION \"NES dispatch table {segment}\", ROMX[$4000], BANK[{bank}]").unwrap();
+        writeln!(
+            out,
+            "SECTION \"NES dispatch table {segment}\", ROMX[$4000], BANK[{bank}]"
+        )
+        .unwrap();
         let mut cursor = 0usize;
         let addresses: Vec<u16> = if segment == 7 {
             selected.range(base..=0xFFFF).copied().collect()
@@ -205,7 +216,10 @@ fn emit_static_control(
         IrOp::Jump(target) if banks.contains_key(&target) => {
             emit_static_target(out, target, current_bank, banks, section_offs, section_pc)
         }
-        IrOp::Call { target, return_addr } if banks.contains_key(&target) => {
+        IrOp::Call {
+            target,
+            return_addr,
+        } if banks.contains_key(&target) => {
             writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
             writeln!(out, "    call nes_stack_push_return_hl").unwrap();
             emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
@@ -264,7 +278,9 @@ fn reachable_from_roots(
         if !seen.insert(addr) {
             continue;
         }
-        let Some(block) = graph.blocks.get(&addr) else { continue };
+        let Some(block) = graph.blocks.get(&addr) else {
+            continue;
+        };
         for target in block.edges.iter().filter_map(|edge| edge.target) {
             if selected.contains(&target) && !seen.contains(&target) {
                 queue.push_back(target);
@@ -313,13 +329,17 @@ struct SuperblockPlan {
 fn preferred_successor(block: &crate::cfg::BasicBlock) -> Option<(u16, bool)> {
     let last = block.instructions.last()?;
     if last.def.mnemonic == crate::cpu6502::Mnemonic::Jmp {
-        let target = block.edges.iter()
+        let target = block
+            .edges
+            .iter()
             .find(|edge| matches!(edge.kind, EdgeKind::Jump))
             .and_then(|edge| edge.target)?;
         return Some((target, true));
     }
     if is_branch(last.def.mnemonic) || !terminal_mnemonic(last.def.mnemonic) {
-        let target = block.edges.iter()
+        let target = block
+            .edges
+            .iter()
             .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
             .and_then(|edge| edge.target)?;
         return Some((target, false));
@@ -349,10 +369,15 @@ fn plan_superblocks(
         };
     }
 
-    let mut incoming: BTreeMap<u16, usize> =
-        selected.iter().copied().map(|addr| (addr, 0usize)).collect();
+    let mut incoming: BTreeMap<u16, usize> = selected
+        .iter()
+        .copied()
+        .map(|addr| (addr, 0usize))
+        .collect();
     for &src in selected {
-        let Some(block) = graph.blocks.get(&src) else { continue };
+        let Some(block) = graph.blocks.get(&src) else {
+            continue;
+        };
         for target in block.edges.iter().filter_map(|edge| edge.target) {
             if let Some(count) = incoming.get_mut(&target) {
                 *count += 1;
@@ -374,8 +399,12 @@ fn plan_superblocks(
                 break;
             }
             plan.order.push(current);
-            let Some(block) = graph.blocks.get(&current) else { break };
-            let Some((target, is_jump)) = preferred_successor(block) else { break };
+            let Some(block) = graph.blocks.get(&current) else {
+                break;
+            };
+            let Some((target, is_jump)) = preferred_successor(block) else {
+                break;
+            };
             if !selected.contains(&target)
                 || claimed.contains(&target)
                 || banks.get(&current) != banks.get(&target)
@@ -421,6 +450,7 @@ struct StateStats {
     y_index_uses: usize,
     fast_ops: usize,
     fast_compares: usize,
+    fast_arithmetic: usize,
     barriers: usize,
     canonical_adapters: usize,
 }
@@ -622,7 +652,9 @@ fn emit_operand_store(
             writeln!(out, "    pop af").unwrap();
             writeln!(out, "    ld [hl], a").unwrap();
         }
-        Operand::Immediate(_) | Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => unreachable!(),
+        Operand::Immediate(_) | Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
+            unreachable!()
+        }
     }
 }
 
@@ -681,49 +713,50 @@ fn fast_op_supported(op: &IrOp) -> bool {
         IrOp::Store { src, dst } => src != Register::Sp && fast_store_supported(dst),
         IrOp::Transfer { src, dst, .. } => src != Register::Sp && dst != Register::Sp,
         IrOp::Inc(reg) | IrOp::Dec(reg) => reg != Register::Sp,
-        IrOp::Logic { rhs: Operand::Immediate(_), .. } => true,
+        IrOp::Logic {
+            rhs: Operand::Immediate(_),
+            ..
+        } => true,
+        IrOp::Arithmetic { rhs, .. } => fast_operand_supported(rhs),
         IrOp::Compare { reg, rhs } => reg != Register::Sp && fast_operand_supported(rhs),
-        IrOp::Modify { op: ModifyOp::Inc | ModifyOp::Dec, target: ModifyTarget::Accumulator } => true,
-        IrOp::Modify { op: ModifyOp::Inc | ModifyOp::Dec, target: ModifyTarget::Memory(mem) } => {
-            fast_operand_supported(mem) && fast_store_supported(mem)
-        }
+        IrOp::Modify {
+            op: ModifyOp::Inc | ModifyOp::Dec,
+            target: ModifyTarget::Accumulator,
+        } => true,
+        IrOp::Modify {
+            op: ModifyOp::Inc | ModifyOp::Dec,
+            target: ModifyTarget::Memory(mem),
+        } => fast_operand_supported(mem) && fast_store_supported(mem),
         _ => false,
     }
 }
 
-fn emit_fast_op(
-    out: &mut String,
-    op: &IrOp,
-    state: &mut TraceState,
-    stats: &mut StateStats,
-) {
+fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut StateStats) {
     debug_assert!(fast_op_supported(op));
     match *op {
-        IrOp::SetFlag { flag, value } => {
-            match flag {
-                Flag::Carry => {
-                    writeln!(out, "    ld a, ${:02X}", if value { 1 } else { 0 }).unwrap();
-                    writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
-                }
-                Flag::Zero => {
-                    writeln!(out, "    ld a, ${:02X}", if value { 0 } else { 1 }).unwrap();
-                    writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
-                }
-                Flag::Negative => {
-                    writeln!(out, "    ld a, ${:02X}", if value { 0x80 } else { 0 }).unwrap();
-                    writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
-                }
-                _ => {
-                    writeln!(out, "    ldh a, [nes_p]").unwrap();
-                    if value {
-                        writeln!(out, "    or ${:02X}", flag_mask(flag)).unwrap();
-                    } else {
-                        writeln!(out, "    and ${:02X}", !flag_mask(flag)).unwrap();
-                    }
-                    writeln!(out, "    ldh [nes_p], a").unwrap();
-                }
+        IrOp::SetFlag { flag, value } => match flag {
+            Flag::Carry => {
+                writeln!(out, "    ld a, ${:02X}", if value { 1 } else { 0 }).unwrap();
+                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
             }
-        }
+            Flag::Zero => {
+                writeln!(out, "    ld a, ${:02X}", if value { 0 } else { 1 }).unwrap();
+                writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
+            }
+            Flag::Negative => {
+                writeln!(out, "    ld a, ${:02X}", if value { 0x80 } else { 0 }).unwrap();
+                writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+            }
+            _ => {
+                writeln!(out, "    ldh a, [nes_p]").unwrap();
+                if value {
+                    writeln!(out, "    or ${:02X}", flag_mask(flag)).unwrap();
+                } else {
+                    writeln!(out, "    and ${:02X}", !flag_mask(flag)).unwrap();
+                }
+                writeln!(out, "    ldh [nes_p], a").unwrap();
+            }
+        },
         IrOp::Load { dst, src } => {
             emit_operand_load(out, src, state, stats);
             let _ = write_reg_from_a(out, dst, state, stats);
@@ -733,7 +766,11 @@ fn emit_fast_op(
             let _ = load_reg_to_a(out, src, state, stats);
             emit_operand_store(out, dst, state, stats);
         }
-        IrOp::Transfer { src, dst, update_nz } => {
+        IrOp::Transfer {
+            src,
+            dst,
+            update_nz,
+        } => {
             let _ = load_reg_to_a(out, src, state, stats);
             let _ = write_reg_from_a(out, dst, state, stats);
             if update_nz {
@@ -766,7 +803,10 @@ fn emit_fast_op(
             }
             emit_update_nz(out);
         }
-        IrOp::Logic { op, rhs: Operand::Immediate(imm) } => {
+        IrOp::Logic {
+            op,
+            rhs: Operand::Immediate(imm),
+        } => {
             writeln!(out, "    ldh a, [nes_a]").unwrap();
             match op {
                 LogicOp::And => writeln!(out, "    and ${imm:02X}").unwrap(),
@@ -776,22 +816,113 @@ fn emit_fast_op(
             writeln!(out, "    ldh [nes_a], a").unwrap();
             emit_update_nz(out);
         }
-        IrOp::Modify { op: modify, target } => {
-            match target {
-                ModifyTarget::Accumulator => {
-                    writeln!(out, "    ldh a, [nes_a]").unwrap();
-                    writeln!(out, "    {} a", if modify == ModifyOp::Inc { "inc" } else { "dec" }).unwrap();
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
-                    emit_update_nz(out);
+        IrOp::Arithmetic { op, rhs } => {
+            // Keep B/C reserved for resident X/Y. D/E/H/L are scratch here;
+            // any effective-address use is complete before arithmetic begins.
+            match rhs {
+                Operand::Immediate(imm) => {
+                    writeln!(out, "    ld e, ${imm:02X}").unwrap();
                 }
-                ModifyTarget::Memory(mem) => {
-                    emit_operand_load(out, mem, state, stats);
-                    writeln!(out, "    {} a", if modify == ModifyOp::Inc { "inc" } else { "dec" }).unwrap();
-                    emit_update_nz(out);
-                    emit_operand_store(out, mem, state, stats);
+                _ => {
+                    emit_operand_load(out, rhs, state, stats);
+                    writeln!(out, "    ld e, a ; superblock arithmetic RHS").unwrap();
                 }
             }
+            if op == ArithmeticOp::Sbc {
+                // 6502 SBC is A + (~rhs) + C; using complemented E lets the
+                // ADC overflow identity below match SBC exactly as well.
+                writeln!(out, "    ld a, e").unwrap();
+                writeln!(out, "    cpl").unwrap();
+                writeln!(out, "    ld e, a").unwrap();
+            }
+
+            writeln!(out, "    ldh a, [nes_a]").unwrap();
+            writeln!(out, "    ld d, a ; superblock arithmetic lhs").unwrap();
+            writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
+            writeln!(out, "    and a").unwrap();
+            writeln!(out, "    jr z, :+").unwrap();
+            writeln!(out, "    scf").unwrap();
+            writeln!(out, "    jr :++").unwrap();
+            writeln!(out, ":").unwrap();
+            writeln!(out, "    and a").unwrap();
+            writeln!(out, ":").unwrap();
+            writeln!(out, "    ld a, d").unwrap();
+            writeln!(
+                out,
+                "    adc e ; superblock fast {}",
+                if op == ArithmeticOp::Adc {
+                    "ADC"
+                } else {
+                    "SBC"
+                }
+            )
+            .unwrap();
+            writeln!(out, "    ld l, a ; arithmetic result").unwrap();
+
+            // Capture 6502 carry before any flag-clobbering status work.
+            writeln!(out, "    ld a, $00").unwrap();
+            writeln!(out, "    jr nc, :+").unwrap();
+            writeln!(out, "    inc a").unwrap();
+            writeln!(out, ":").unwrap();
+            writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+
+            // Only V remains material in nes_p. For SBC, E is ~rhs, so the
+            // normal ADC identity ~(lhs^E)&(lhs^result) becomes the SBC
+            // identity (lhs^rhs)&(lhs^result).
+            writeln!(out, "    ldh a, [nes_p]").unwrap();
+            writeln!(out, "    and $BF").unwrap();
+            writeln!(out, "    ldh [nes_p], a").unwrap();
+            writeln!(out, "    ld a, d").unwrap();
+            writeln!(out, "    xor e").unwrap();
+            writeln!(out, "    cpl").unwrap();
+            writeln!(out, "    ld h, a").unwrap();
+            writeln!(out, "    ld a, d").unwrap();
+            writeln!(out, "    xor l").unwrap();
+            writeln!(out, "    and h").unwrap();
+            writeln!(out, "    and $80").unwrap();
+            writeln!(out, "    jr z, :+").unwrap();
+            writeln!(out, "    ldh a, [nes_p]").unwrap();
+            writeln!(out, "    or $40").unwrap();
+            writeln!(out, "    ldh [nes_p], a").unwrap();
+            writeln!(out, ":").unwrap();
+
+            writeln!(out, "    ld a, l").unwrap();
+            writeln!(out, "    ldh [nes_a], a").unwrap();
+            emit_update_nz(out);
+            stats.fast_arithmetic += 1;
         }
+        IrOp::Modify { op: modify, target } => match target {
+            ModifyTarget::Accumulator => {
+                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                writeln!(
+                    out,
+                    "    {} a",
+                    if modify == ModifyOp::Inc {
+                        "inc"
+                    } else {
+                        "dec"
+                    }
+                )
+                .unwrap();
+                writeln!(out, "    ldh [nes_a], a").unwrap();
+                emit_update_nz(out);
+            }
+            ModifyTarget::Memory(mem) => {
+                emit_operand_load(out, mem, state, stats);
+                writeln!(
+                    out,
+                    "    {} a",
+                    if modify == ModifyOp::Inc {
+                        "inc"
+                    } else {
+                        "dec"
+                    }
+                )
+                .unwrap();
+                emit_update_nz(out);
+                emit_operand_store(out, mem, state, stats);
+            }
+        },
         IrOp::Compare { reg, rhs } => {
             match rhs {
                 Operand::Immediate(imm) => {
@@ -868,14 +999,19 @@ pub fn emit_cfg_with_interrupts(
     let plan = plan_superblocks(graph, &selected, &banks, &poll_points);
 
     if plan.disabled_for_unresolved_indirect {
-        println!("superblock: disabled because selected CFG contains unresolved indirect control flow");
+        println!(
+            "superblock: disabled because selected CFG contains unresolved indirect control flow"
+        );
     } else {
         println!(
             "superblock: formed {} multi-block trace(s), chained {} unique-entry same-bank edge(s), elided {} unconditional JMP(s)",
             plan.multi_block_traces, plan.chained_edges, plan.elided_jumps
         );
     }
-    println!("nmi-superblock-proof: {} block(s) proven NMI-exclusive", nmi_exclusive.len());
+    println!(
+        "nmi-superblock-proof: {} block(s) proven NMI-exclusive",
+        nmi_exclusive.len()
+    );
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
     writeln!(out, "nes_reset:").unwrap();
@@ -906,7 +1042,14 @@ pub fn emit_cfg_with_interrupts(
         } else {
             if let Some((target, from_bank)) = pending_continuation.take() {
                 sync_xy(&mut out, &mut state, &mut stats);
-                emit_known_target(&mut out, target, from_bank, &banks, Some(&section_offs), section_pc);
+                emit_known_target(
+                    &mut out,
+                    target,
+                    from_bank,
+                    &banks,
+                    Some(&section_offs),
+                    section_pc,
+                );
                 writeln!(out).unwrap();
             }
             state = TraceState::default();
@@ -941,7 +1084,11 @@ pub fn emit_cfg_with_interrupts(
             debug_assert!(!continuing);
             let exclusive = nmi_exclusive.contains(&block.start);
             if exclusive {
-                writeln!(out, "    ; NMI-exclusive safe-point retained as analysis barrier").unwrap();
+                writeln!(
+                    out,
+                    "    ; NMI-exclusive safe-point retained as analysis barrier"
+                )
+                .unwrap();
                 writeln!(out, "IF 0").unwrap();
             }
             let before = out.len();
@@ -960,13 +1107,18 @@ pub fn emit_cfg_with_interrupts(
         }
 
         let mut pending: Vec<IrOp> = Vec::new();
-        let write_insn_comment = |out: &mut String, instruction: &crate::cpu6502::DecodedInstruction| {
-            writeln!(
-                out,
-                "    ; ${:04X}: ${:02X} {:?} {:?}",
-                instruction.pc, instruction.opcode, instruction.def.mnemonic, instruction.def.mode
-            ).unwrap();
-        };
+        let write_insn_comment =
+            |out: &mut String, instruction: &crate::cpu6502::DecodedInstruction| {
+                writeln!(
+                    out,
+                    "    ; ${:04X}: ${:02X} {:?} {:?}",
+                    instruction.pc,
+                    instruction.opcode,
+                    instruction.def.mnemonic,
+                    instruction.def.mode
+                )
+                .unwrap();
+            };
 
         for instruction in &block.instructions {
             match ir::lower_instruction(*instruction) {
@@ -999,7 +1151,12 @@ pub fn emit_cfg_with_interrupts(
                         write_insn_comment(&mut out, instruction);
                         let before = out.len();
                         let _ = emit_static_control(
-                            &mut out, &ops, bank, &banks, Some(&section_offs), section_pc
+                            &mut out,
+                            &ops,
+                            bank,
+                            &banks,
+                            Some(&section_offs),
+                            section_pc,
                         );
                         section_pc += approx_code_bytes(&out[before..]);
                         continue;
@@ -1055,13 +1212,22 @@ pub fn emit_cfg_with_interrupts(
             pending_continuation = Some((target, bank));
         } else if let Some(last) = block.instructions.last() {
             if is_branch(last.def.mnemonic) || !terminal_mnemonic(last.def.mnemonic) {
-                if let Some(target) = block.edges.iter()
+                if let Some(target) = block
+                    .edges
+                    .iter()
                     .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                     .and_then(|edge| edge.target)
                 {
                     sync_xy(&mut out, &mut state, &mut stats);
                     let before = out.len();
-                    emit_known_target(&mut out, target, bank, &banks, Some(&section_offs), section_pc);
+                    emit_known_target(
+                        &mut out,
+                        target,
+                        bank,
+                        &banks,
+                        Some(&section_offs),
+                        section_pc,
+                    );
                     section_pc += approx_code_bytes(&out[before..]);
                 }
             }
@@ -1071,12 +1237,23 @@ pub fn emit_cfg_with_interrupts(
 
     if let Some((target, from_bank)) = pending_continuation.take() {
         sync_xy(&mut out, &mut state, &mut stats);
-        emit_known_target(&mut out, target, from_bank, &banks, Some(&section_offs), section_pc);
+        emit_known_target(
+            &mut out,
+            target,
+            from_bank,
+            &banks,
+            Some(&section_offs),
+            section_pc,
+        );
         writeln!(out).unwrap();
     }
 
     for (addr, (bank, contract)) in &entry_contracts {
-        writeln!(out, "SECTION \"NES canonical superblock entry {addr:04X}\", ROMX, BANK[{bank}]").unwrap();
+        writeln!(
+            out,
+            "SECTION \"NES canonical superblock entry {addr:04X}\", ROMX, BANK[{bank}]"
+        )
+        .unwrap();
         writeln!(out, "nes_{addr:04X}:").unwrap();
         if contract.x_b {
             writeln!(out, "    ldh a, [nes_x]").unwrap();
@@ -1092,7 +1269,7 @@ pub fn emit_cfg_with_interrupts(
     }
 
     println!(
-        "superblock-state: avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares); barriers {}; canonical adapters {}",
+        "superblock-state: avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares, {} ADC/SBC); barriers {}; canonical adapters {}",
         stats.x_reload_avoided,
         stats.y_reload_avoided,
         stats.x_stores_deferred,
@@ -1105,6 +1282,7 @@ pub fn emit_cfg_with_interrupts(
         stats.y_seed_loads,
         stats.fast_ops,
         stats.fast_compares,
+        stats.fast_arithmetic,
         stats.barriers,
         stats.canonical_adapters,
     );
@@ -1127,7 +1305,11 @@ mod tests {
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg_with_interrupts(
             &graph,
-            EmitOptions { reset: 0x8000, max_blocks: Some(8), debug_trace: false },
+            EmitOptions {
+                reset: 0x8000,
+                max_blocks: Some(8),
+                debug_trace: false,
+            },
             0x8000,
             0x8000,
         );
@@ -1158,7 +1340,11 @@ mod tests {
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let asm = emit_cfg_with_interrupts(
             &graph,
-            EmitOptions { reset: 0x8000, max_blocks: Some(8), debug_trace: false },
+            EmitOptions {
+                reset: 0x8000,
+                max_blocks: Some(8),
+                debug_trace: false,
+            },
             0x8000,
             0x8000,
         );
@@ -1167,5 +1353,32 @@ mod tests {
         let between = &asm[compare..branch];
         assert!(between.contains("superblock compare cached X"));
         assert!(between.contains("superblock fast compare"));
+    }
+
+    #[test]
+    fn arithmetic_keeps_dirty_x_resident_and_emits_adc_sbc_inline() {
+        let mut prg = vec![0xEA; 0x8000];
+        // LDX #4 / LDA #$7F / CLC / ADC #1 / SEC / SBC #1 / STX $00 / RTS.
+        prg[0..13].copy_from_slice(&[
+            0xA2, 0x04, 0xA9, 0x7F, 0x18, 0x69, 0x01, 0x38, 0xE9, 0x01, 0x86, 0x00, 0x60,
+        ]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg_with_interrupts(
+            &graph,
+            EmitOptions {
+                reset: 0x8000,
+                max_blocks: Some(8),
+                debug_trace: false,
+            },
+            0x8000,
+            0x8000,
+        );
+        let adc = asm.find("; $8005: $69 Adc Immediate").unwrap();
+        let store = asm.find("; $800A: $86 Stx ZeroPage").unwrap();
+        let between = &asm[adc..store];
+        assert!(between.contains("superblock fast ADC"));
+        assert!(between.contains("superblock fast SBC"));
+        assert!(!between.contains("superblock materialize X"));
+        assert!(asm[store..].contains("superblock cached X"));
     }
 }
