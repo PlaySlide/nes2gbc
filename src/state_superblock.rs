@@ -420,6 +420,7 @@ struct StateStats {
     x_index_uses: usize,
     y_index_uses: usize,
     fast_ops: usize,
+    fast_compares: usize,
     barriers: usize,
     canonical_adapters: usize,
 }
@@ -681,6 +682,7 @@ fn fast_op_supported(op: &IrOp) -> bool {
         IrOp::Transfer { src, dst, .. } => src != Register::Sp && dst != Register::Sp,
         IrOp::Inc(reg) | IrOp::Dec(reg) => reg != Register::Sp,
         IrOp::Logic { rhs: Operand::Immediate(_), .. } => true,
+        IrOp::Compare { reg, rhs } => reg != Register::Sp && fast_operand_supported(rhs),
         IrOp::Modify { op: ModifyOp::Inc | ModifyOp::Dec, target: ModifyTarget::Accumulator } => true,
         IrOp::Modify { op: ModifyOp::Inc | ModifyOp::Dec, target: ModifyTarget::Memory(mem) } => {
             fast_operand_supported(mem) && fast_store_supported(mem)
@@ -789,6 +791,42 @@ fn emit_fast_op(
                     emit_operand_store(out, mem, state, stats);
                 }
             }
+        }
+        IrOp::Compare { reg, rhs } => {
+            match rhs {
+                Operand::Immediate(imm) => {
+                    writeln!(out, "    ld e, ${imm:02X}").unwrap();
+                }
+                _ => {
+                    emit_operand_load(out, rhs, state, stats);
+                    writeln!(out, "    ld e, a ; superblock compare RHS").unwrap();
+                }
+            }
+            match reg {
+                Register::A => writeln!(out, "    ldh a, [nes_a]").unwrap(),
+                Register::X => {
+                    ensure_x(out, state, stats);
+                    writeln!(out, "    ld a, b ; superblock compare cached X").unwrap();
+                    stats.x_reload_avoided += 1;
+                }
+                Register::Y => {
+                    ensure_y(out, state, stats);
+                    writeln!(out, "    ld a, c ; superblock compare cached Y").unwrap();
+                    stats.y_reload_avoided += 1;
+                }
+                Register::Sp => unreachable!(),
+            }
+            // 6502 CMP/CPX/CPY: C is set when lhs >= rhs; Z/N follow lhs-rhs.
+            // Inline it so resident B/C survive instead of forcing a barrier.
+            writeln!(out, "    sub e ; superblock fast compare").unwrap();
+            writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
+            writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+            writeln!(out, "    ld a, $00").unwrap();
+            writeln!(out, "    jr c, :+").unwrap();
+            writeln!(out, "    inc a").unwrap();
+            writeln!(out, ":").unwrap();
+            writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+            stats.fast_compares += 1;
         }
         IrOp::Nop => {}
         _ => unreachable!(),
@@ -1054,7 +1092,7 @@ pub fn emit_cfg_with_interrupts(
     }
 
     println!(
-        "superblock-state: avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {}; barriers {}; canonical adapters {}",
+        "superblock-state: avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares); barriers {}; canonical adapters {}",
         stats.x_reload_avoided,
         stats.y_reload_avoided,
         stats.x_stores_deferred,
@@ -1066,6 +1104,7 @@ pub fn emit_cfg_with_interrupts(
         stats.x_seed_loads,
         stats.y_seed_loads,
         stats.fast_ops,
+        stats.fast_compares,
         stats.barriers,
         stats.canonical_adapters,
     );
@@ -1109,5 +1148,25 @@ mod tests {
         let polls = nmi_poll_points(&graph, &selected);
         let plan = plan_superblocks(&graph, &selected, &banks, &polls);
         assert!(!plan.next.values().any(|&target| target == 0x8005));
+    }
+
+    #[test]
+    fn compare_keeps_dirty_x_resident_until_real_control_barrier() {
+        let mut prg = vec![0xEA; 0x8000];
+        // LDX #$04 / CPX #$03 / BNE $8008 / NOP / RTS / NOP / RTS.
+        prg[0..9].copy_from_slice(&[0xA2, 0x04, 0xE0, 0x03, 0xD0, 0x02, 0xEA, 0x60, 0xEA]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg_with_interrupts(
+            &graph,
+            EmitOptions { reset: 0x8000, max_blocks: Some(8), debug_trace: false },
+            0x8000,
+            0x8000,
+        );
+        let compare = asm.find("; $8002: $E0 Cpx Immediate").unwrap();
+        let branch = asm.find("; $8004: $D0 Bne Relative").unwrap();
+        let between = &asm[compare..branch];
+        assert!(between.contains("superblock compare cached X"));
+        assert!(between.contains("superblock fast compare"));
+        assert!(!between.contains("superblock materialize X"));
     }
 }
