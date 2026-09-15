@@ -156,6 +156,40 @@ nes_gbc_vblank_isr:
     jr .early_split_done
 
 .early_split_apply_fit:
+    ; Compute the scaled split line before touching the top/HUD scroll. A host
+    ; VBlank interrupt may be serviced late after long translated work; if LY
+    ; has already crossed this line, arming LYC now can never fire this frame.
+    ; In that case keep/apply the playfield scroll instead of splashing the HUD
+    ; backing ring across the rest of the visible frame.
+    ldh a, [nes_split_line]
+    srl a
+    add 12
+    cp 144
+    jr c, .fit_lyc_value_ok
+    ld a, 143
+.fit_lyc_value_ok:
+    ld d, a
+
+    ldh a, [rLY]
+    cp 144
+    jr nc, .fit_apply_top
+    cp d
+    jr c, .fit_apply_top
+
+    ; Missed raster deadline: present the lower/playfield state immediately and
+    ; leave STAT disabled until the next host VBlank can arm the split on time.
+    ld a, [nes_fit_play_scx]
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_y]
+    srl a
+    sub 12
+    ldh [rSCY], a
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    jr .early_split_done
+
+.fit_apply_top:
     ; 160x120 fit: X uses 5/8 NES scale; Y stays half-scale with 12px bars.
     ldh a, [nes_split_armed_top_x]
     ld c, a
@@ -168,14 +202,7 @@ nes_gbc_vblank_isr:
     sub 12
     ldh [rSCY], a
 
-    ; LYC ~= NES split_line/2 + top letterbox (12).
-    ldh a, [nes_split_line]
-    srl a
-    add 12
-    cp 144
-    jr c, .fit_lyc_ok
-    ld a, 143
-.fit_lyc_ok:
+    ld a, d
     ldh [rLYC], a
     ldh a, [rSTAT]
     or $40
