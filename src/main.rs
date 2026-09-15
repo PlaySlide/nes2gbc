@@ -241,9 +241,11 @@ fn main() -> ExitCode {
         let chr_path = parent.join(&chr_name);
         let chr_gbc_path = parent.join(&chr_gbc_name);
 
-        let mut asm = recompile::emit_cfg(
+        let mut asm = recompile::emit_cfg_with_interrupts(
             &graph,
             recompile::EmitOptions { reset: vectors.reset, max_blocks, debug_trace },
+            vectors.nmi,
+            vectors.irq_brk,
         );
         asm.push_str("\n");
         asm.push_str(&recompile::emit_runtime_config(&recompile::RuntimeConfig {
