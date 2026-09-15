@@ -414,14 +414,17 @@ nes_gbc_vblank_isr:
     and $F7
     ldh [rLCDC], a
     call nes_video_fit_update_scroll_window
-    ld a, [nes_fit_dirty]
-    and a
-    jp z, .scroll_done
-    ld a, $01
-    ld [nes_vram_unlocked], a
-    call nes_video_fit_flush_dirty
+
+    ; SMB split mode must never fall back to the chunked resident-page rebuild.
+    ; The queue publisher above updates visible scaled tiles directly, and
+    ; update_scroll_window synchronously publishes the one entering column. A
+    ; leftover dirty flag is stale bookkeeping from construction/transition and
+    ; was the reason the same 21-column chunk kept repeating while a rebuild
+    ; crawled behind Mario.
     xor a
-    ld [nes_vram_unlocked], a
+    ld [nes_fit_dirty], a
+    ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
     jp .scroll_done
 .scroll_fit_single:
     call nes_video_apply_single_scroll

@@ -2552,13 +2552,13 @@ nes_video_fit_update_scroll_window:
     ld a, c
     ld [nes_fit_origin_mx], a
 
-    ; If a previous entering-column update is still unfinished, fall back to a
-    ; coherent 21-column rebuild at the new origin rather than exposing a slot
-    ; whose ownership is ambiguous. SMB parser floods no longer create this
-    ; state in steady scrolling, so this is now an exceptional catch-up path.
-    ld a, [nes_fit_dirty]
-    and a
-    jp nz, .full_dirty_rebase
+    ; An SMB split is a continuously stitched horizontal presentation, not a
+    ; resident page that may be asynchronously rebuilt. Any stale dirty state
+    ; left by pre-split/page construction must not preempt the one-column
+    ; stitch path. Ordinary +/-1 motion below refreshes its entering column
+    ; synchronously; genuine large jumps still take .full_dirty_rebase.
+    xor a
+    ld [nes_fit_dirty], a
 
     ; Treat the 39->0/0->39 wrap as an ordinary one-column move in the 40-column
     ; scaled NES world.
@@ -2845,19 +2845,21 @@ nes_video_fit_sync_nametable_write:
     cp $C0
     jp nc, nes_video_fit_sync_attribute_write
 .fit_tile:
-    ld a, [nes_fit_dirty]
-    and a
-    ret nz
-    ; SMB's split transaction is allowed to keep publishing visible cells after
-    ; VBlank. The wide tile uploader below falls back to mode-safe byte writes,
-    ; so do not turn a long staged transaction into dirty=1 merely because the
-    ; generic VBlank fast-path latch has expired.
+    ; In the proven SMB split shape, authoritative NES nametable writes are the
+    ; live source of truth. Route them straight through the scaled visibility
+    ; filter even if some older path left dirty=1 set; otherwise one stale dirty
+    ; bit suppresses every useful SMB parser write and the screen can only crawl
+    ; forward via the broken whole-page rebuild.
     ld a, [nes_mirroring]
     cp $01
-    jr nz, .fit_tile_unlocked
+    jr nz, .fit_tile_dirty_gate
     ldh a, [nes_split_active]
     and a
     jp nz, nes_video_fit_publish_source_tile_hl
+.fit_tile_dirty_gate:
+    ld a, [nes_fit_dirty]
+    and a
+    ret nz
 .fit_tile_unlocked:
     ld a, [nes_vram_unlocked]
     and a
