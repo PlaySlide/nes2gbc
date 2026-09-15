@@ -1,0 +1,104 @@
+name: Finish wide fit guard-column prefetch
+
+on:
+  push:
+    branches: [automation/apply-fit-wide-ring21]
+    paths: [.github/workflows/finish-fit-wide-prefetch-guard.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+
+      - name: Prefetch one physical column ahead of scanout
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('runtime/video.asm')
+          s = p.read_text()
+
+          def rep(old, new, count=1):
+              global s
+              n = s.count(old)
+              if n < count:
+                  raise SystemExit(f'expected at least {count} match(es), got {n}: {old[:100]!r}')
+              s = s.replace(old, new, count)
+
+          # Keep a 22nd prepared column one tile beyond the 21 cells that can be
+          # scanned. On a +1 origin step the old guard becomes the new visible
+          # edge; the newly freed physical column is then rebuilt offscreen.
+          rep(
+          '''    ld a, [nes_fit_origin_mx]\n    cp c\n    jp z, .scx_from_ring\n    ld b, a                    ; old world origin 0..39\n    ld a, c\n    ld [nes_fit_origin_mx], a\n\n    ; If a previous entering-column update is still unfinished, fall back to a\n    ; coherent 21-column rebuild at the new origin rather than exposing a slot\n    ; whose ownership is ambiguous. SMB parser floods no longer create this\n    ; state in steady scrolling, so this is now an exceptional catch-up path.\n    ld a, [nes_fit_dirty]\n    and a\n    jp nz, .full_dirty_rebase\n''',
+          '''    ld a, [nes_fit_origin_mx]\n    cp c\n    jp z, .scx_from_ring\n    ld b, a                    ; old world origin 0..39\n\n    ; dirty=2 now means an offscreen right-guard column is being prepared. If\n    ; the NES reaches the next coarse scroll step before that guard finishes,\n    ; hold scanout at the last fine pixel of the old origin instead of exposing\n    ; an incomplete column or escalating to a full-page rebuild. The guard has\n    ; an entire 8px coarse interval to finish, so this is normally a no-op.\n    ld a, [nes_fit_dirty]\n    cp 2\n    jr nz, .pending_other\n    ld a, b\n    inc a\n    cp 40\n    jr c, .pending_expected\n    xor a\n.pending_expected:\n    cp c\n    jr nz, .pending_other\n    ld a, [nes_fit_vram_page]\n    and $F8\n    add 7\n    ld [nes_fit_play_scx], a\n    jp .apply_host_regs\n.pending_other:\n    ld a, [nes_fit_dirty]\n    and a\n    jp nz, .full_dirty_rebase\n\n    ld a, c\n    ld [nes_fit_origin_mx], a\n''')
+
+          rep(
+          '''    ld a, 20                   ; entering partial/right-edge column\n    ld [nes_fit_mt_mx], a\n''',
+          '''    ld a, 21                   ; fully offscreen right guard column\n    ld [nes_fit_mt_mx], a\n''')
+
+          rep(
+          '''.full_dirty_rebase:\n    ; A discontinuity gets a fresh physical ring head. With a full rebuild in\n    ; progress, rebasing keeps SCX and map ownership coherent.\n    ld a, c\n    and $1F\n''',
+          '''.full_dirty_rebase:\n    ; A discontinuity gets a fresh physical ring head. With a full rebuild in\n    ; progress, rebasing keeps SCX and map ownership coherent.\n    ld a, c\n    ld [nes_fit_origin_mx], a\n    and $1F\n''')
+
+          rep(
+          '''    ; Full rebuild covers the 21 potentially scanned columns. Entering columns\n    ; get four tiles per call so ordinary horizontal scroll can catch up.\n''',
+          '''    ; Full rebuild prepares 22 columns: the 21 cells that may be scanned plus\n    ; one completely offscreen right guard. Incremental guard work gets four\n    ; rows per VBlank and therefore has a full coarse-scroll interval to finish.\n''')
+
+          rep('''.col_right:\n    ld a, 20\n''', '''.col_right:\n    ld a, 21\n''')
+          rep('''    cp 21\n    jr c, .xloop\n''', '''    cp 22\n    jr c, .xloop\n''')
+
+          # Exact SMB parser writes should also keep the guard fresh while it is
+          # offscreen. Offset 21 is never scanned until the following origin step.
+          rep('''    cp 21\n    jr nc, .second_done\n    ld [nes_fit_mt_quad + 3], a\n''',
+              '''    cp 22\n    jr nc, .second_done\n    ld [nes_fit_mt_quad + 3], a\n''')
+          rep('''    ; First destination if visible in [origin, origin+21).\n''',
+              '''    ; First destination if visible or prefetched in [origin, origin+22).\n''')
+          rep('''    cp 21\n    jr nc, .after_first\n    ld [nes_fit_mt_mx], a\n''',
+              '''    cp 22\n    jr nc, .after_first\n    ld [nes_fit_mt_mx], a\n''')
+
+          # Keep comments/documentation aligned with the actual prepared window.
+          s = s.replace(
+              '; 21-column circular live window over the 40 GBC tile columns that represent\n; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport needs\n; 20 full tiles plus one partial entering tile whenever SCX has a fine offset.\n',
+              '; 22-column prepared ring over the 40 GBC tile columns that represent\n; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport can scan\n; 21 cells (20 full plus one partial); offset 21 is an offscreen prefetch guard.\n')
+              
+          p.write_text(s)
+          PY
+
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pkg-config bison flex libpng-dev
+          git clone --depth 1 --branch v0.9.4 https://github.com/gbdev/rgbds.git /tmp/rgbds
+          make -C /tmp/rgbds -j2 >/dev/null
+          sudo make -C /tmp/rgbds install >/dev/null
+
+      - name: Build and test
+        run: |
+          cargo test --quiet
+          python3 - <<'PY'
+          from pathlib import Path
+          # Synthetic NROM ROM, enough to force generated.asm and assemble FIT_SCREEN.
+          rom = bytearray(b'NES\x1a') + bytearray([2,1,1,0]) + bytearray(8)
+          prg = bytearray([0xEA]) * 0x8000
+          prg[0] = 0x4C; prg[1] = 0x00; prg[2] = 0x80
+          prg[-6:] = bytes([0x00,0x80,0x00,0x80,0x00,0x80])
+          chr = bytearray(0x2000)
+          Path('/tmp/fit-test.nes').write_bytes(rom + prg + chr)
+          PY
+          cargo run --quiet -- /tmp/fit-test.nes --emit-asm runtime/generated.asm >/tmp/gen.log
+          make -C runtime clean >/dev/null
+          make -C runtime FIT_SCREEN=1 >/tmp/runtime-build.log
+
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/video.asm
+          git commit -m 'FIT_SCREEN: prefetch one guard column ahead of scroll'
+          git push origin HEAD:dev/fit-screen-wide-160
