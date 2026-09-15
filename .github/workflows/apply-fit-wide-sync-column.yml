@@ -1,4 +1,4 @@
-name: Apply FIT SMB direct stitch path
+name: Apply FIT SMB split-safe column compose
 on:
   push:
     branches: [automation/apply-fit-wide-ring21]
@@ -13,35 +13,25 @@ jobs:
         with:
           ref: dev/fit-screen-wide-160
           fetch-depth: 0
-      - name: Remove stale dirty rebuild from SMB FIT split
+      - name: Let STAT split preempt synchronous FIT column compose
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          p=Path('runtime/video.asm')
+          s=p.read_text()
 
-          vp=Path('runtime/video.asm')
-          s=vp.read_text()
-
-          old='''    ; If a previous entering-column update is still unfinished, fall back to a\n    ; coherent 21-column rebuild at the new origin rather than exposing a slot\n    ; whose ownership is ambiguous. SMB parser floods no longer create this\n    ; state in steady scrolling, so this is now an exceptional catch-up path.\n    ld a, [nes_fit_dirty]\n    and a\n    jp nz, .full_dirty_rebase\n'''
-          new='''    ; An SMB split is a continuously stitched horizontal presentation, not a\n    ; resident page that may be asynchronously rebuilt. Any stale dirty state\n    ; left by pre-split/page construction must not preempt the one-column\n    ; stitch path. Ordinary +/-1 motion below refreshes its entering column\n    ; synchronously; genuine large jumps still take .full_dirty_rebase.\n    xor a\n    ld [nes_fit_dirty], a\n'''
+          old='''    ld [nes_fit_vram_page], a\n\n    push de                    ; preserve fine host X in E\n    ld a, 20                   ; new right-edge / partial column\n    ld [nes_fit_mt_mx], a\n    xor a\n    ld [nes_fit_mt_my], a\n.fit_sync_right_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .fit_sync_right_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    pop de\n    jp .scx_from_ring\n'''
+          new='''    ld [nes_fit_vram_page], a\n\n    ; The 15-tile wide-column compose can outlive VBlank. Publish the NEW\n    ; playfield SCX before doing that work, then temporarily allow only STAT\n    ; to nest so the line-32 HUD/playfield split still fires on time. Without\n    ; this, every coarse tile boundary misses LYC and the entire lower scene is\n    ; drawn for one frame with the HUD/top SCX -- the observed half-screen snap.\n    ld a, [nes_fit_vram_page]\n    and $F8\n    add e\n    ld [nes_fit_play_scx], a\n\n    ldh a, [rIE]\n    push af\n    ld a, $02                  ; STAT only; never nest VBlank\n    ldh [rIE], a\n    ei\n    nop\n\n    push de                    ; preserve fine host X in E\n    ld a, 20                   ; new right-edge / partial column\n    ld [nes_fit_mt_mx], a\n    xor a\n    ld [nes_fit_mt_my], a\n.fit_sync_right_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .fit_sync_right_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    pop de\n\n    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n'''
           if old not in s:
-              raise SystemExit('scroll dirty gate not found')
+              raise SystemExit('right synchronous column block not found')
           s=s.replace(old,new,1)
 
-          old='''.fit_tile:\n    ld a, [nes_fit_dirty]\n    and a\n    ret nz\n    ; SMB's split transaction is allowed to keep publishing visible cells after\n    ; VBlank. The wide tile uploader below falls back to mode-safe byte writes,\n    ; so do not turn a long staged transaction into dirty=1 merely because the\n    ; generic VBlank fast-path latch has expired.\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_tile_unlocked\n    ldh a, [nes_split_active]\n    and a\n    jp nz, nes_video_fit_publish_source_tile_hl\n.fit_tile_unlocked:\n'''
-          new='''.fit_tile:\n    ; In the proven SMB split shape, authoritative NES nametable writes are the\n    ; live source of truth. Route them straight through the scaled visibility\n    ; filter even if some older path left dirty=1 set; otherwise one stale dirty\n    ; bit suppresses every useful SMB parser write and the screen can only crawl\n    ; forward via the broken whole-page rebuild.\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_tile_dirty_gate\n    ldh a, [nes_split_active]\n    and a\n    jp nz, nes_video_fit_publish_source_tile_hl\n.fit_tile_dirty_gate:\n    ld a, [nes_fit_dirty]\n    and a\n    ret nz\n.fit_tile_unlocked:\n'''
+          old='''    ld [nes_fit_vram_page], a\n\n    push de\n    xor a\n    ld [nes_fit_mt_mx], a\n    ld [nes_fit_mt_my], a\n.fit_sync_left_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .fit_sync_left_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    pop de\n    jp .scx_from_ring\n'''
+          new='''    ld [nes_fit_vram_page], a\n\n    ; Same split-deadline protection for reverse motion.\n    ld a, [nes_fit_vram_page]\n    and $F8\n    add e\n    ld [nes_fit_play_scx], a\n\n    ldh a, [rIE]\n    push af\n    ld a, $02\n    ldh [rIE], a\n    ei\n    nop\n\n    push de\n    xor a\n    ld [nes_fit_mt_mx], a\n    ld [nes_fit_mt_my], a\n.fit_sync_left_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .fit_sync_left_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    pop de\n\n    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n'''
           if old not in s:
-              raise SystemExit('fit tile dirty gate not found')
+              raise SystemExit('left synchronous column block not found')
           s=s.replace(old,new,1)
-          vp.write_text(s)
-
-          mp=Path('runtime/main.asm')
-          m=mp.read_text()
-          old='''    call nes_video_fit_update_scroll_window\n    ld a, [nes_fit_dirty]\n    and a\n    jp z, .scroll_done\n    ld a, $01\n    ld [nes_vram_unlocked], a\n    call nes_video_fit_flush_dirty\n    xor a\n    ld [nes_vram_unlocked], a\n    jp .scroll_done\n.scroll_fit_single:\n'''
-          new='''    call nes_video_fit_update_scroll_window\n\n    ; SMB split mode must never fall back to the chunked resident-page rebuild.\n    ; The queue publisher above updates visible scaled tiles directly, and\n    ; update_scroll_window synchronously publishes the one entering column. A\n    ; leftover dirty flag is stale bookkeeping from construction/transition and\n    ; was the reason the same 21-column chunk kept repeating while a rebuild\n    ; crawled behind Mario.\n    xor a\n    ld [nes_fit_dirty], a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scroll_done\n.scroll_fit_single:\n'''
-          if old not in m:
-              raise SystemExit('main split dirty flush block not found')
-          m=m.replace(old,new,1)
-          mp.write_text(m)
+          p.write_text(s)
           PY
       - name: Build RGBDS
         run: |
@@ -67,6 +57,6 @@ jobs:
         run: |
           git config user.name ChatGPT
           git config user.email chatgpt@users.noreply.github.com
-          git add runtime/video.asm runtime/main.asm
-          git commit -m 'FIT_SCREEN: force SMB split onto direct stitch path'
+          git add runtime/video.asm
+          git commit -m 'FIT_SCREEN: preserve SMB raster split during column compose'
           git push origin HEAD:dev/fit-screen-wide-160
