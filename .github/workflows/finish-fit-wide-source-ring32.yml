@@ -1,0 +1,69 @@
+name: Finish wide fit source-driven ring32
+on:
+  push:
+    branches: [automation/apply-fit-wide-ring21]
+    paths: ['.github/workflows/finish-fit-wide-source-ring32.yml']
+permissions:
+  contents: write
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+      - name: Keep all 32 physical ring columns source-driven
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('runtime/video.asm')
+          s=p.read_text()
+          reps=[
+          ('''; 21-column circular live window over the 40 GBC tile columns that represent\n; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport needs\n; 20 full tiles plus one partial entering tile whenever SCX has a fine offset.''',
+           '''; 32-column physical cache ring over the 40 GBC tile columns that represent\n; the two-nametable horizontal NES world at 5/8 scale. Scanout still uses only\n; 21 cells, but SMB's own offscreen parser keeps the remaining physical columns\n; warm before they rotate into view. Moving the ring must therefore be cheap.'''),
+          ('''    ld [nes_fit_vram_page], a\n    ld a, 2\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld a, 20                   ; entering partial/right-edge column\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring''',
+           '''    ld [nes_fit_vram_page], a\n    ; No edge rebuild here. The physical slot that just rotated into view was\n    ; already populated while it was offscreen by SMB's nametable writes.\n    jp .scx_from_ring'''),
+          ('''    ld [nes_fit_vram_page], a\n    ld a, 3\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring''',
+           '''    ld [nes_fit_vram_page], a\n    ; Same invariant in reverse: ring-head and world-origin move together, so\n    ; cached physical ownership remains stable without composing during scroll.\n    jp .scx_from_ring'''),
+          ('''; Full rebuild covers the 21 potentially scanned columns. Entering columns\n    ; get four tiles per call so ordinary horizontal scroll can catch up.''',
+           '''; Full rebuild seeds all 32 physical cache columns. This is reserved for\n    ; discontinuities/screen construction; steady SMB scrolling is source-driven.'''),
+          ('''    cp 21\n    jr c, .xloop''','''    cp 32\n    jr c, .xloop'''),
+          ('''    cp 21\n    jr nc, .second_done''','''    cp 32\n    jr nc, .second_done'''),
+          ('''; First destination if visible in [origin, origin+21).''','''; First destination if resident in the 32-column physical cache ring.'''),
+          ('''    cp 21\n    jr nc, .after_first''','''    cp 32\n    jr nc, .after_first''')]
+          for old,new in reps:
+              if old not in s:
+                  raise SystemExit('missing expected snippet:\n'+old)
+              s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config bison libpng-dev
+          git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+          make -s -C /tmp/rgbds -j2
+          sudo make -s -C /tmp/rgbds install
+      - name: Build and test
+        run: |
+          cargo test --quiet
+          cargo build --quiet --release
+          python3 - <<'PY'
+          from pathlib import Path
+          # Minimal mapper-0 32K/8K ROM for an RGBDS FIT_SCREEN smoke build.
+          prg=bytearray([0xEA])*32768
+          prg[0:3]=bytes([0x4C,0x00,0x80])
+          for off,val in ((0x7FFA,0x00),(0x7FFB,0x80),(0x7FFC,0x00),(0x7FFD,0x80),(0x7FFE,0x00),(0x7FFF,0x80)):
+              prg[off]=val
+          rom=bytearray(b'NES\x1a')+bytes([2,1,1,0])+bytes(8)+prg+bytes(8192)
+          Path('/tmp/fit.nes').write_bytes(rom)
+          PY
+          ./target/release/nes2gbc --fit-screen /tmp/fit.nes /tmp/fit.gbc
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/video.asm
+          git commit -m 'FIT_SCREEN: keep 32-column ring warm from NES writes'
+          git push origin HEAD:dev/fit-screen-wide-160
