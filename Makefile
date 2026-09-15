@@ -61,6 +61,7 @@ generate:
 		python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
 		if [ "$(TRACE)" = "0" ] && [ "$(PROFILE)" = "0" ] && [ "$(PROFILE_TRACE)" = "0" ]; then python3 tools/forward_state_edges.py runtime/generated.asm; fi; \
 		if [ "$(TRACE)" = "0" ] && [ "$(PROFILE)" = "0" ] && [ "$(PROFILE_TRACE)" = "0" ]; then python3 tools/defer_a_resident_spills.py runtime/generated.asm; fi; \
+		if [ "$(TRACE)" = "0" ] && [ "$(PROFILE)" = "0" ] && [ "$(PROFILE_TRACE)" = "0" ]; then python3 tools/preserve_a_across_branches.py runtime/generated.asm; fi; \
 		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
 		python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
