@@ -1,4 +1,4 @@
-name: Apply FIT SMB small-delta catchup
+name: Apply FIT SMB guard precompose
 on:
   push:
     branches: [automation/apply-fit-wide-ring21]
@@ -13,20 +13,56 @@ jobs:
         with:
           ref: dev/fit-screen-wide-160
           fetch-depth: 0
-      - name: Mirror the proven SMB stitch catch-up logic in wide FIT
+      - name: Precompose the next SMB FIT column across host frames
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('runtime/video.asm')
-          s=p.read_text()
-          start=s.index('.slide_vert:\n')
-          end=s.index('\n.full_dirty_rebase:', start)
-          current=s[start:end]
-          new='''.slide_vert:\n    ; Effective NES X in BC (0..511), including logical nametable bit 0.\n    ; Match the proven non-scaled SMB stitch path: derive the coarse key from\n    ; the live completed split/camera state, then catch up small multi-column\n    ; advances instead of treating anything other than +/-1 as a discontinuity.\n    ldh a, [nes_split_bottom_x]\n    ld c, a\n    ldh a, [nes_view_x]\n    add c\n    ld c, a\n    ld b, $00\n    jr nc, .eff_nt\n    inc b\n.eff_nt:\n    ldh a, [nes_split_bottom_ctrl]\n    and $01\n    xor b\n    ld b, a\n\n    call nes_video_fit_scale_x_bc\n    ld a, l\n    and $07\n    ld e, a                    ; final fine host pixels\n    srl h\n    rr l\n    srl h\n    rr l\n    srl h\n    rr l\n    ld c, l                    ; target host world tile origin 0..39\n\n    ld a, [nes_fit_origin_mx]\n    cp c\n    jp z, .scx_from_ring\n    ld b, a                    ; old world origin 0..39\n    ld a, c\n    ld [nes_fit_mt_quad + 3], a ; preserve target across expensive composes\n\n    ; SMB split mode never uses the asynchronous whole-page catch-up path.\n    xor a\n    ld [nes_fit_dirty], a\n\n    ; Exactly like the working 256px stitch: a translated NES frame can move\n    ; several coarse columns before the next host presentation. The old FIT\n    ; +/-1-only test rebased the ring on those perfectly ordinary skips, which\n    ; is the once-per-tile whole-scene snap seen on hardware/mGBA. Treat forward\n    ; or backward distances 1..8 as synchronous catch-up.\n    ld a, c\n    sub b\n    jr nc, .forward_distance_ready\n    add 40\n.forward_distance_ready:\n    and a\n    jp z, .scx_from_ring\n    cp 9\n    jr c, .catchup_forward\n\n    ld a, b\n    sub c\n    jr nc, .backward_distance_ready\n    add 40\n.backward_distance_ready:\n    cp 9\n    jr c, .catchup_backward\n\n    ; Genuine discontinuity/area transition. Keep the existing transition path.\n    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.catchup_forward:\n    ; A = number of coarse host columns to advance. Publish the FINAL SCX before\n    ; doing any compose work so a line-32 STAT split that nests midway through\n    ; catch-up still sees the correct playfield position, never an intermediate.\n    ld d, a\n    ld a, [nes_fit_vram_page]\n    and $F8\n    ld c, a\n    ld a, d\n    add a\n    add a\n    add a\n    add c\n    add e\n    ld [nes_fit_play_scx], a\n\n    ldh a, [rIE]\n    push af\n    ld a, $02                  ; STAT only; never nest VBlank\n    ldh [rIE], a\n    ei\n    nop\n.forward_loop:\n    ld a, [nes_fit_origin_mx]\n    inc a\n    cp 40\n    jr c, .forward_origin_ready\n    xor a\n.forward_origin_ready:\n    ld [nes_fit_origin_mx], a\n\n    push de\n    call .sync_right_column\n    pop de\n\n    ld a, [nes_fit_origin_mx]\n    ld b, a\n    ld a, [nes_fit_mt_quad + 3]\n    cp b\n    jr nz, .forward_loop\n\n    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n\n.catchup_backward:\n    ; A = number of coarse host columns to move backward. Same final-SCX rule.\n    ld d, a\n    ld a, [nes_fit_vram_page]\n    and $F8\n    ld c, a\n    ld a, d\n    add a\n    add a\n    add a\n    ld d, a\n    ld a, c\n    sub d\n    add e\n    ld [nes_fit_play_scx], a\n\n    ldh a, [rIE]\n    push af\n    ld a, $02\n    ldh [rIE], a\n    ei\n    nop\n.backward_loop:\n    ld a, [nes_fit_origin_mx]\n    and a\n    jr nz, .backward_dec\n    ld a, 40\n.backward_dec:\n    dec a\n    ld [nes_fit_origin_mx], a\n\n    push de\n    call .sync_left_column\n    pop de\n\n    ld a, [nes_fit_origin_mx]\n    ld b, a\n    ld a, [nes_fit_mt_quad + 3]\n    cp b\n    jr nz, .backward_loop\n\n    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n\n.sync_right_column:\n    ; Advance the physical ring one slot and synchronously rebuild the newly\n    ; entering partial/right-edge column from authoritative NES nametable state.\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    ld a, 20\n    ld [nes_fit_mt_mx], a\n    xor a\n    ld [nes_fit_mt_my], a\n.sync_right_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .sync_right_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    ret\n\n.sync_left_column:\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    sub $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    xor a\n    ld [nes_fit_mt_mx], a\n    ld [nes_fit_mt_my], a\n.sync_left_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .sync_left_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    ret\n'''
-          if '.delta_plus1:' not in current or '.delta_minus1:' not in current:
-              raise SystemExit('unexpected FIT scroll block; refusing to replace')
-          s=s[:start]+new+s[end:]
-          p.write_text(s)
+
+          vp=Path('runtime/video.asm')
+          s=vp.read_text()
+
+          old='''    and a\n    jp z, .scx_from_ring\n    cp 9\n    jr c, .catchup_forward\n'''
+          new='''    and a\n    jp z, .scx_from_ring\n    cp 1\n    jr z, .consume_prefetched_forward\n    cp 9\n    jr c, .catchup_forward\n'''
+          if old not in s:
+              raise SystemExit('forward-distance gate not found')
+          s=s.replace(old,new,1)
+
+          marker='''    ; Genuine discontinuity/area transition. Keep the existing transition path.\n    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.catchup_forward:\n'''
+          repl='''    ; Genuine discontinuity/area transition. Keep the existing transition path.\n    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.consume_prefetched_forward:\n    ; The next entering column is composed one row per host frame at viewport\n    ; offset 21, which is fully offscreen. A normal +1 coarse step therefore\n    ; only rotates that completed guard column into offset 20; it must NOT spend\n    ; an entire host frame synchronously composing 15 tiles at the boundary.\n    ld a, [nes_fit_recompose_my]\n    cp 15\n    jr nc, .prefetch_ready\n\n    ; Startup/transition safety: if the guard has not had 15 host frames yet,\n    ; fall back to the older synchronous path for this one step. Steady SMB\n    ; scrolling has ~30+ host frames between coarse FIT boundaries, so this\n    ; should not be the normal path.\n    ld a, 1\n    jp .catchup_forward\n\n.prefetch_ready:\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    ld a, [nes_fit_mt_quad + 3]\n    ld [nes_fit_origin_mx], a\n\n    xor a\n    ld [nes_fit_dirty], a\n    ld [nes_fit_recompose_my], a ; begin composing the following guard column\n    jp .scx_from_ring\n\n.catchup_forward:\n'''
+          if marker not in s:
+              raise SystemExit('catchup insertion marker not found')
+          s=s.replace(marker,repl,1)
+
+          marker='''.split_regs_done:\n    ret\n\nnes_video_fit_displayed_page:\n'''
+          repl='''.split_regs_done:\n    ret\n\n; Compose exactly one row of the NEXT right-edge column while it is still one\n; full GBC tile offscreen. At 160px the scanned window is offsets 0..20, so\n; offset 21 is a safe guard slot. SMB advances roughly one FIT coarse column\n; every few dozen host frames, giving this 15-row job ample time without ever\n; blocking a complete frame at the scroll boundary. recompose_my is persistent\n; progress 0..15 for this guard and is reset only when the guard is consumed.\nnes_video_fit_prefetch_right_guard_row:\n    ld a, [nes_fit_recompose_my]\n    cp 15\n    ret nc\n    ld [nes_fit_mt_my], a\n    ld a, 21\n    ld [nes_fit_mt_mx], a\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_recompose_my]\n    inc a\n    ld [nes_fit_recompose_my], a\n    ret\n\nnes_video_fit_displayed_page:\n'''
+          if marker not in s:
+              raise SystemExit('prefetch routine insertion marker not found')
+          s=s.replace(marker,repl,1)
+
+          # After any rare synchronous multi-column catch-up, start a fresh
+          # offscreen guard instead of leaving progress at 15.
+          old='''    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n\n.catchup_backward:\n'''
+          new='''    di\n    pop af\n    ldh [rIE], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    jp .scx_from_ring\n\n.catchup_backward:\n'''
+          if old not in s:
+              raise SystemExit('forward catchup epilogue not found')
+          s=s.replace(old,new,1)
+
+          vp.write_text(s)
+
+          mp=Path('runtime/main.asm')
+          m=mp.read_text()
+          old='''    call nes_video_fit_update_scroll_window\n    ld a, [nes_fit_dirty]\n    cp $02\n    jr z, .fit_edge_service\n    cp $03\n    jr nz, .fit_edge_done\n.fit_edge_service:\n    ld a, $01\n    ld [nes_vram_unlocked], a\n    call nes_video_fit_flush_dirty\n    xor a\n    ld [nes_vram_unlocked], a\n.fit_edge_done:\n'''
+          new='''    call nes_video_fit_update_scroll_window\n    ; Do one fifteenth of the NEXT entering column now, while it is still\n    ; completely offscreen. This replaces the old 15-tile synchronous burst\n    ; that the mGBA video log shows spanning more than one whole host frame.\n    call nes_video_fit_prefetch_right_guard_row\n.fit_edge_done:\n'''
+          if old not in m:
+              raise SystemExit('early FIT edge-service block not found')
+          m=m.replace(old,new,1)
+
+          old='''    xor a\n    ld [nes_fit_dirty], a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scroll_done\n'''
+          new='''    xor a\n    ld [nes_fit_dirty], a\n    ; Keep recompose_my: in SMB split mode it is the persistent 0..15 progress\n    ; of the fully-offscreen right guard column built by the early VBlank step.\n    ld [nes_fit_mt_mx], a\n    jp .scroll_done\n'''
+          if old not in m:
+              raise SystemExit('SMB FIT scroll cleanup block not found')
+          m=m.replace(old,new,1)
+          mp.write_text(m)
           PY
       - name: Build RGBDS
         run: |
@@ -52,6 +88,6 @@ jobs:
         run: |
           git config user.name ChatGPT
           git config user.email chatgpt@users.noreply.github.com
-          git add runtime/video.asm
-          git commit -m 'FIT_SCREEN: catch up skipped SMB coarse columns'
+          git add runtime/video.asm runtime/main.asm
+          git commit -m 'FIT_SCREEN: precompose SMB entering column across frames'
           git push origin HEAD:dev/fit-screen-wide-160
