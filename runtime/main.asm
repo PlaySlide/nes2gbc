@@ -229,8 +229,8 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
-    ; Wide FIT smooth scrolling owns a 21st entering-edge column. Give only
-    ; that incremental column update (dirty=2/3) first use of VBlank before
+    ; Wide FIT mirrors the proven 32-column stitch. Give the recycled
+    ; far-offscreen column update (dirty=2/3) first use of VBlank before
     ; SMB's staged nametable publication can run into visible scanout. Full
     ; dirty rebuilds are deliberately not attempted here: the SMB offscreen
     ; parser is filtered below and legitimate full rebuilds use their normal
@@ -415,16 +415,8 @@ nes_gbc_vblank_isr:
     ldh [rLCDC], a
     call nes_video_fit_update_scroll_window
 
-    ; SMB split mode must never fall back to the chunked resident-page rebuild.
-    ; The queue publisher above updates visible scaled tiles directly, and
-    ; update_scroll_window synchronously publishes the one entering column. A
-    ; leftover dirty flag is stale bookkeeping from construction/transition and
-    ; was the reason the same 21-column chunk kept repeating while a rebuild
-    ; crawled behind Mario.
-    xor a
-    ld [nes_fit_dirty], a
-    ld [nes_fit_recompose_my], a
-    ld [nes_fit_mt_mx], a
+    ; Preserve recycled-column progress. It is now offset 31/0, eleven whole
+    ; columns offscreen, so it can finish incrementally without blocking scanout.
     jp .scroll_done
 .scroll_fit_single:
     call nes_video_apply_single_scroll

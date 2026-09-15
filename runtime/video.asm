@@ -2471,9 +2471,9 @@ nes_video_fit_scale_x_bc:
     rr l
     ret
 
-; 21-column circular live window over the 40 GBC tile columns that represent
-; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport needs
-; 20 full tiles plus one partial entering tile whenever SCX has a fine offset.
+; 32-column stitched backing ring over the 40 scaled world columns. The
+; 160px viewport scans 20 full tiles plus one partial edge (21 columns), while
+; the remaining 11 physical columns are the same future buffer used by main.
 nes_video_fit_update_scroll_window:
     ld a, [nes_mirroring]
     cp $01
@@ -2571,22 +2571,80 @@ nes_video_fit_update_scroll_window:
 .forward_distance_ready:
     and a
     jp z, .scx_from_ring
+    cp 1
+    jr z, .delta_plus1
     cp 9
-    jr c, .catchup_forward
+    jp c, .catchup_forward
 
     ld a, b
     sub c
     jr nc, .backward_distance_ready
     add 40
 .backward_distance_ready:
+    cp 1
+    jr z, .delta_minus1
     cp 9
-    jr c, .catchup_backward
+    jp c, .catchup_backward
 
     ; Genuine discontinuity/area transition. Keep the existing transition path.
     ld a, [nes_fit_mt_quad + 3]
     ld c, a
     ld [nes_fit_origin_mx], a
     jp .full_dirty_rebase
+
+.delta_plus1:
+    ; Same geometry as the working non-scaled stitch: after advancing one
+    ; coarse column, recycle the OLD leftmost physical column as the NEW
+    ; far-right backing column (offset 31), never the visible edge (offset 20).
+    ld a, [nes_fit_origin_mx]
+    inc a
+    cp 40
+    jr c, .plus_origin_ok
+    xor a
+.plus_origin_ok:
+    ld [nes_fit_origin_mx], a
+    ld a, [nes_fit_vram_page]
+    ld d, a
+    and $F8
+    add $08
+    and $F8
+    ld b, a
+    ld a, d
+    and $04
+    or b
+    ld [nes_fit_vram_page], a
+    ld a, $02
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+    ld a, 31
+    ld [nes_fit_mt_mx], a
+    jp .scx_from_ring
+
+.delta_minus1:
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr nz, .minus_dec
+    ld a, 40
+.minus_dec:
+    dec a
+    ld [nes_fit_origin_mx], a
+    ld a, [nes_fit_vram_page]
+    ld d, a
+    and $F8
+    sub $08
+    and $F8
+    ld b, a
+    ld a, d
+    and $04
+    or b
+    ld [nes_fit_vram_page], a
+    ld a, $03
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
+    jp .scx_from_ring
 
 .catchup_forward:
     ; A = number of coarse host columns to advance. Publish the FINAL SCX before
@@ -2694,7 +2752,7 @@ nes_video_fit_update_scroll_window:
     or b
     ld [nes_fit_vram_page], a
 
-    ld a, 20
+    ld a, 31
     ld [nes_fit_mt_mx], a
     xor a
     ld [nes_fit_mt_my], a
@@ -2823,7 +2881,7 @@ nes_video_fit_recompose_resident_page:
     jr .yloop
 
 .col_right:
-    ld a, 20
+    ld a, 31
     jr .col_set
 .col_left:
     xor a
@@ -2884,7 +2942,7 @@ nes_video_fit_recompose_resident_page:
     ld a, [nes_fit_mt_mx]
     inc a
     ld [nes_fit_mt_mx], a
-    cp 21
+    cp 32
     jr c, .xloop
 
     xor a
@@ -3067,12 +3125,13 @@ nes_video_fit_publish_source_tile_hl:
     jr nc, .second_delta_ready
     add 40
 .second_delta_ready:
-    cp 21
+    cp 32
     jr nc, .second_done
     ld [nes_fit_mt_quad + 3], a
 .second_done:
 
-    ; First destination if visible in [origin, origin+21).
+    ; Keep the complete 32-column stitched backing surface current. The actual
+    ; viewport scans only offsets 0..20; offsets 21..31 are future columns.
     ld a, [nes_fit_origin_mx]
     ld c, a
     ld a, d
@@ -3080,7 +3139,7 @@ nes_video_fit_publish_source_tile_hl:
     jr nc, .first_delta_ready
     add 40
 .first_delta_ready:
-    cp 21
+    cp 32
     jr nc, .after_first
     ld [nes_fit_mt_mx], a
     call nes_video_fit_publish_at_mx_my
