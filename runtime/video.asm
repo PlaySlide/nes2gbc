@@ -2806,15 +2806,20 @@ nes_video_fit_sync_nametable_write:
     ld a, [nes_fit_dirty]
     and a
     ret nz
-    ld a, [nes_vram_unlocked]
-    and a
-    jr z, nes_video_fit_mark_dirty_if_resident
+    ; SMB's split transaction is allowed to keep publishing visible cells after
+    ; VBlank. The wide tile uploader below falls back to mode-safe byte writes,
+    ; so do not turn a long staged transaction into dirty=1 merely because the
+    ; generic VBlank fast-path latch has expired.
     ld a, [nes_mirroring]
     cp $01
-    jr nz, .fit_tile_vblank
+    jr nz, .fit_tile_unlocked
     ldh a, [nes_split_active]
     and a
     jp nz, nes_video_fit_publish_source_tile_hl
+.fit_tile_unlocked:
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, nes_video_fit_mark_dirty_if_resident
 .fit_tile_vblank:
     call nes_video_fit_vblank_ok
     jr z, nes_video_fit_mark_dirty_if_resident
@@ -3049,13 +3054,12 @@ nes_video_fit_publish_at_mx_my:
 .slot_attr_ready:
     ld [nes_fit_mt_tmp_h], a
 
+    ; Once composition has started, always finish this tile. If VBlank ended
+    ; during the expensive 5/8 compose, upload_tile_a waits around mode 3
+    ; instead of discarding the completed work and poisoning the whole page.
     call nes_video_fit_upload_tile_a
-    jr nz, .map_cell
-    jp nes_video_fit_defer_dirty
 
 .map_cell:
-    call nes_video_fit_vblank_ok
-    jp z, nes_video_fit_defer_dirty
     ld a, [nes_fit_mt_page]
     call nes_video_fit_map_addr_a
     call nes_video_fit_write_map_cell_de
@@ -3076,10 +3080,15 @@ nes_video_fit_defer_dirty:
     ret
 
 nes_video_fit_write_map_cell_de:
+    ; Two map bytes may land after VBlank when a wide compose straddles the
+    ; boundary. Wait out mode 3 for each banked write rather than escalating to
+    ; a full resident rebuild.
+    call nes_video_wait_vram
     xor a
     ldh [rVBK], a
     ld a, [nes_fit_mt_tmp_l]
     ld [de], a
+    call nes_video_wait_vram
     ld a, $01
     ldh [rVBK], a
     ld a, [nes_fit_mt_tmp_h]
@@ -3425,8 +3434,15 @@ nes_video_fit_compose_wide:
     jp nes_restore_code_bank
 
 nes_video_fit_upload_tile_a:
+    ; Fast path is the normal VBlank burst. If the expensive wide compose ran
+    ; past line 143, keep the completed tile and publish it byte-by-byte through
+    ; the existing mode-3 wait instead of returning failure/dirty=1. C=0 fast,
+    ; C=1 safe visible-scanout path.
     call nes_video_fit_vblank_ok
-    ret z
+    ld c, $00
+    jr nz, .upload_access_ready
+    inc c
+.upload_access_ready:
 
     ; Signed tile number -> physical local slot: id $80 maps to $8800, id $00
     ; maps to $9000. tmp_h bit3 selects VRAM bank for slots 256-299.
@@ -3457,6 +3473,11 @@ nes_video_fit_upload_tile_a:
     ld hl, nes_fit_mt_compose
     ld b, 16
 .copy:
+    ld a, c
+    and a
+    jr z, .copy_now
+    call nes_video_wait_vram
+.copy_now:
     ld a, [hli]
     ld [de], a
     inc de
@@ -3469,6 +3490,17 @@ nes_video_fit_upload_tile_a:
     ret
 
 nes_video_fit_sync_attribute_write:
+    ; SMB split queue attributes were already intentionally ignored while the
+    ; transaction held the VBlank fast-path latch. Keep ignoring them if a
+    ; safe visible tile write clears that latch; otherwise the next attribute
+    ; byte would immediately convert the whole page to dirty=1 again.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .attr_unlocked
+    ldh a, [nes_split_active]
+    and a
+    ret nz
+.attr_unlocked:
     ld a, [nes_vram_unlocked]
     and a
     ret nz
