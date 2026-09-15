@@ -2410,6 +2410,17 @@ nes_video_fit_apply_scroll:
     and $E7
     ldh [rLCDC], a
 
+    ; Vertical-mirroring split games (SMB) use both physical NES nametables
+    ; as one horizontal world. PPUCTRL.0 is already folded into the effective
+    ; world X below; treating it as a resident-page change here incorrectly
+    ; forces dirty=1 and bypasses the stitch-style entering-column path.
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .fit_page_check
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .page_done
+.fit_page_check:
     call nes_video_fit_displayed_page
     ld b, a
     ld a, [nes_fit_vram_page]
