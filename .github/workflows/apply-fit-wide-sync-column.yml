@@ -1,4 +1,4 @@
-name: Apply FIT SMB guard precompose
+name: Apply FIT SMB host-vblank guard prefetch
 on:
   push:
     branches: [automation/apply-fit-wide-ring21]
@@ -13,56 +13,26 @@ jobs:
         with:
           ref: dev/fit-screen-wide-160
           fetch-depth: 0
-      - name: Precompose the next SMB FIT column across host frames
+      - name: Run guard prefetch on every host VBlank
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          p=Path('runtime/main.asm')
+          s=p.read_text()
 
-          vp=Path('runtime/video.asm')
-          s=vp.read_text()
-
-          old='''    and a\n    jp z, .scx_from_ring\n    cp 9\n    jr c, .catchup_forward\n'''
-          new='''    and a\n    jp z, .scx_from_ring\n    cp 1\n    jr z, .consume_prefetched_forward\n    cp 9\n    jr c, .catchup_forward\n'''
+          old='''.early_split_done:\n\n    ; A translated NES NMI may take more than one host GBC frame. Never publish\n    ; partially updated NES video state while it is still running; staged OAM,\n'''
+          new='''.early_split_done:\n\n    ; The wide FIT guard must advance on EVERY host VBlank, not only on host\n    ; frames where the translated NES NMI has completed. SMB's translated NMI\n    ; often spans several GBC frames; placing this work under .commit_ready left\n    ; fewer than 15 compose opportunities between coarse 8px boundaries, so the\n    ; boundary path fell back to the old 15-tile synchronous compose and stalled\n    ; VBlank for >1 frame. The guard is offset 21 and therefore fully offscreen.\n    ld a, [nes_fit_screen]\n    and a\n    jr z, .fit_guard_host_done\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_guard_host_done\n    ldh a, [nes_split_active]\n    and a\n    jr z, .fit_guard_host_done\n    call nes_video_fit_prefetch_right_guard_row\n.fit_guard_host_done:\n\n    ; A translated NES NMI may take more than one host GBC frame. Never publish\n    ; partially updated NES video state while it is still running; staged OAM,\n'''
           if old not in s:
-              raise SystemExit('forward-distance gate not found')
+              raise SystemExit('early_split_done insertion point not found')
           s=s.replace(old,new,1)
 
-          marker='''    ; Genuine discontinuity/area transition. Keep the existing transition path.\n    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.catchup_forward:\n'''
-          repl='''    ; Genuine discontinuity/area transition. Keep the existing transition path.\n    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.consume_prefetched_forward:\n    ; The next entering column is composed one row per host frame at viewport\n    ; offset 21, which is fully offscreen. A normal +1 coarse step therefore\n    ; only rotates that completed guard column into offset 20; it must NOT spend\n    ; an entire host frame synchronously composing 15 tiles at the boundary.\n    ld a, [nes_fit_recompose_my]\n    cp 15\n    jr nc, .prefetch_ready\n\n    ; Startup/transition safety: if the guard has not had 15 host frames yet,\n    ; fall back to the older synchronous path for this one step. Steady SMB\n    ; scrolling has ~30+ host frames between coarse FIT boundaries, so this\n    ; should not be the normal path.\n    ld a, 1\n    jp .catchup_forward\n\n.prefetch_ready:\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    ld a, [nes_fit_mt_quad + 3]\n    ld [nes_fit_origin_mx], a\n\n    xor a\n    ld [nes_fit_dirty], a\n    ld [nes_fit_recompose_my], a ; begin composing the following guard column\n    jp .scx_from_ring\n\n.catchup_forward:\n'''
-          if marker not in s:
-              raise SystemExit('catchup insertion marker not found')
-          s=s.replace(marker,repl,1)
-
-          marker='''.split_regs_done:\n    ret\n\nnes_video_fit_displayed_page:\n'''
-          repl='''.split_regs_done:\n    ret\n\n; Compose exactly one row of the NEXT right-edge column while it is still one\n; full GBC tile offscreen. At 160px the scanned window is offsets 0..20, so\n; offset 21 is a safe guard slot. SMB advances roughly one FIT coarse column\n; every few dozen host frames, giving this 15-row job ample time without ever\n; blocking a complete frame at the scroll boundary. recompose_my is persistent\n; progress 0..15 for this guard and is reset only when the guard is consumed.\nnes_video_fit_prefetch_right_guard_row:\n    ld a, [nes_fit_recompose_my]\n    cp 15\n    ret nc\n    ld [nes_fit_mt_my], a\n    ld a, 21\n    ld [nes_fit_mt_mx], a\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_recompose_my]\n    inc a\n    ld [nes_fit_recompose_my], a\n    ret\n\nnes_video_fit_displayed_page:\n'''
-          if marker not in s:
-              raise SystemExit('prefetch routine insertion marker not found')
-          s=s.replace(marker,repl,1)
-
-          # After any rare synchronous multi-column catch-up, start a fresh
-          # offscreen guard instead of leaving progress at 15.
-          old='''    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n\n.catchup_backward:\n'''
-          new='''    di\n    pop af\n    ldh [rIE], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    jp .scx_from_ring\n\n.catchup_backward:\n'''
+          old='''    call nes_video_fit_update_scroll_window\n    ; Do one fifteenth of the NEXT entering column now, while it is still\n    ; completely offscreen. This replaces the old 15-tile synchronous burst\n    ; that the mGBA video log shows spanning more than one whole host frame.\n    call nes_video_fit_prefetch_right_guard_row\n.fit_edge_done:\n'''
+          new='''    call nes_video_fit_update_scroll_window\n    ; Guard-row precompose now runs above the nes_nmi_active gate so it truly\n    ; gets one opportunity per host VBlank. Do not double-advance it here on\n    ; completed-NMI frames.\n.fit_edge_done:\n'''
           if old not in s:
-              raise SystemExit('forward catchup epilogue not found')
+              raise SystemExit('commit_ready guard call not found')
           s=s.replace(old,new,1)
 
-          vp.write_text(s)
-
-          mp=Path('runtime/main.asm')
-          m=mp.read_text()
-          old='''    call nes_video_fit_update_scroll_window\n    ld a, [nes_fit_dirty]\n    cp $02\n    jr z, .fit_edge_service\n    cp $03\n    jr nz, .fit_edge_done\n.fit_edge_service:\n    ld a, $01\n    ld [nes_vram_unlocked], a\n    call nes_video_fit_flush_dirty\n    xor a\n    ld [nes_vram_unlocked], a\n.fit_edge_done:\n'''
-          new='''    call nes_video_fit_update_scroll_window\n    ; Do one fifteenth of the NEXT entering column now, while it is still\n    ; completely offscreen. This replaces the old 15-tile synchronous burst\n    ; that the mGBA video log shows spanning more than one whole host frame.\n    call nes_video_fit_prefetch_right_guard_row\n.fit_edge_done:\n'''
-          if old not in m:
-              raise SystemExit('early FIT edge-service block not found')
-          m=m.replace(old,new,1)
-
-          old='''    xor a\n    ld [nes_fit_dirty], a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scroll_done\n'''
-          new='''    xor a\n    ld [nes_fit_dirty], a\n    ; Keep recompose_my: in SMB split mode it is the persistent 0..15 progress\n    ; of the fully-offscreen right guard column built by the early VBlank step.\n    ld [nes_fit_mt_mx], a\n    jp .scroll_done\n'''
-          if old not in m:
-              raise SystemExit('SMB FIT scroll cleanup block not found')
-          m=m.replace(old,new,1)
-          mp.write_text(m)
+          p.write_text(s)
           PY
       - name: Build RGBDS
         run: |
@@ -88,6 +58,6 @@ jobs:
         run: |
           git config user.name ChatGPT
           git config user.email chatgpt@users.noreply.github.com
-          git add runtime/video.asm runtime/main.asm
-          git commit -m 'FIT_SCREEN: precompose SMB entering column across frames'
+          git add runtime/main.asm
+          git commit -m 'FIT_SCREEN: precompose SMB guard every host VBlank'
           git push origin HEAD:dev/fit-screen-wide-160
