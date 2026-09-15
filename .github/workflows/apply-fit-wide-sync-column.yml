@@ -1,4 +1,4 @@
-name: Apply FIT SMB host-vblank guard prefetch
+name: Apply FIT SMB live guard refresh
 on:
   push:
     branches: [automation/apply-fit-wide-ring21]
@@ -13,23 +13,23 @@ jobs:
         with:
           ref: dev/fit-screen-wide-160
           fetch-depth: 0
-      - name: Run guard prefetch on every host VBlank
+      - name: Let SMB parser writes refresh the offscreen guard column
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('runtime/main.asm')
+          p=Path('runtime/video.asm')
           s=p.read_text()
 
-          old='''.early_split_done:\n\n    ; A translated NES NMI may take more than one host GBC frame. Never publish\n    ; partially updated NES video state while it is still running; staged OAM,\n'''
-          new='''.early_split_done:\n\n    ; The wide FIT guard must advance on EVERY host VBlank, not only on host\n    ; frames where the translated NES NMI has completed. SMB's translated NMI\n    ; often spans several GBC frames; placing this work under .commit_ready left\n    ; fewer than 15 compose opportunities between coarse 8px boundaries, so the\n    ; boundary path fell back to the old 15-tile synchronous compose and stalled\n    ; VBlank for >1 frame. The guard is offset 21 and therefore fully offscreen.\n    ld a, [nes_fit_screen]\n    and a\n    jr z, .fit_guard_host_done\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_guard_host_done\n    ldh a, [nes_split_active]\n    and a\n    jr z, .fit_guard_host_done\n    call nes_video_fit_prefetch_right_guard_row\n.fit_guard_host_done:\n\n    ; A translated NES NMI may take more than one host GBC frame. Never publish\n    ; partially updated NES video state while it is still running; staged OAM,\n'''
+          old='''.second_delta_ready:\n    cp 21\n    jr nc, .second_done\n    ld [nes_fit_mt_quad + 3], a\n.second_done:\n\n    ; First destination if visible in [origin, origin+21).\n    ld a, [nes_fit_origin_mx]\n'''
+          new='''.second_delta_ready:\n    ; Offsets 0..20 are scanned; offset 21 is the fully-offscreen guard.\n    ; Keep the guard live too: SMB often writes a future parser column AFTER\n    ; its once-per-frame precompose pass has already visited that row. If those\n    ; writes are filtered out here, the stale/blank guard rotates on-screen at\n    ; the next coarse step and produces the repeating holes/old scenery.\n    cp 22\n    jr nc, .second_done\n    ld [nes_fit_mt_quad + 3], a\n.second_done:\n\n    ; First destination if visible or in the one-column guard [origin,origin+22).\n    ld a, [nes_fit_origin_mx]\n'''
           if old not in s:
-              raise SystemExit('early_split_done insertion point not found')
+              raise SystemExit('second-destination FIT visibility gate not found')
           s=s.replace(old,new,1)
 
-          old='''    call nes_video_fit_update_scroll_window\n    ; Do one fifteenth of the NEXT entering column now, while it is still\n    ; completely offscreen. This replaces the old 15-tile synchronous burst\n    ; that the mGBA video log shows spanning more than one whole host frame.\n    call nes_video_fit_prefetch_right_guard_row\n.fit_edge_done:\n'''
-          new='''    call nes_video_fit_update_scroll_window\n    ; Guard-row precompose now runs above the nes_nmi_active gate so it truly\n    ; gets one opportunity per host VBlank. Do not double-advance it here on\n    ; completed-NMI frames.\n.fit_edge_done:\n'''
+          old='''.first_delta_ready:\n    cp 21\n    jr nc, .after_first\n    ld [nes_fit_mt_mx], a\n'''
+          new='''.first_delta_ready:\n    cp 22\n    jr nc, .after_first\n    ld [nes_fit_mt_mx], a\n'''
           if old not in s:
-              raise SystemExit('commit_ready guard call not found')
+              raise SystemExit('first-destination FIT visibility gate not found')
           s=s.replace(old,new,1)
 
           p.write_text(s)
@@ -58,6 +58,6 @@ jobs:
         run: |
           git config user.name ChatGPT
           git config user.email chatgpt@users.noreply.github.com
-          git add runtime/main.asm
-          git commit -m 'FIT_SCREEN: precompose SMB guard every host VBlank'
+          git add runtime/video.asm
+          git commit -m 'FIT_SCREEN: keep SMB guard current from parser writes'
           git push origin HEAD:dev/fit-screen-wide-160
