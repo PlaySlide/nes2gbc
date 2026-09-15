@@ -5,3 +5,4 @@ pub mod ines;
 pub mod ir;
 pub mod lr35902;
 pub mod recompile;
+pub mod superblock;
