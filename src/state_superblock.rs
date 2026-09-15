@@ -417,10 +417,13 @@ struct StateStats {
     y_stores_deferred: usize,
     x_materialized: usize,
     y_materialized: usize,
+    x_side_exit_materialized: usize,
+    y_side_exit_materialized: usize,
     x_index_uses: usize,
     y_index_uses: usize,
     fast_ops: usize,
     barriers: usize,
+    branch_side_exits: usize,
     canonical_adapters: usize,
 }
 
@@ -474,6 +477,73 @@ fn sync_xy(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
         state.y_dirty = false;
         stats.y_materialized += 1;
     }
+}
+
+fn emit_side_exit_sync_xy(out: &mut String, state: TraceState, stats: &mut StateStats) {
+    if state.x_dirty {
+        debug_assert!(state.x_b);
+        writeln!(out, "    ld a, b ; superblock side-exit materialize X").unwrap();
+        writeln!(out, "    ldh [nes_x], a").unwrap();
+        stats.x_side_exit_materialized += 1;
+    }
+    if state.y_dirty {
+        debug_assert!(state.y_c);
+        writeln!(out, "    ld a, c ; superblock side-exit materialize Y").unwrap();
+        writeln!(out, "    ldh [nes_y], a").unwrap();
+        stats.y_side_exit_materialized += 1;
+    }
+}
+
+fn emit_stateful_branch(
+    out: &mut String,
+    ops: &[IrOp],
+    state: TraceState,
+    stats: &mut StateStats,
+    current_bank: u16,
+    banks: &BTreeMap<u16, u16>,
+) -> bool {
+    if ops.len() != 1 {
+        return false;
+    }
+    let IrOp::Branch { flag, when, target } = ops[0] else {
+        return false;
+    };
+    if !banks.contains_key(&target) {
+        return false;
+    }
+
+    match flag {
+        Flag::Carry => {
+            writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
+            writeln!(out, "    and a").unwrap();
+            writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+        }
+        Flag::Zero => {
+            writeln!(out, "    ldh a, [nes_z_shadow]").unwrap();
+            writeln!(out, "    and a").unwrap();
+            writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
+        }
+        Flag::Negative => {
+            writeln!(out, "    ldh a, [nes_n_shadow]").unwrap();
+            writeln!(out, "    bit 7, a").unwrap();
+            writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+        }
+        _ => {
+            writeln!(out, "    ldh a, [nes_p]").unwrap();
+            writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
+            writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+        }
+    }
+
+    // The preferred superblock edge for a conditional is the fallthrough. Keep
+    // resident X/Y dirty on that path. Only the taken side exit must publish
+    // canonical state before it transfers to an ordinary entry point.
+    emit_side_exit_sync_xy(out, state, stats);
+    let emitted = emit_static_target(out, target, current_bank, banks, None, 0);
+    debug_assert!(emitted);
+    writeln!(out, ":").unwrap();
+    stats.branch_side_exits += 1;
+    true
 }
 
 fn invalidate_xy(state: &mut TraceState) {
@@ -949,6 +1019,26 @@ pub fn emit_cfg_with_interrupts(
                         continue;
                     }
 
+                    let stateful_branch = matches!(
+                        ops.as_slice(),
+                        [IrOp::Branch { target, .. }] if banks.contains_key(target)
+                    );
+                    if stateful_branch {
+                        if !pending.is_empty() {
+                            let before = out.len();
+                            emit_barrier_ops(&mut out, &pending, &mut state, &mut stats);
+                            section_pc += approx_code_bytes(&out[before..]);
+                            pending.clear();
+                        }
+                        write_insn_comment(&mut out, instruction);
+                        let before = out.len();
+                        let _ = emit_stateful_branch(
+                            &mut out, &ops, state, &mut stats, bank, &banks
+                        );
+                        section_pc += approx_code_bytes(&out[before..]);
+                        continue;
+                    }
+
                     let mut probe = String::new();
                     if emit_static_control(&mut probe, &ops, bank, &banks, None, 0) {
                         if !pending.is_empty() {
@@ -1054,13 +1144,16 @@ pub fn emit_cfg_with_interrupts(
     }
 
     println!(
-        "superblock-state: avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {}; barriers {}; canonical adapters {}",
+        "superblock-state: avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); eager materializations X={} Y={}; conditional side-exit materializations X={} Y={} across {} branch side exit(s); cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {}; barriers {}; canonical adapters {}",
         stats.x_reload_avoided,
         stats.y_reload_avoided,
         stats.x_stores_deferred,
         stats.y_stores_deferred,
         stats.x_materialized,
         stats.y_materialized,
+        stats.x_side_exit_materialized,
+        stats.y_side_exit_materialized,
+        stats.branch_side_exits,
         stats.x_index_uses,
         stats.y_index_uses,
         stats.x_seed_loads,
@@ -1109,5 +1202,25 @@ mod tests {
         let polls = nmi_poll_points(&graph, &selected);
         let plan = plan_superblocks(&graph, &selected, &banks, &polls);
         assert!(!plan.next.values().any(|&target| target == 0x8005));
+    }
+
+    #[test]
+    fn conditional_side_exit_materializes_only_on_taken_path() {
+        let mut prg = vec![0xEA; 0x8000];
+        // LDX #$04 / BNE $8006 / NOP / RTS / NOP / RTS.
+        prg[0..8].copy_from_slice(&[0xA2, 0x04, 0xD0, 0x02, 0xEA, 0x60, 0xEA, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let asm = emit_cfg_with_interrupts(
+            &graph,
+            EmitOptions { reset: 0x8000, max_blocks: Some(8), debug_trace: false },
+            0x8000,
+            0x8000,
+        );
+        let branch = asm.find("; $8002: $D0 Bne Relative").unwrap();
+        let fallthrough = asm.find("nes_8004_trace:").unwrap();
+        let between = &asm[branch..fallthrough];
+        assert!(between.contains("jr z, :+"));
+        assert!(between.contains("superblock side-exit materialize X"));
+        assert!(!between.contains("superblock materialize X"));
     }
 }
