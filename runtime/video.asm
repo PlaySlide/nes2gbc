@@ -2519,21 +2519,19 @@ nes_video_fit_update_scroll_window:
 
 .slide_vert:
     ; Effective NES X in BC (0..511), including logical nametable bit 0.
-    ; IMPORTANT: use the same ARMED split/camera snapshot that the current
-    ; host frame is actually presenting. The non-scaled SMB stitch path does
-    ; this already. Using live split/view state here let OAM follow-camera work
-    ; advance the FIT ring one host frame ahead of the raster state, producing
-    ; the once-per-coarse-tile whole-scene snap.
-    ldh a, [nes_split_armed_x]
+    ; Match the proven non-scaled SMB stitch path: derive the coarse key from
+    ; the live completed split/camera state, then catch up small multi-column
+    ; advances instead of treating anything other than +/-1 as a discontinuity.
+    ldh a, [nes_split_bottom_x]
     ld c, a
-    ld a, [nes_view_armed_x]
+    ldh a, [nes_view_x]
     add c
     ld c, a
     ld b, $00
     jr nc, .eff_nt
     inc b
 .eff_nt:
-    ldh a, [nes_split_armed_ctrl]
+    ldh a, [nes_split_bottom_ctrl]
     and $01
     xor b
     ld b, a
@@ -2541,61 +2539,150 @@ nes_video_fit_update_scroll_window:
     call nes_video_fit_scale_x_bc
     ld a, l
     and $07
-    ld e, a                    ; fine host pixels
+    ld e, a                    ; final fine host pixels
     srl h
     rr l
     srl h
     rr l
     srl h
     rr l
-    ld c, l                    ; host world tile origin 0..39
+    ld c, l                    ; target host world tile origin 0..39
 
     ld a, [nes_fit_origin_mx]
     cp c
     jp z, .scx_from_ring
     ld b, a                    ; old world origin 0..39
     ld a, c
-    ld [nes_fit_origin_mx], a
+    ld [nes_fit_mt_quad + 3], a ; preserve target across expensive composes
 
-    ; An SMB split is a continuously stitched horizontal presentation, not a
-    ; resident page that may be asynchronously rebuilt. Any stale dirty state
-    ; left by pre-split/page construction must not preempt the one-column
-    ; stitch path. Ordinary +/-1 motion below refreshes its entering column
-    ; synchronously; genuine large jumps still take .full_dirty_rebase.
+    ; SMB split mode never uses the asynchronous whole-page catch-up path.
     xor a
     ld [nes_fit_dirty], a
 
-    ; Treat the 39->0/0->39 wrap as an ordinary one-column move in the 40-column
-    ; scaled NES world.
-    ld a, b
-    cp 39
-    jr nz, .check_wrap_minus
-    ld a, c
-    and a
-    jp z, .delta_plus1
-.check_wrap_minus:
-    ld a, b
-    and a
-    jr nz, .delta_regular
-    ld a, c
-    cp 39
-    jp z, .delta_minus1
-.delta_regular:
+    ; Exactly like the working 256px stitch: a translated NES frame can move
+    ; several coarse columns before the next host presentation. The old FIT
+    ; +/-1-only test rebased the ring on those perfectly ordinary skips, which
+    ; is the once-per-tile whole-scene snap seen on hardware/mGBA. Treat forward
+    ; or backward distances 1..8 as synchronous catch-up.
     ld a, c
     sub b
-    cp 1
-    jp z, .delta_plus1
-    cp $FF
-    jp z, .delta_minus1
+    jr nc, .forward_distance_ready
+    add 40
+.forward_distance_ready:
+    and a
+    jp z, .scx_from_ring
+    cp 9
+    jr c, .catchup_forward
+
+    ld a, b
+    sub c
+    jr nc, .backward_distance_ready
+    add 40
+.backward_distance_ready:
+    cp 9
+    jr c, .catchup_backward
+
+    ; Genuine discontinuity/area transition. Keep the existing transition path.
+    ld a, [nes_fit_mt_quad + 3]
+    ld c, a
+    ld [nes_fit_origin_mx], a
     jp .full_dirty_rebase
 
-.delta_plus1:
-    ; Match the proven SMB stitch model: moving the viewport never schedules a
-    ; background rebuild. Advance the hidden physical ring slot, then compose
-    ; the single column that is about to enter on the right directly from the
-    ; authoritative NES nametable. It is still one whole GBC column offscreen
-    ; at this point, so all 15 scaled tiles may be completed before SCX exposes
-    ; any of them.
+.catchup_forward:
+    ; A = number of coarse host columns to advance. Publish the FINAL SCX before
+    ; doing any compose work so a line-32 STAT split that nests midway through
+    ; catch-up still sees the correct playfield position, never an intermediate.
+    ld d, a
+    ld a, [nes_fit_vram_page]
+    and $F8
+    ld c, a
+    ld a, d
+    add a
+    add a
+    add a
+    add c
+    add e
+    ld [nes_fit_play_scx], a
+
+    ldh a, [rIE]
+    push af
+    ld a, $02                  ; STAT only; never nest VBlank
+    ldh [rIE], a
+    ei
+    nop
+.forward_loop:
+    ld a, [nes_fit_origin_mx]
+    inc a
+    cp 40
+    jr c, .forward_origin_ready
+    xor a
+.forward_origin_ready:
+    ld [nes_fit_origin_mx], a
+
+    push de
+    call .sync_right_column
+    pop de
+
+    ld a, [nes_fit_origin_mx]
+    ld b, a
+    ld a, [nes_fit_mt_quad + 3]
+    cp b
+    jr nz, .forward_loop
+
+    di
+    pop af
+    ldh [rIE], a
+    jp .scx_from_ring
+
+.catchup_backward:
+    ; A = number of coarse host columns to move backward. Same final-SCX rule.
+    ld d, a
+    ld a, [nes_fit_vram_page]
+    and $F8
+    ld c, a
+    ld a, d
+    add a
+    add a
+    add a
+    ld d, a
+    ld a, c
+    sub d
+    add e
+    ld [nes_fit_play_scx], a
+
+    ldh a, [rIE]
+    push af
+    ld a, $02
+    ldh [rIE], a
+    ei
+    nop
+.backward_loop:
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr nz, .backward_dec
+    ld a, 40
+.backward_dec:
+    dec a
+    ld [nes_fit_origin_mx], a
+
+    push de
+    call .sync_left_column
+    pop de
+
+    ld a, [nes_fit_origin_mx]
+    ld b, a
+    ld a, [nes_fit_mt_quad + 3]
+    cp b
+    jr nz, .backward_loop
+
+    di
+    pop af
+    ldh [rIE], a
+    jp .scx_from_ring
+
+.sync_right_column:
+    ; Advance the physical ring one slot and synchronously rebuild the newly
+    ; entering partial/right-edge column from authoritative NES nametable state.
     ld a, [nes_fit_vram_page]
     ld d, a
     and $F8
@@ -2607,50 +2694,24 @@ nes_video_fit_update_scroll_window:
     or b
     ld [nes_fit_vram_page], a
 
-    ; The 15-tile wide-column compose can outlive VBlank. Publish the NEW
-    ; playfield SCX before doing that work, then temporarily allow only STAT
-    ; to nest so the line-32 HUD/playfield split still fires on time. Without
-    ; this, every coarse tile boundary misses LYC and the entire lower scene is
-    ; drawn for one frame with the HUD/top SCX -- the observed half-screen snap.
-    ld a, [nes_fit_vram_page]
-    and $F8
-    add e
-    ld [nes_fit_play_scx], a
-
-    ldh a, [rIE]
-    push af
-    ld a, $02                  ; STAT only; never nest VBlank
-    ldh [rIE], a
-    ei
-    nop
-
-    push de                    ; preserve fine host X in E
-    ld a, 20                   ; new right-edge / partial column
+    ld a, 20
     ld [nes_fit_mt_mx], a
     xor a
     ld [nes_fit_mt_my], a
-.fit_sync_right_row:
+.sync_right_row:
     call nes_video_fit_publish_at_mx_my
     ld a, [nes_fit_mt_my]
     inc a
     ld [nes_fit_mt_my], a
     cp 15
-    jr c, .fit_sync_right_row
+    jr c, .sync_right_row
     xor a
     ld [nes_fit_dirty], a
     ld a, 15
     ld [nes_fit_recompose_my], a
-    pop de
+    ret
 
-    di
-    pop af
-    ldh [rIE], a
-    jp .scx_from_ring
-
-.delta_minus1:
-    ; Same operation in reverse: after moving the ring head left, viewport
-    ; offset zero is the newly entering column. Rebuild it completely before
-    ; publishing the new SCX.
+.sync_left_column:
     ld a, [nes_fit_vram_page]
     ld d, a
     and $F8
@@ -2662,40 +2723,21 @@ nes_video_fit_update_scroll_window:
     or b
     ld [nes_fit_vram_page], a
 
-    ; Same split-deadline protection for reverse motion.
-    ld a, [nes_fit_vram_page]
-    and $F8
-    add e
-    ld [nes_fit_play_scx], a
-
-    ldh a, [rIE]
-    push af
-    ld a, $02
-    ldh [rIE], a
-    ei
-    nop
-
-    push de
     xor a
     ld [nes_fit_mt_mx], a
     ld [nes_fit_mt_my], a
-.fit_sync_left_row:
+.sync_left_row:
     call nes_video_fit_publish_at_mx_my
     ld a, [nes_fit_mt_my]
     inc a
     ld [nes_fit_mt_my], a
     cp 15
-    jr c, .fit_sync_left_row
+    jr c, .sync_left_row
     xor a
     ld [nes_fit_dirty], a
     ld a, 15
     ld [nes_fit_recompose_my], a
-    pop de
-
-    di
-    pop af
-    ldh [rIE], a
-    jp .scx_from_ring
+    ret
 
 .full_dirty_rebase:
     ; A discontinuity gets a fresh physical ring head. With a full rebuild in
