@@ -2602,6 +2602,23 @@ nes_video_fit_update_scroll_window:
     or b
     ld [nes_fit_vram_page], a
 
+    ; The 15-tile wide-column compose can outlive VBlank. Publish the NEW
+    ; playfield SCX before doing that work, then temporarily allow only STAT
+    ; to nest so the line-32 HUD/playfield split still fires on time. Without
+    ; this, every coarse tile boundary misses LYC and the entire lower scene is
+    ; drawn for one frame with the HUD/top SCX -- the observed half-screen snap.
+    ld a, [nes_fit_vram_page]
+    and $F8
+    add e
+    ld [nes_fit_play_scx], a
+
+    ldh a, [rIE]
+    push af
+    ld a, $02                  ; STAT only; never nest VBlank
+    ldh [rIE], a
+    ei
+    nop
+
     push de                    ; preserve fine host X in E
     ld a, 20                   ; new right-edge / partial column
     ld [nes_fit_mt_mx], a
@@ -2619,6 +2636,10 @@ nes_video_fit_update_scroll_window:
     ld a, 15
     ld [nes_fit_recompose_my], a
     pop de
+
+    di
+    pop af
+    ldh [rIE], a
     jp .scx_from_ring
 
 .delta_minus1:
@@ -2636,6 +2657,19 @@ nes_video_fit_update_scroll_window:
     or b
     ld [nes_fit_vram_page], a
 
+    ; Same split-deadline protection for reverse motion.
+    ld a, [nes_fit_vram_page]
+    and $F8
+    add e
+    ld [nes_fit_play_scx], a
+
+    ldh a, [rIE]
+    push af
+    ld a, $02
+    ldh [rIE], a
+    ei
+    nop
+
     push de
     xor a
     ld [nes_fit_mt_mx], a
@@ -2652,6 +2686,10 @@ nes_video_fit_update_scroll_window:
     ld a, 15
     ld [nes_fit_recompose_my], a
     pop de
+
+    di
+    pop af
+    ldh [rIE], a
     jp .scx_from_ring
 
 .full_dirty_rebase:
