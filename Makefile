@@ -45,6 +45,7 @@ generate:
 		python3 tools/specialize_sprite0_poll.py runtime/generated.asm; \
 		python3 tools/fuse_sprite0_branch.py runtime/generated.asm; \
 		python3 tools/virtualize_sprite0_waits.py runtime/generated.asm; \
+		python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
 		python3 tools/dead_terminal_zn.py runtime/generated.asm; \
 		python3 tools/dead_terminal_n.py runtime/generated.asm; \
 		python3 tools/dead_terminal_carry_zn.py runtime/generated.asm; \
@@ -58,7 +59,6 @@ generate:
 		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
 		python3 tools/cache_bc_windows.py runtime/generated.asm; \
-		python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
 		if [ "$(TRACE)" = "0" ] && [ "$(PROFILE)" = "0" ] && [ "$(PROFILE_TRACE)" = "0" ]; then python3 tools/forward_state_edges.py runtime/generated.asm; fi; \
 		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
