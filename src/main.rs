@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, env, fs, path::PathBuf, process::ExitCode};
 
-use nes2gbc::{assets, cfg, cpu6502, ines, recompile};
+use nes2gbc::{assets, cfg, cpu6502, ines, recompile, superblock};
 
 fn print_hot_profile(graph: &cfg::ControlFlowGraph) {
     let mut mnemonics: BTreeMap<String, usize> = BTreeMap::new();
@@ -241,7 +241,7 @@ fn main() -> ExitCode {
         let chr_path = parent.join(&chr_name);
         let chr_gbc_path = parent.join(&chr_gbc_name);
 
-        let mut asm = recompile::emit_cfg_with_interrupts(
+        let mut asm = superblock::emit_cfg_with_interrupts(
             &graph,
             recompile::EmitOptions { reset: vectors.reset, max_blocks, debug_trace },
             vectors.nmi,
