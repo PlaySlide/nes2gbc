@@ -1,4 +1,4 @@
-name: Apply compare fixture fix
+name: Apply compare fixture cleanup
 
 on: push
 
@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-      - name: Fix fixture, verify, and push
+      - name: Fix compare regression fixture and push source only
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -28,7 +28,6 @@ jobs:
           cargo check --all-targets
           git config user.name nes2gbc-bot
           git config user.email actions@users.noreply.github.com
-          git show HEAD^:.github/workflows/ci.yml > .github/workflows/ci.yml
-          git add src/state_superblock.rs .github/workflows/ci.yml
+          git add src/state_superblock.rs
           git commit -m 'Fix stateful compare regression fixture'
           git push origin HEAD:perf/branch-fusion
