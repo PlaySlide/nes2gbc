@@ -2574,8 +2574,12 @@ nes_video_fit_update_scroll_window:
     jp .full_dirty_rebase
 
 .delta_plus1:
-    ; Advance the physical GBC map ring one column. Bits 3-7 hold ring head;
-    ; bit 2 retains the resident NES physical-page selector.
+    ; Match the proven SMB stitch model: moving the viewport never schedules a
+    ; background rebuild. Advance the hidden physical ring slot, then compose
+    ; the single column that is about to enter on the right directly from the
+    ; authoritative NES nametable. It is still one whole GBC column offscreen
+    ; at this point, so all 15 scaled tiles may be completed before SCX exposes
+    ; any of them.
     ld a, [nes_fit_vram_page]
     ld d, a
     and $F8
@@ -2586,15 +2590,30 @@ nes_video_fit_update_scroll_window:
     and $04
     or b
     ld [nes_fit_vram_page], a
-    ld a, 2
-    ld [nes_fit_dirty], a
-    xor a
-    ld [nes_fit_recompose_my], a
-    ld a, 20                   ; entering partial/right-edge column
+
+    push de                    ; preserve fine host X in E
+    ld a, 20                   ; new right-edge / partial column
     ld [nes_fit_mt_mx], a
+    xor a
+    ld [nes_fit_mt_my], a
+.fit_sync_right_row:
+    call nes_video_fit_publish_at_mx_my
+    ld a, [nes_fit_mt_my]
+    inc a
+    ld [nes_fit_mt_my], a
+    cp 15
+    jr c, .fit_sync_right_row
+    xor a
+    ld [nes_fit_dirty], a
+    ld a, 15
+    ld [nes_fit_recompose_my], a
+    pop de
     jp .scx_from_ring
 
 .delta_minus1:
+    ; Same operation in reverse: after moving the ring head left, viewport
+    ; offset zero is the newly entering column. Rebuild it completely before
+    ; publishing the new SCX.
     ld a, [nes_fit_vram_page]
     ld d, a
     and $F8
@@ -2605,11 +2624,23 @@ nes_video_fit_update_scroll_window:
     and $04
     or b
     ld [nes_fit_vram_page], a
-    ld a, 3
-    ld [nes_fit_dirty], a
+
+    push de
     xor a
-    ld [nes_fit_recompose_my], a
     ld [nes_fit_mt_mx], a
+    ld [nes_fit_mt_my], a
+.fit_sync_left_row:
+    call nes_video_fit_publish_at_mx_my
+    ld a, [nes_fit_mt_my]
+    inc a
+    ld [nes_fit_mt_my], a
+    cp 15
+    jr c, .fit_sync_left_row
+    xor a
+    ld [nes_fit_dirty], a
+    ld a, 15
+    ld [nes_fit_recompose_my], a
+    pop de
     jp .scx_from_ring
 
 .full_dirty_rebase:
