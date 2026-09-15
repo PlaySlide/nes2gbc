@@ -2519,16 +2519,21 @@ nes_video_fit_update_scroll_window:
 
 .slide_vert:
     ; Effective NES X in BC (0..511), including logical nametable bit 0.
-    ldh a, [nes_split_bottom_x]
+    ; IMPORTANT: use the same ARMED split/camera snapshot that the current
+    ; host frame is actually presenting. The non-scaled SMB stitch path does
+    ; this already. Using live split/view state here let OAM follow-camera work
+    ; advance the FIT ring one host frame ahead of the raster state, producing
+    ; the once-per-coarse-tile whole-scene snap.
+    ldh a, [nes_split_armed_x]
     ld c, a
-    ldh a, [nes_view_x]
+    ld a, [nes_view_armed_x]
     add c
     ld c, a
     ld b, $00
     jr nc, .eff_nt
     inc b
 .eff_nt:
-    ldh a, [nes_split_bottom_ctrl]
+    ldh a, [nes_split_armed_ctrl]
     and $01
     xor b
     ld b, a
