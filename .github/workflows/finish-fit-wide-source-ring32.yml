@@ -48,10 +48,8 @@ jobs:
       - name: Build and test
         run: |
           cargo test --quiet
-          cargo build --quiet --release
           python3 - <<'PY'
           from pathlib import Path
-          # Minimal mapper-0 32K/8K ROM for an RGBDS FIT_SCREEN smoke build.
           prg=bytearray([0xEA])*32768
           prg[0:3]=bytes([0x4C,0x00,0x80])
           for off,val in ((0x7FFA,0x00),(0x7FFB,0x80),(0x7FFC,0x00),(0x7FFD,0x80),(0x7FFE,0x00),(0x7FFF,0x80)):
@@ -59,7 +57,7 @@ jobs:
           rom=bytearray(b'NES\x1a')+bytes([2,1,1,0])+bytes(8)+prg+bytes(8192)
           Path('/tmp/fit.nes').write_bytes(rom)
           PY
-          ./target/release/nes2gbc --fit-screen /tmp/fit.nes /tmp/fit.gbc
+          make gbc ROM=/tmp/fit.nes FIT_SCREEN=1 BANK_LOCALITY=0
       - name: Commit to development branch
         run: |
           git config user.name ChatGPT
