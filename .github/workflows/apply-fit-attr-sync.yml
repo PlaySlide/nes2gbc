@@ -1,0 +1,54 @@
+name: Apply FIT SMB attribute sync
+on:
+  push:
+    branches: [automation/apply-fit-wide-ring21]
+    paths: ['.github/workflows/apply-fit-attr-sync.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/fit-screen-wide-160
+          fetch-depth: 0
+      - name: Publish scaled SMB attribute writes into stitched backing ring
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('runtime/video.asm')
+          s = p.read_text()
+          start = s.index('nes_video_fit_sync_attribute_write:\n')
+          end = s.index('nes_video_fit_sync_sprite_chr:\n', start)
+          new = '''nes_video_fit_sync_attribute_write:\n    ; SMB split attributes belong to the scaled presentation stitch. Update\n    ; only the host cells whose dominant source tile lies in this 4x4 NES\n    ; attribute cell; never turn an attribute write into a page rebuild.\n    ld b, a\n    ld a, [nes_mirroring]\n    cp $01\n    jp nz, .attr_unlocked\n    ldh a, [nes_split_active]\n    and a\n    jp z, .attr_unlocked\n\n    ld a, b\n    ld [nes_fit_mt_quad], a\n\n    ; World NES X of the first tile in this attribute cell.\n    ld a, h\n    and $04\n    jr z, .fit_attr_page0\n    ld a, $20\n    jr .fit_attr_page_ready\n.fit_attr_page0:\n    xor a\n.fit_attr_page_ready:\n    ld [nes_fit_mt_quad + 1], a\n\n    ld a, l\n    sub $C0\n    ld c, a\n    and $07\n    add a\n    add a\n    ld d, a\n    ld a, [nes_fit_mt_quad + 1]\n    add d\n    ld [nes_fit_mt_quad + 1], a\n\n    ; Attribute row r maps to host rows 2r and 2r+1 under Y/2 scaling.\n    ld a, c\n    srl a\n    srl a\n    srl a\n    add a\n    ld [nes_fit_mt_quad + 2], a\n\n    xor a\n    ld [nes_fit_mt_mx], a\n.fit_attr_column_loop:\n    ; Exact same dominant-source rule used by publish_at_mx_my.\n    call nes_video_fit_world_col\n    add a\n    ld e, a\n    ld d, $00\n    ld hl, nes_video_fit_wide_x_table\n    add hl, de\n    ld a, [hli]\n    ld c, a\n    ld a, [hl]\n    and a\n    jr z, .fit_attr_center_x_ready\n    inc c\n.fit_attr_center_x_ready:\n    ld a, c\n    and $3F\n    ld c, a\n\n    ld a, [nes_fit_mt_quad + 1]\n    ld d, a\n    ld a, c\n    sub d\n    cp 4\n    jr nc, .fit_attr_next_column\n    ld [nes_fit_mt_quad + 3], a\n\n    ; Top quadrant.\n    ld a, [nes_fit_mt_quad]\n    ld c, a\n    ld a, [nes_fit_mt_quad + 3]\n    cp 2\n    jr c, .fit_attr_top_left\n    ld a, c\n    srl a\n    srl a\n    ld c, a\n.fit_attr_top_left:\n    ld a, c\n    and $03\n    ld c, a\n    ld a, [nes_fit_mt_quad + 2]\n    call .fit_attr_write_cell\n\n    ; Bottom quadrant.\n    ld a, [nes_fit_mt_quad]\n    swap a\n    ld c, a\n    ld a, [nes_fit_mt_quad + 3]\n    cp 2\n    jr c, .fit_attr_bottom_left\n    ld a, c\n    srl a\n    srl a\n    ld c, a\n.fit_attr_bottom_left:\n    ld a, c\n    and $03\n    ld c, a\n    ld a, [nes_fit_mt_quad + 2]\n    inc a\n    call .fit_attr_write_cell\n\n.fit_attr_next_column:\n    ld a, [nes_fit_mt_mx]\n    inc a\n    ld [nes_fit_mt_mx], a\n    cp 32\n    jr c, .fit_attr_column_loop\n    xor a\n    ldh [rVBK], a\n    ret\n\n.fit_attr_write_cell:\n    ; A=host row, C=palette. Pattern slot bank is row 0..7 -> bank0,\n    ; row 8..14 -> bank1 because each row owns 32 pattern slots.\n    cp 15\n    ret nc\n    ld [nes_fit_mt_my], a\n    ld b, a\n    ld a, b\n    cp 8\n    jr c, .fit_attr_bank_ready\n    ld a, c\n    or $08\n    ld c, a\n.fit_attr_bank_ready:\n\n    ld a, [nes_fit_vram_page]\n    and $F8\n    srl a\n    srl a\n    srl a\n    ld b, a\n    ld a, [nes_fit_mt_mx]\n    add b\n    and $1F\n    call nes_video_fit_map_addr_a\n\n    call nes_video_wait_vram\n    ld a, $01\n    ldh [rVBK], a\n    ld a, c\n    ld [de], a\n    xor a\n    ldh [rVBK], a\n    ret\n\n.attr_unlocked:\n    ld a, [nes_vram_unlocked]\n    and a\n    ret nz\n    jp nes_video_fit_mark_dirty_if_resident\n\n'''
+          s = s[:start] + new + s[end:]
+          p.write_text(s)
+          PY
+      - name: Build RGBDS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config bison libpng-dev
+          git clone -q --depth 1 https://github.com/gbdev/rgbds.git /tmp/rgbds
+          make -s -C /tmp/rgbds -j2
+          sudo make -s -C /tmp/rgbds install
+      - name: Test and smoke-build FIT_SCREEN
+        run: |
+          cargo test --quiet
+          cargo build --quiet --release
+          python3 - <<'PY'
+          from pathlib import Path
+          prg=bytearray([0xEA])*32768
+          prg[0:3]=bytes([0x4C,0x00,0x80])
+          for off,val in ((0x7FFA,0x00),(0x7FFB,0x80),(0x7FFC,0x00),(0x7FFD,0x80),(0x7FFE,0x00),(0x7FFF,0x80)):
+              prg[off]=val
+          Path('/tmp/fit.nes').write_bytes(bytearray(b'NES\x1a')+bytes([2,1,1,0])+bytes(8)+prg+bytes(8192))
+          PY
+          make gbc ROM=/tmp/fit.nes FIT_SCREEN=1 BANK_LOCALITY=0
+      - name: Commit to development branch
+        run: |
+          git config user.name ChatGPT
+          git config user.email chatgpt@users.noreply.github.com
+          git add runtime/video.asm
+          git commit -m 'FIT_SCREEN: publish SMB scaled attribute updates'
+          git push origin HEAD:dev/fit-screen-wide-160
