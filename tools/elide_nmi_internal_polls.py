@@ -31,10 +31,10 @@ from pathlib import Path
 
 BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
 INSN_RE = re.compile(
-    r"; \\$([0-9A-Fa-f]{4}): \\$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
+    r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
 )
-TARGET_RE = re.compile(r"\\bnes_([0-9A-Fa-f]{4})\\b")
-LD_HL_IMM_RE = re.compile(r"ld hl, \\$([0-9A-Fa-f]{4})$", re.IGNORECASE)
+TARGET_RE = re.compile(r"\bnes_([0-9A-Fa-f]{4})\b")
+LD_HL_IMM_RE = re.compile(r"ld hl, \$([0-9A-Fa-f]{4})$", re.IGNORECASE)
 BRANCHES = {"Bcc", "Bcs", "Beq", "Bmi", "Bne", "Bpl", "Bvc", "Bvs"}
 
 
@@ -183,7 +183,7 @@ def find_poll_span(lines: list[str], block: Block) -> tuple[int, int] | None:
         return None
 
     if call_i != start + 4 or not re.fullmatch(
-        r"ld hl, \\$[0-9A-Fa-f]{4}", code(lines[start + 3])
+        r"ld hl, \$[0-9A-Fa-f]{4}", code(lines[start + 3])
     ):
         return None
 
