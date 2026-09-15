@@ -1,4 +1,4 @@
-name: Apply FIT SMB armed-scroll fix
+name: Apply FIT SMB small-delta catchup
 on:
   push:
     branches: [automation/apply-fit-wide-ring21]
@@ -13,17 +13,19 @@ jobs:
         with:
           ref: dev/fit-screen-wide-160
           fetch-depth: 0
-      - name: Make FIT SMB scroll consume the same armed frame state as the working stitch path
+      - name: Mirror the proven SMB stitch catch-up logic in wide FIT
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p=Path('runtime/video.asm')
           s=p.read_text()
-          old='''.slide_vert:\n    ; Effective NES X in BC (0..511), including logical nametable bit 0.\n    ldh a, [nes_split_bottom_x]\n    ld c, a\n    ldh a, [nes_view_x]\n    add c\n    ld c, a\n    ld b, $00\n    jr nc, .eff_nt\n    inc b\n.eff_nt:\n    ldh a, [nes_split_bottom_ctrl]\n    and $01\n    xor b\n    ld b, a\n'''
-          new='''.slide_vert:\n    ; Effective NES X in BC (0..511), including logical nametable bit 0.\n    ; IMPORTANT: use the same ARMED split/camera snapshot that the current\n    ; host frame is actually presenting. The non-scaled SMB stitch path does\n    ; this already. Using live split/view state here let OAM follow-camera work\n    ; advance the FIT ring one host frame ahead of the raster state, producing\n    ; the once-per-coarse-tile whole-scene snap.\n    ldh a, [nes_split_armed_x]\n    ld c, a\n    ld a, [nes_view_armed_x]\n    add c\n    ld c, a\n    ld b, $00\n    jr nc, .eff_nt\n    inc b\n.eff_nt:\n    ldh a, [nes_split_armed_ctrl]\n    and $01\n    xor b\n    ld b, a\n'''
-          if old not in s:
-              raise SystemExit('armed-scroll target block not found')
-          s=s.replace(old,new,1)
+          start=s.index('.slide_vert:\n')
+          end=s.index('\n.full_dirty_rebase:', start)
+          current=s[start:end]
+          new='''.slide_vert:\n    ; Effective NES X in BC (0..511), including logical nametable bit 0.\n    ; Match the proven non-scaled SMB stitch path: derive the coarse key from\n    ; the live completed split/camera state, then catch up small multi-column\n    ; advances instead of treating anything other than +/-1 as a discontinuity.\n    ldh a, [nes_split_bottom_x]\n    ld c, a\n    ldh a, [nes_view_x]\n    add c\n    ld c, a\n    ld b, $00\n    jr nc, .eff_nt\n    inc b\n.eff_nt:\n    ldh a, [nes_split_bottom_ctrl]\n    and $01\n    xor b\n    ld b, a\n\n    call nes_video_fit_scale_x_bc\n    ld a, l\n    and $07\n    ld e, a                    ; final fine host pixels\n    srl h\n    rr l\n    srl h\n    rr l\n    srl h\n    rr l\n    ld c, l                    ; target host world tile origin 0..39\n\n    ld a, [nes_fit_origin_mx]\n    cp c\n    jp z, .scx_from_ring\n    ld b, a                    ; old world origin 0..39\n    ld a, c\n    ld [nes_fit_mt_quad + 3], a ; preserve target across expensive composes\n\n    ; SMB split mode never uses the asynchronous whole-page catch-up path.\n    xor a\n    ld [nes_fit_dirty], a\n\n    ; Exactly like the working 256px stitch: a translated NES frame can move\n    ; several coarse columns before the next host presentation. The old FIT\n    ; +/-1-only test rebased the ring on those perfectly ordinary skips, which\n    ; is the once-per-tile whole-scene snap seen on hardware/mGBA. Treat forward\n    ; or backward distances 1..8 as synchronous catch-up.\n    ld a, c\n    sub b\n    jr nc, .forward_distance_ready\n    add 40\n.forward_distance_ready:\n    and a\n    jp z, .scx_from_ring\n    cp 9\n    jr c, .catchup_forward\n\n    ld a, b\n    sub c\n    jr nc, .backward_distance_ready\n    add 40\n.backward_distance_ready:\n    cp 9\n    jr c, .catchup_backward\n\n    ; Genuine discontinuity/area transition. Keep the existing transition path.\n    ld a, [nes_fit_mt_quad + 3]\n    ld c, a\n    ld [nes_fit_origin_mx], a\n    jp .full_dirty_rebase\n\n.catchup_forward:\n    ; A = number of coarse host columns to advance. Publish the FINAL SCX before\n    ; doing any compose work so a line-32 STAT split that nests midway through\n    ; catch-up still sees the correct playfield position, never an intermediate.\n    ld d, a\n    ld a, [nes_fit_vram_page]\n    and $F8\n    ld c, a\n    ld a, d\n    add a\n    add a\n    add a\n    add c\n    add e\n    ld [nes_fit_play_scx], a\n\n    ldh a, [rIE]\n    push af\n    ld a, $02                  ; STAT only; never nest VBlank\n    ldh [rIE], a\n    ei\n    nop\n.forward_loop:\n    ld a, [nes_fit_origin_mx]\n    inc a\n    cp 40\n    jr c, .forward_origin_ready\n    xor a\n.forward_origin_ready:\n    ld [nes_fit_origin_mx], a\n\n    push de\n    call .sync_right_column\n    pop de\n\n    ld a, [nes_fit_origin_mx]\n    ld b, a\n    ld a, [nes_fit_mt_quad + 3]\n    cp b\n    jr nz, .forward_loop\n\n    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n\n.catchup_backward:\n    ; A = number of coarse host columns to move backward. Same final-SCX rule.\n    ld d, a\n    ld a, [nes_fit_vram_page]\n    and $F8\n    ld c, a\n    ld a, d\n    add a\n    add a\n    add a\n    ld d, a\n    ld a, c\n    sub d\n    add e\n    ld [nes_fit_play_scx], a\n\n    ldh a, [rIE]\n    push af\n    ld a, $02\n    ldh [rIE], a\n    ei\n    nop\n.backward_loop:\n    ld a, [nes_fit_origin_mx]\n    and a\n    jr nz, .backward_dec\n    ld a, 40\n.backward_dec:\n    dec a\n    ld [nes_fit_origin_mx], a\n\n    push de\n    call .sync_left_column\n    pop de\n\n    ld a, [nes_fit_origin_mx]\n    ld b, a\n    ld a, [nes_fit_mt_quad + 3]\n    cp b\n    jr nz, .backward_loop\n\n    di\n    pop af\n    ldh [rIE], a\n    jp .scx_from_ring\n\n.sync_right_column:\n    ; Advance the physical ring one slot and synchronously rebuild the newly\n    ; entering partial/right-edge column from authoritative NES nametable state.\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    ld a, 20\n    ld [nes_fit_mt_mx], a\n    xor a\n    ld [nes_fit_mt_my], a\n.sync_right_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .sync_right_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    ret\n\n.sync_left_column:\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    sub $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    xor a\n    ld [nes_fit_mt_mx], a\n    ld [nes_fit_mt_my], a\n.sync_left_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .sync_left_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    ret\n'''
+          if '.delta_plus1:' not in current or '.delta_minus1:' not in current:
+              raise SystemExit('unexpected FIT scroll block; refusing to replace')
+          s=s[:start]+new+s[end:]
           p.write_text(s)
           PY
       - name: Build RGBDS
@@ -51,5 +53,5 @@ jobs:
           git config user.name ChatGPT
           git config user.email chatgpt@users.noreply.github.com
           git add runtime/video.asm
-          git commit -m 'FIT_SCREEN: use armed SMB raster state for scrolling'
+          git commit -m 'FIT_SCREEN: catch up skipped SMB coarse columns'
           git push origin HEAD:dev/fit-screen-wide-160
