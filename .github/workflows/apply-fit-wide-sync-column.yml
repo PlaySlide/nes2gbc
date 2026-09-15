@@ -19,8 +19,6 @@ jobs:
           from pathlib import Path
           p=Path('runtime/video.asm')
           s=p.read_text()
-          old=''' .delta_plus1:\n'''
-          # Match without relying on leading whitespace before the local label.
           start=s.index('.delta_plus1:\n')
           end=s.index('\n.full_dirty_rebase:', start)
           current=s[start:end]
@@ -50,7 +48,7 @@ jobs:
               prg[off]=val
           Path('/tmp/fit.nes').write_bytes(bytearray(b'NES\x1a')+bytes([2,1,1,0])+bytes(8)+prg+bytes(8192))
           PY
-          ./target/release/nes2gbc --fit-screen /tmp/fit.nes /tmp/fit.gbc
+          make gbc ROM=/tmp/fit.nes FIT_SCREEN=1 BANK_LOCALITY=0
       - name: Commit to development branch
         run: |
           git config user.name ChatGPT
