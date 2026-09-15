@@ -1,4 +1,4 @@
-name: Apply synchronous wide FIT entering column
+name: Apply FIT SMB split page fix
 on:
   push:
     branches: [automation/apply-fit-wide-ring21]
@@ -13,20 +13,17 @@ jobs:
         with:
           ref: dev/fit-screen-wide-160
           fetch-depth: 0
-      - name: Replace asynchronous edge rebuild with direct stitched-column refresh
+      - name: Keep SMB split world out of resident-page dirty path
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p=Path('runtime/video.asm')
           s=p.read_text()
-          start=s.index('.delta_plus1:\n')
-          end=s.index('\n.full_dirty_rebase:', start)
-          current=s[start:end]
-          expected='''.delta_plus1:\n    ; Advance the physical GBC map ring one column. Bits 3-7 hold ring head;\n    ; bit 2 retains the resident NES physical-page selector.\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, 2\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld a, 20                   ; entering partial/right-edge column\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring\n\n.delta_minus1:\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    sub $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, 3\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n    jp .scx_from_ring\n'''
-          if current != expected:
-              raise SystemExit('unexpected delta block; refusing to patch\n'+current)
-          new='''.delta_plus1:\n    ; Match the proven SMB stitch model: moving the viewport never schedules a\n    ; background rebuild. Advance the hidden physical ring slot, then compose\n    ; the single column that is about to enter on the right directly from the\n    ; authoritative NES nametable. It is still one whole GBC column offscreen\n    ; at this point, so all 15 scaled tiles may be completed before SCX exposes\n    ; any of them.\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    add $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    push de                    ; preserve fine host X in E\n    ld a, 20                   ; new right-edge / partial column\n    ld [nes_fit_mt_mx], a\n    xor a\n    ld [nes_fit_mt_my], a\n.fit_sync_right_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .fit_sync_right_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    pop de\n    jp .scx_from_ring\n\n.delta_minus1:\n    ; Same operation in reverse: after moving the ring head left, viewport\n    ; offset zero is the newly entering column. Rebuild it completely before\n    ; publishing the new SCX.\n    ld a, [nes_fit_vram_page]\n    ld d, a\n    and $F8\n    sub $08\n    and $F8\n    ld b, a\n    ld a, d\n    and $04\n    or b\n    ld [nes_fit_vram_page], a\n\n    push de\n    xor a\n    ld [nes_fit_mt_mx], a\n    ld [nes_fit_mt_my], a\n.fit_sync_left_row:\n    call nes_video_fit_publish_at_mx_my\n    ld a, [nes_fit_mt_my]\n    inc a\n    ld [nes_fit_mt_my], a\n    cp 15\n    jr c, .fit_sync_left_row\n    xor a\n    ld [nes_fit_dirty], a\n    ld a, 15\n    ld [nes_fit_recompose_my], a\n    pop de\n    jp .scx_from_ring\n'''
-          s=s[:start]+new+s[end:]
+          old='''    call nes_video_fit_displayed_page\n    ld b, a\n    ld a, [nes_fit_vram_page]\n    and $04\n    cp b\n    jr z, .page_done\n    ld a, [nes_fit_vram_page]\n    and $F8\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, $01\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n.page_done:\n'''
+          new='''    ; Vertical-mirroring split games (SMB) use both physical NES nametables\n    ; as one horizontal world. PPUCTRL.0 is already folded into the effective\n    ; world X below; treating it as a resident-page change here incorrectly\n    ; forces dirty=1 and bypasses the stitch-style entering-column path.\n    ld a, [nes_mirroring]\n    cp $01\n    jr nz, .fit_page_check\n    ldh a, [nes_split_active]\n    and a\n    jr nz, .page_done\n.fit_page_check:\n    call nes_video_fit_displayed_page\n    ld b, a\n    ld a, [nes_fit_vram_page]\n    and $04\n    cp b\n    jr z, .page_done\n    ld a, [nes_fit_vram_page]\n    and $F8\n    or b\n    ld [nes_fit_vram_page], a\n    ld a, $01\n    ld [nes_fit_dirty], a\n    xor a\n    ld [nes_fit_recompose_my], a\n    ld [nes_fit_mt_mx], a\n.page_done:\n'''
+          if old not in s:
+              raise SystemExit('target page block not found')
+          s=s.replace(old,new,1)
           p.write_text(s)
           PY
       - name: Build RGBDS
@@ -54,5 +51,5 @@ jobs:
           git config user.name ChatGPT
           git config user.email chatgpt@users.noreply.github.com
           git add runtime/video.asm
-          git commit -m 'FIT_SCREEN: refresh entering SMB column synchronously'
+          git commit -m 'FIT_SCREEN: keep SMB split out of resident-page dirty path'
           git push origin HEAD:dev/fit-screen-wide-160
