@@ -3023,6 +3023,63 @@ nes_video_fit_publish_source_tile_hl:
     or $20
     ld c, a
 .src_x_ready:
+    ; In SMB split mode, establish ownership in NES source space before the
+    ; 5/8 many-to-one mapping. Output-column residency alone is insufficient:
+    ; future parser columns (and wrapped columns just behind the viewport) can
+    ; alias onto one of the 21 live GBC columns and repaint visible scenery.
+    ; Current 256px source window owns deltas 0..31; delta 32 contributes only
+    ; once the fine NES scroll has reached pixel 2 (floor(fine*5/8) > 0).
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .src_owned
+    ldh a, [nes_split_active]
+    and a
+    jr z, .src_owned
+
+    push bc                       ; preserve source world tile X in C
+    ldh a, [nes_split_bottom_x]
+    ld c, a
+    ldh a, [nes_view_x]
+    add c
+    ld c, a
+    ld b, $00
+    jr nc, .src_owner_page
+    inc b
+.src_owner_page:
+    ldh a, [nes_split_bottom_ctrl]
+    and $01
+    xor b
+    ld b, a                       ; logical world page 0/1
+
+    ld a, c
+    and $07
+    ld d, a                       ; fine NES pixel 0..7
+    ld a, c
+    srl a
+    srl a
+    srl a
+    ld e, a                       ; coarse tile within page
+    ld a, b
+    and $01
+    swap a
+    add a
+    or e
+    ld e, a                       ; current source tile origin 0..63
+
+    pop bc                        ; restore source world tile X
+    ld a, c
+    sub e
+    and $3F
+    cp 32
+    jr c, .src_owned
+    jr nz, .src_not_owned
+    ld a, d
+    cp 2
+    jr nc, .src_owned
+.src_not_owned:
+    ret
+
+.src_owned:
     ; host_x = source_tile_x*5, then dest_world_col=host_x/8, rem=host_x&7.
     ld d, $00
     ld e, c
