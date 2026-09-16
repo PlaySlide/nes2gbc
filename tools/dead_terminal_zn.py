@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+TRACE_LABEL_RE = re.compile(r"^nes_[0-9A-Fa-f]{4}_trace:$")
 INSN_RE = re.compile(
     r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
 )
@@ -84,7 +85,11 @@ def parse_blocks(lines: list[str]) -> dict[int, Block]:
         raw_end = labels[n + 1][0] if n + 1 < len(labels) else len(lines)
         end_i = raw_end
         for j in range(label_i + 1, raw_end):
-            if code(lines[j]).startswith("SECTION "):
+            c = code(lines[j])
+            if c.startswith("SECTION ") or TRACE_LABEL_RE.fullmatch(c):
+                # Private trace labels are alternate CFG entries.  Do not let
+                # inter-block liveness reason through them as if execution
+                # could only arrive from the preceding canonical label.
                 end_i = j
                 break
         next_addr = labels[n + 1][1] if n + 1 < len(labels) and end_i == raw_end else None
