@@ -5,7 +5,7 @@ PROFILE ?= 0
 PROFILE_TRACE ?= 0
 FIT_SCREEN ?= 0
 PEEPHOLE ?= 1
-BANK_LOCALITY ?= 1
+BANK_LOCALITY ?= 0
 
 .PHONY: help generate gbc test clean
 
@@ -18,7 +18,7 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
 	@echo '  make gbc ROM="path/to/game.nes" FIT_SCREEN=1  # half-scale full frame into 160x144'
 	@echo '  make gbc ROM="path/to/game.nes" PEEPHOLE=0      # disable generated-asm perf pass'
-	@echo '  make gbc ROM="path/to/game.nes" BANK_LOCALITY=0 # skip exhaustive bank repack for fast iteration'
+	@echo '  make gbc ROM="path/to/game.nes" BANK_LOCALITY=1 # enable legacy exhaustive bank repack'
 	@echo '  make test'
 
 generate:
