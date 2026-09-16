@@ -113,11 +113,21 @@ def specialize(lines: list[str]) -> int:
             f"{ind}xor a\n",
             f"{ind}ld [nes_ppu_latch], a\n",
             f"{done}:\n",
+            # The replacement spans the complete generated LDA $2002 body,
+            # including any canonical A/N/Z publication that was originally
+            # emitted after the helper call.  Publish the specialized result
+            # explicitly before the following AND.  Without this, a later
+            # resident-A split can reload stale nes_a and spin forever even
+            # though this block correctly synthesized $40 in host A.
+            f"{ind}ldh [nes_a], a ; publish specialized LDA $2002 result\n",
+            f"{ind}ldh [nes_z_shadow], a\n",
+            f"{ind}ldh [nes_n_shadow], a\n",
         ]
 
-        # Replace only the previously inlined status-handler body. Any stores
-        # generated for the LDA itself remain in place, followed by the original
-        # AND #$40 and its canonical 6502 flag publication.
+        # Replace the complete previously inlined LDA $2002 body.  Because the
+        # slice runs up to the next 6502 instruction comment, it also consumes
+        # that LDA's original canonical A/N/Z stores; the replacement above
+        # therefore republishes them explicitly before the original AND #$40.
         lines[i:next_insn] = replacement
         changed += 1
         i += len(replacement)
