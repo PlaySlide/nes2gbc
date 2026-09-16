@@ -75,19 +75,6 @@ nes_gbc_vblank_isr:
     ld a, $02
     ld [nes_split_duplicate_streak], a
 .split_grace_done:
-    ; FIT does not use main's raw $9C00 stitch, but it does need the same
-    ; established-SMB presentation lifetime. If the one-shot grace above did
-    ; not restore a retired split, retire FIT's validity here just like the
-    ; ordinary stitch updater would.
-    ld a, [nes_fit_screen]
-    and a
-    jr z, .split_grace_state_done
-    ldh a, [nes_split_active]
-    and a
-    jr nz, .split_grace_state_done
-    xor a
-    ld [nes_hstitch_valid], a
-.split_grace_state_done:
 
     ; Before the first SMB stitched surface is ever exposed, spend otherwise
     ; withheld host frames constructing it in hidden $9C00. A handled step
@@ -117,15 +104,11 @@ nes_gbc_vblank_isr:
     jp .early_split_capture
 
 .early_split_fit:
-    ; Fit: arm scroll-only half-scale split. Do not run the raw $9C00 stitch;
-    ; only share its proven valid/seen bookkeeping so duplicate suppression,
-    ; PPUMASK deferral, and split-retirement grace behave exactly like main.
+    ; Fit: arm scroll-only half-scale split. Never touch LCDC map select or
+    ; hstitch — identity maps stay put; only SCX/SCY switch at LYC.
     ldh a, [nes_split_active]
     and a
     jp z, .early_split_done
-    ld a, $01
-    ld [nes_hstitch_valid], a
-    ld [nes_hstitch_seen], a
 
 .early_split_capture:
     ; A completed translated NMI has a coherent new split state. Freeze it now
@@ -173,6 +156,40 @@ nes_gbc_vblank_isr:
     jr .early_split_done
 
 .early_split_apply_fit:
+    ; Compute the scaled split line before touching the top/HUD scroll. A host
+    ; VBlank interrupt may be serviced late after long translated work; if LY
+    ; has already crossed this line, arming LYC now can never fire this frame.
+    ; In that case keep/apply the playfield scroll instead of splashing the HUD
+    ; backing ring across the rest of the visible frame.
+    ldh a, [nes_split_line]
+    srl a
+    add 12
+    cp 144
+    jr c, .fit_lyc_value_ok
+    ld a, 143
+.fit_lyc_value_ok:
+    ld d, a
+
+    ldh a, [rLY]
+    cp 144
+    jr nc, .fit_apply_top
+    cp d
+    jr c, .fit_apply_top
+
+    ; Missed raster deadline: present the lower/playfield state immediately and
+    ; leave STAT disabled until the next host VBlank can arm the split on time.
+    ld a, [nes_fit_play_scx]
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_y]
+    srl a
+    sub 12
+    ldh [rSCY], a
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    jr .early_split_done
+
+.fit_apply_top:
     ; 160x120 fit: X uses 5/8 NES scale; Y stays half-scale with 12px bars.
     ldh a, [nes_split_armed_top_x]
     ld c, a
@@ -185,14 +202,7 @@ nes_gbc_vblank_isr:
     sub 12
     ldh [rSCY], a
 
-    ; LYC ~= NES split_line/2 + top letterbox (12).
-    ldh a, [nes_split_line]
-    srl a
-    add 12
-    cp 144
-    jr c, .fit_lyc_ok
-    ld a, 143
-.fit_lyc_ok:
+    ld a, d
     ldh [rLYC], a
     ldh a, [rSTAT]
     or $40
@@ -246,8 +256,8 @@ nes_gbc_vblank_isr:
     call nes_video_sync_oam
 .oam_done:
 
-    ; Wide FIT smooth scrolling owns a 21st entering-edge column. Give only
-    ; that incremental column update (dirty=2/3) first use of VBlank before
+    ; Wide FIT mirrors the proven 32-column stitch. Give the recycled
+    ; far-offscreen column update (dirty=2/3) first use of VBlank before
     ; SMB's staged nametable publication can run into visible scanout. Full
     ; dirty rebuilds are deliberately not attempted here: the SMB offscreen
     ; parser is filtered below and legitimate full rebuilds use their normal
@@ -288,13 +298,9 @@ nes_gbc_vblank_isr:
     nop
 
 .bg_publish:
-    ; Preserve main's proven publication order. FIT has its own scaled
-    ; compositor, so do not call the raw $9C00 stitch updater afterward; doing
-    ; so would clear the shared valid flag that now protects FIT as well.
+    ; Preserve the proven background publication order.
     call nes_video_flush_nametable_queue_atomic
-    ld a, [nes_fit_screen]
-    and a
-    call z, nes_video_update_horizontal_stitch
+    call nes_video_update_horizontal_stitch
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
     ; before LYC, the still-armed STAT source will fire normally after RETI.
@@ -436,16 +442,8 @@ nes_gbc_vblank_isr:
     ldh [rLCDC], a
     call nes_video_fit_update_scroll_window
 
-    ; SMB split mode must never fall back to the chunked resident-page rebuild.
-    ; The queue publisher above updates visible scaled tiles directly, and
-    ; update_scroll_window synchronously publishes the one entering column. A
-    ; leftover dirty flag is stale bookkeeping from construction/transition and
-    ; was the reason the same 21-column chunk kept repeating while a rebuild
-    ; crawled behind Mario.
-    xor a
-    ld [nes_fit_dirty], a
-    ld [nes_fit_recompose_my], a
-    ld [nes_fit_mt_mx], a
+    ; Preserve recycled-column progress. It is now offset 31/0, eleven whole
+    ; columns offscreen, so it can finish incrementally without blocking scanout.
     jp .scroll_done
 .scroll_fit_single:
     call nes_video_apply_single_scroll

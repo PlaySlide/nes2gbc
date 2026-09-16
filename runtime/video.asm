@@ -2471,9 +2471,9 @@ nes_video_fit_scale_x_bc:
     rr l
     ret
 
-; 21-column circular live window over the 40 GBC tile columns that represent
-; the two-nametable horizontal NES world at 5/8 scale. A 160px viewport needs
-; 20 full tiles plus one partial entering tile whenever SCX has a fine offset.
+; 32-column stitched backing ring over the 40 scaled world columns. The
+; 160px viewport scans 20 full tiles plus one partial edge (21 columns), while
+; the remaining 11 physical columns are the same future buffer used by main.
 nes_video_fit_update_scroll_window:
     ld a, [nes_mirroring]
     cp $01
@@ -2571,22 +2571,80 @@ nes_video_fit_update_scroll_window:
 .forward_distance_ready:
     and a
     jp z, .scx_from_ring
+    cp 1
+    jr z, .delta_plus1
     cp 9
-    jr c, .catchup_forward
+    jp c, .catchup_forward
 
     ld a, b
     sub c
     jr nc, .backward_distance_ready
     add 40
 .backward_distance_ready:
+    cp 1
+    jr z, .delta_minus1
     cp 9
-    jr c, .catchup_backward
+    jp c, .catchup_backward
 
     ; Genuine discontinuity/area transition. Keep the existing transition path.
     ld a, [nes_fit_mt_quad + 3]
     ld c, a
     ld [nes_fit_origin_mx], a
     jp .full_dirty_rebase
+
+.delta_plus1:
+    ; Same geometry as the working non-scaled stitch: after advancing one
+    ; coarse column, recycle the OLD leftmost physical column as the NEW
+    ; far-right backing column (offset 31), never the visible edge (offset 20).
+    ld a, [nes_fit_origin_mx]
+    inc a
+    cp 40
+    jr c, .plus_origin_ok
+    xor a
+.plus_origin_ok:
+    ld [nes_fit_origin_mx], a
+    ld a, [nes_fit_vram_page]
+    ld d, a
+    and $F8
+    add $08
+    and $F8
+    ld b, a
+    ld a, d
+    and $04
+    or b
+    ld [nes_fit_vram_page], a
+    ld a, $02
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+    ld a, 31
+    ld [nes_fit_mt_mx], a
+    jp .scx_from_ring
+
+.delta_minus1:
+    ld a, [nes_fit_origin_mx]
+    and a
+    jr nz, .minus_dec
+    ld a, 40
+.minus_dec:
+    dec a
+    ld [nes_fit_origin_mx], a
+    ld a, [nes_fit_vram_page]
+    ld d, a
+    and $F8
+    sub $08
+    and $F8
+    ld b, a
+    ld a, d
+    and $04
+    or b
+    ld [nes_fit_vram_page], a
+    ld a, $03
+    ld [nes_fit_dirty], a
+    xor a
+    ld [nes_fit_recompose_my], a
+    ld [nes_fit_mt_mx], a
+    jp .scx_from_ring
 
 .catchup_forward:
     ; A = number of coarse host columns to advance. Publish the FINAL SCX before
@@ -2694,7 +2752,7 @@ nes_video_fit_update_scroll_window:
     or b
     ld [nes_fit_vram_page], a
 
-    ld a, 20
+    ld a, 31
     ld [nes_fit_mt_mx], a
     xor a
     ld [nes_fit_mt_my], a
@@ -2823,7 +2881,7 @@ nes_video_fit_recompose_resident_page:
     jr .yloop
 
 .col_right:
-    ld a, 20
+    ld a, 31
     jr .col_set
 .col_left:
     xor a
@@ -2884,7 +2942,7 @@ nes_video_fit_recompose_resident_page:
     ld a, [nes_fit_mt_mx]
     inc a
     ld [nes_fit_mt_mx], a
-    cp 21
+    cp 32
     jr c, .xloop
 
     xor a
@@ -3023,63 +3081,6 @@ nes_video_fit_publish_source_tile_hl:
     or $20
     ld c, a
 .src_x_ready:
-    ; In SMB split mode, establish ownership in NES source space before the
-    ; 5/8 many-to-one mapping. Output-column residency alone is insufficient:
-    ; future parser columns (and wrapped columns just behind the viewport) can
-    ; alias onto one of the 21 live GBC columns and repaint visible scenery.
-    ; Current 256px source window owns deltas 0..31; delta 32 contributes only
-    ; once the fine NES scroll has reached pixel 2 (floor(fine*5/8) > 0).
-    ld a, [nes_mirroring]
-    cp $01
-    jr nz, .src_owned
-    ldh a, [nes_split_active]
-    and a
-    jr z, .src_owned
-
-    push bc                       ; preserve source world tile X in C
-    ldh a, [nes_split_bottom_x]
-    ld c, a
-    ldh a, [nes_view_x]
-    add c
-    ld c, a
-    ld b, $00
-    jr nc, .src_owner_page
-    inc b
-.src_owner_page:
-    ldh a, [nes_split_bottom_ctrl]
-    and $01
-    xor b
-    ld b, a                       ; logical world page 0/1
-
-    ld a, c
-    and $07
-    ld d, a                       ; fine NES pixel 0..7
-    ld a, c
-    srl a
-    srl a
-    srl a
-    ld e, a                       ; coarse tile within page
-    ld a, b
-    and $01
-    swap a
-    add a
-    or e
-    ld e, a                       ; current source tile origin 0..63
-
-    pop bc                        ; restore source world tile X
-    ld a, c
-    sub e
-    and $3F
-    cp 32
-    jr c, .src_owned
-    jr nz, .src_not_owned
-    ld a, d
-    cp 2
-    jr nc, .src_owned
-.src_not_owned:
-    ret
-
-.src_owned:
     ; host_x = source_tile_x*5, then dest_world_col=host_x/8, rem=host_x&7.
     ld d, $00
     ld e, c
@@ -3124,12 +3125,13 @@ nes_video_fit_publish_source_tile_hl:
     jr nc, .second_delta_ready
     add 40
 .second_delta_ready:
-    cp 21
+    cp 32
     jr nc, .second_done
     ld [nes_fit_mt_quad + 3], a
 .second_done:
 
-    ; First destination if visible in [origin, origin+21).
+    ; Keep the complete 32-column stitched backing surface current. The actual
+    ; viewport scans only offsets 0..20; offsets 21..31 are future columns.
     ld a, [nes_fit_origin_mx]
     ld c, a
     ld a, d
@@ -3137,7 +3139,7 @@ nes_video_fit_publish_source_tile_hl:
     jr nc, .first_delta_ready
     add 40
 .first_delta_ready:
-    cp 21
+    cp 32
     jr nc, .after_first
     ld [nes_fit_mt_mx], a
     call nes_video_fit_publish_at_mx_my
