@@ -16,9 +16,11 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE_TRACE=1 # expensive rolling block trace'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
 	@echo '  make gbc ROM="path/to/game.nes" PEEPHOLE=0      # disable generated-asm perf pass'
-	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=sprite0 # stop after sprite0 wait passes'
-	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=rts     # stop after RTS passes'
-	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache   # stop after cache passes'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=sprite0     # stop after sprite0 wait passes'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=rts         # stop after RTS passes'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-xy-zp # add X/Y + hot-ZP caches only'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-a     # add A cache too'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache       # add all cache passes'
 	@echo '  make test'
 
 generate:
@@ -56,10 +58,14 @@ generate:
 			python3 tools/fast_subroutine_rts_dispatch.py runtime/generated.asm; \
 			python3 tools/defer_subroutine_rts_increment.py runtime/generated.asm; \
 		fi; \
-		if [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+		if [ "$(POSTPASS_THROUGH)" = "cache-xy-zp" ] || [ "$(POSTPASS_THROUGH)" = "cache-a" ] || [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
 			python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
 			python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "cache-a" ] || [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
 			python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
 			python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
 		fi; \
 		if [ "$(POSTPASS_THROUGH)" = "all" ]; then \
