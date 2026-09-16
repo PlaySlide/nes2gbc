@@ -29,6 +29,7 @@ from pathlib import Path
 
 SECTION_BANK_RE = re.compile(r'^SECTION .*BANK\[(\d+)\]')
 BLOCK_LABEL_RE = re.compile(r'^nes_([0-9A-Fa-f]{4}):$')
+TRACE_LABEL_RE = re.compile(r'^nes_[0-9A-Fa-f]{4}_trace:$')
 INSN_RE = re.compile(r'; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)')
 TARGET_RE = re.compile(r'\bnes_([0-9A-Fa-f]{4})\b')
 
@@ -68,7 +69,10 @@ def parse_blocks(lines: list[str]) -> tuple[dict[int, Block], dict[int, int]]:
     for n, (label_i, addr, block_bank) in enumerate(labels):
         end_i = labels[n + 1][0] if n + 1 < len(labels) else len(lines)
         for j in range(label_i + 1, end_i):
-            if code(lines[j]).startswith('SECTION '):
+            c = code(lines[j])
+            if c.startswith('SECTION ') or TRACE_LABEL_RE.fullmatch(c):
+                # A private superblock trace is a distinct generated block.
+                # Never fold/copy it into a canonical native-leaf body.
                 end_i = j
                 break
         insns: list[tuple[int, int, str, str]] = []
@@ -114,6 +118,8 @@ def leaf_body(lines: list[str], block: Block) -> tuple[list[str], int] | None:
 
     rts_comment_i = block.insns[-1][0]
     body = strip_profile_trace(lines[block.label_i + 1:rts_comment_i])
+    if any(TRACE_LABEL_RE.fullmatch(code(line)) for line in body):
+        return None
     joined = ''.join(body)
 
     forbidden = (
