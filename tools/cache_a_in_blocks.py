@@ -7,6 +7,13 @@ register is otherwise completely unused in the translated block, and skips
 blocks containing ordinary helper calls because helpers do not promise to
 preserve BC.
 
+Private ``nes_XXXX_trace`` continuations are intentionally excluded.  The
+stateful superblock emitter may carry resident X in B and/or Y in C *through*
+such a block even when the block itself never references that host register.
+A purely block-local "unused register" scan therefore cannot prove B/C is free
+there.  Canonical non-trace blocks start without that hidden live-in contract,
+so the local proof remains valid for them.
+
 Canonical nes_a in HRAM remains authoritative. Every store to nes_a is kept
 and mirrored into the host register; later loads may use the mirror. The GBC
 interrupt handlers preserve BC. The optional profile-trace helper is allowed
@@ -35,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
+BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:(_trace))?:$")
 
 
 def code(line: str) -> str:
@@ -51,23 +58,24 @@ class Block:
     start: int
     end: int
     addr: int
+    is_trace: bool
 
 
 def blocks(lines: list[str]) -> list[Block]:
-    labels: list[tuple[int, int]] = []
+    labels: list[tuple[int, int, bool]] = []
     for i, line in enumerate(lines):
         m = BLOCK_RE.fullmatch(code(line))
         if m:
-            labels.append((i, int(m.group(1), 16)))
+            labels.append((i, int(m.group(1), 16), m.group(2) is not None))
 
     out: list[Block] = []
-    for n, (start, addr) in enumerate(labels):
+    for n, (start, addr, is_trace) in enumerate(labels):
         end = labels[n + 1][0] if n + 1 < len(labels) else len(lines)
         for j in range(start + 1, end):
             if code(lines[j]).startswith("SECTION "):
                 end = j
                 break
-        out.append(Block(start, end, addr))
+        out.append(Block(start, end, addr, is_trace))
     return out
 
 
@@ -135,6 +143,12 @@ def optimize(lines: list[str]) -> tuple[int, int, int, int, int]:
     store_seeds = 0
 
     for block in reversed(blocks(lines)):
+        # B/C can be an implicit live-through X/Y contract on private trace
+        # continuations.  The absence of a textual B/C use in this one block
+        # is therefore not proof that either register is actually spare.
+        if block.is_trace:
+            continue
+
         body = lines[block.start + 1 : block.end]
         if has_unsafe_call(body):
             continue
