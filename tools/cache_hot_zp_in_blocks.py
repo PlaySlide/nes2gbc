@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
 ZP_LOAD_RE = re.compile(r"ld a, \[\$C0([0-9A-Fa-f]{2})\]$")
 ZP_STORE_RE = re.compile(r"ld \[\$C0([0-9A-Fa-f]{2})\], ([a-z0-9$]+)$", re.IGNORECASE)
 INDIRECT_MEM_RE = re.compile(r"\[(?:hl|de|bc|hli|hld)\]", re.IGNORECASE)

@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
 
 
 def code(line: str) -> str:

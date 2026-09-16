@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
 CACHED_INDEX_RE = re.compile(r"ld a, ([bc])\s*;\s*cached nes_([xy])$", re.IGNORECASE)
 PAGE_BASE_RE = re.compile(r"ld hl, \$[0-9A-Fa-f]{2}00$", re.IGNORECASE)
 
