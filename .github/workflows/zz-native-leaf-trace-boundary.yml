@@ -29,8 +29,10 @@ jobs:
         run: |
           python3 - <<'PY'
           import importlib.util
+          import sys
           spec = importlib.util.spec_from_file_location('nl', 'tools/native_leaf_calls.py')
           m = importlib.util.module_from_spec(spec)
+          sys.modules['nl'] = m
           spec.loader.exec_module(m)
           lines = [
               'SECTION "x", ROMX, BANK[3]\n',
