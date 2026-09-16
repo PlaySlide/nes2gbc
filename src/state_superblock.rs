@@ -443,9 +443,6 @@ struct TraceState {
     x_dirty: bool,
     y_c: bool,
     y_dirty: bool,
-    // Conservative phase 1: only defer Z/N while the defining value remains
-    // resident in host A, and never carry that contract across a block edge.
-    zn_a_pending: bool,
 }
 
 #[derive(Debug, Default)]
@@ -469,12 +466,6 @@ struct StateStats {
     fast_arithmetic: usize,
     fast_shifts: usize,
     fast_rmw_addr_reuse: usize,
-    zn_updates_deferred: usize,
-    zn_publications_elided: usize,
-    zn_materialized: usize,
-    zn_direct_branches: usize,
-    zn_branch_z_stores_elided: usize,
-    zn_branch_n_stores_elided: usize,
     barriers: usize,
     canonical_adapters: usize,
 }
@@ -490,43 +481,6 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
 fn emit_update_nz(out: &mut String) {
     writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
     writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
-}
-
-fn discard_deferred_nz_as_overwritten(state: &mut TraceState, stats: &mut StateStats) {
-    if state.zn_a_pending {
-        state.zn_a_pending = false;
-        stats.zn_publications_elided += 1;
-    }
-}
-
-fn defer_update_nz_from_a(state: &mut TraceState, stats: &mut StateStats) {
-    debug_assert!(state.a_live);
-    debug_assert!(!state.zn_a_pending);
-    state.zn_a_pending = true;
-    stats.zn_updates_deferred += 1;
-}
-
-fn materialize_deferred_nz_from_a(
-    out: &mut String,
-    state: &mut TraceState,
-    stats: &mut StateStats,
-) {
-    if !state.zn_a_pending {
-        return;
-    }
-    debug_assert!(state.a_live);
-    writeln!(
-        out,
-        "    ldh [nes_z_shadow], a ; materialize deferred Z from resident A"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "    ldh [nes_n_shadow], a ; materialize deferred N from resident A"
-    )
-    .unwrap();
-    state.zn_a_pending = false;
-    stats.zn_materialized += 1;
 }
 
 fn ensure_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
@@ -547,7 +501,6 @@ fn write_a_resident(state: &mut TraceState, stats: &mut StateStats) {
 }
 
 fn discard_a(state: &mut TraceState) {
-    debug_assert!(!state.zn_a_pending);
     state.a_live = false;
     state.a_dirty = false;
 }
@@ -564,7 +517,6 @@ fn materialize_a(out: &mut String, state: &mut TraceState, stats: &mut StateStat
 
 fn clobber_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
     materialize_a(out, state, stats);
-    materialize_deferred_nz_from_a(out, state, stats);
     state.a_live = false;
 }
 
@@ -610,14 +562,13 @@ fn sync_xy(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
 fn sync_state(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
     // A must be published before X/Y because their materialization uses host A.
     materialize_a(out, state, stats);
-    materialize_deferred_nz_from_a(out, state, stats);
     sync_xy(out, state, stats);
     // Even a clean resident A cannot be trusted after X/Y publication.
     state.a_live = false;
 }
 
 fn invalidate_state(state: &mut TraceState) {
-    debug_assert!(!state.a_dirty && !state.x_dirty && !state.y_dirty && !state.zn_a_pending);
+    debug_assert!(!state.a_dirty && !state.x_dirty && !state.y_dirty);
     state.a_live = false;
     state.x_b = false;
     state.y_c = false;
@@ -986,28 +937,8 @@ fn fast_op_supported(op: &IrOp) -> bool {
     }
 }
 
-fn fast_op_overwrites_zn(op: &IrOp) -> bool {
-    match *op {
-        IrOp::Load { .. }
-        | IrOp::Inc(_)
-        | IrOp::Dec(_)
-        | IrOp::Logic { .. }
-        | IrOp::Arithmetic { .. }
-        | IrOp::Compare { .. }
-        | IrOp::Modify { .. } => true,
-        IrOp::Transfer { update_nz, .. } => update_nz,
-        _ => false,
-    }
-}
-
 fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut StateStats) {
     debug_assert!(fast_op_supported(op));
-
-    // If this instruction defines both Z and N, any older deferred A-derived
-    // Z/N value is dead before it ever needs publication.
-    if fast_op_overwrites_zn(op) {
-        discard_deferred_nz_as_overwritten(state, stats);
-    }
 
     match *op {
         IrOp::SetFlag { .. }
@@ -1035,15 +966,8 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             dst: Register::A, ..
         }
         | IrOp::Transfer {
-            dst: Register::A,
-            update_nz: true,
-            ..
+            dst: Register::A, ..
         } => discard_a(state),
-        IrOp::Transfer {
-            dst: Register::A,
-            update_nz: false,
-            ..
-        } => clobber_a(out, state, stats),
         _ => {}
     }
 
@@ -1074,11 +998,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
         IrOp::Load { dst, src } => {
             emit_operand_load(out, src, state, stats);
             let _ = write_reg_from_a(out, dst, state, stats);
-            if dst == Register::A {
-                defer_update_nz_from_a(state, stats);
-            } else {
-                emit_update_nz(out);
-            }
+            emit_update_nz(out);
         }
         IrOp::Store { src, dst } => {
             let _ = load_reg_to_a(out, src, state, stats);
@@ -1092,11 +1012,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             let _ = load_reg_to_a(out, src, state, stats);
             let _ = write_reg_from_a(out, dst, state, stats);
             if update_nz {
-                if dst == Register::A {
-                    defer_update_nz_from_a(state, stats);
-                } else {
-                    emit_update_nz(out);
-                }
+                emit_update_nz(out);
             }
         }
         IrOp::Inc(reg) | IrOp::Dec(reg) => {
@@ -1123,11 +1039,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                 }
                 Register::Sp => unreachable!(),
             }
-            match reg {
-                Register::A => defer_update_nz_from_a(state, stats),
-                Register::X | Register::Y => emit_update_nz(out),
-                Register::Sp => unreachable!(),
-            }
+            emit_update_nz(out);
         }
         IrOp::Logic {
             op,
@@ -1140,7 +1052,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                 LogicOp::Eor => writeln!(out, "    xor ${imm:02X}").unwrap(),
             }
             write_a_resident(state, stats);
-            defer_update_nz_from_a(state, stats);
+            emit_update_nz(out);
         }
         IrOp::Arithmetic { op, rhs } => {
             // Capture architectural A before operand/address work can use host A.
@@ -1215,7 +1127,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
 
             writeln!(out, "    ld a, l").unwrap();
             write_a_resident(state, stats);
-            defer_update_nz_from_a(state, stats);
+            emit_update_nz(out);
             stats.fast_arithmetic += 1;
         }
         IrOp::Modify { op: modify, target } => match target {
@@ -1285,136 +1197,6 @@ fn emit_barrier_ops(
     stats.barriers += 1;
 }
 
-fn mnemonic_writes_zn(m: crate::cpu6502::Mnemonic) -> bool {
-    use crate::cpu6502::Mnemonic::*;
-    matches!(
-        m,
-        Lda | Ldx
-            | Ldy
-            | Tax
-            | Tay
-            | Txa
-            | Tya
-            | Tsx
-            | Pla
-            | And
-            | Ora
-            | Eor
-            | Adc
-            | Sbc
-            | Cmp
-            | Cpx
-            | Cpy
-            | Bit
-            | Inc
-            | Dec
-            | Inx
-            | Iny
-            | Dex
-            | Dey
-            | Asl
-            | Lsr
-            | Rol
-            | Ror
-            | Plp
-            | Rti
-    )
-}
-
-fn mnemonic_reads_z(m: crate::cpu6502::Mnemonic) -> bool {
-    use crate::cpu6502::Mnemonic::*;
-    matches!(m, Beq | Bne | Php | Brk)
-}
-
-fn mnemonic_reads_n(m: crate::cpu6502::Mnemonic) -> bool {
-    use crate::cpu6502::Mnemonic::*;
-    matches!(m, Bmi | Bpl | Php | Brk)
-}
-
-fn zn_flag_live_out(
-    graph: &ControlFlowGraph,
-    selected: &BTreeSet<u16>,
-    poll_points: &BTreeSet<u16>,
-    nmi_exclusive: &BTreeSet<u16>,
-    zero: bool,
-) -> BTreeMap<u16, bool> {
-    let mut uses = BTreeMap::new();
-    let mut defs = BTreeMap::new();
-    let mut unknown_exit = BTreeMap::new();
-    let mut succ: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
-
-    for &addr in selected {
-        let Some(block) = graph.blocks.get(&addr) else {
-            continue;
-        };
-        let mut seen_def = false;
-        let mut use_before_def = poll_points.contains(&addr) && !nmi_exclusive.contains(&addr);
-        let mut any_def = false;
-        for insn in &block.instructions {
-            let m = insn.def.mnemonic;
-            let reads = if zero {
-                mnemonic_reads_z(m)
-            } else {
-                mnemonic_reads_n(m)
-            };
-            if reads && !seen_def {
-                use_before_def = true;
-            }
-            if mnemonic_writes_zn(m) {
-                seen_def = true;
-                any_def = true;
-            }
-        }
-
-        let dynamic = block.instructions.last().is_none_or(|last| {
-            use crate::cpu6502::{AddressingMode, Mnemonic};
-            matches!(
-                last.def.mnemonic,
-                Mnemonic::Jsr | Mnemonic::Rts | Mnemonic::Brk
-            ) || (last.def.mnemonic == Mnemonic::Jmp && last.def.mode == AddressingMode::Indirect)
-        });
-        let nexts = block
-            .edges
-            .iter()
-            .filter_map(|edge| edge.target)
-            .filter(|target| selected.contains(target))
-            .collect::<Vec<_>>();
-
-        uses.insert(addr, use_before_def);
-        defs.insert(addr, any_def);
-        unknown_exit.insert(addr, dynamic);
-        succ.insert(addr, nexts);
-    }
-
-    let mut live_in: BTreeMap<u16, bool> = selected.iter().map(|&a| (a, false)).collect();
-    let mut live_out: BTreeMap<u16, bool> = selected.iter().map(|&a| (a, false)).collect();
-    loop {
-        let mut changed = false;
-        for &addr in selected.iter().rev() {
-            let out = unknown_exit.get(&addr).copied().unwrap_or(true)
-                || succ.get(&addr).is_none_or(|nexts| {
-                    nexts
-                        .iter()
-                        .any(|target| live_in.get(target).copied().unwrap_or(true))
-                });
-            let inn = uses.get(&addr).copied().unwrap_or(true)
-                || (out && !defs.get(&addr).copied().unwrap_or(false));
-            if live_out.get(&addr).copied() != Some(out) {
-                live_out.insert(addr, out);
-                changed = true;
-            }
-            if live_in.get(&addr).copied() != Some(inn) {
-                live_in.insert(addr, inn);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    live_out
-}
-
 pub fn emit_cfg_with_interrupts(
     graph: &ControlFlowGraph,
     options: EmitOptions,
@@ -1431,8 +1213,6 @@ pub fn emit_cfg_with_interrupts(
     let banks = assign_code_banks(graph, &selected);
     let poll_points = nmi_poll_points(graph, &selected);
     let nmi_exclusive = nmi_exclusive_blocks(graph, &selected, options.reset, nmi, irq);
-    let z_live_out = zn_flag_live_out(graph, &selected, &poll_points, &nmi_exclusive, true);
-    let n_live_out = zn_flag_live_out(graph, &selected, &poll_points, &nmi_exclusive, false);
     let plan = plan_superblocks(graph, &selected, &banks, &poll_points, &nmi_exclusive);
 
     if plan.disabled_for_unresolved_indirect {
@@ -1601,98 +1381,6 @@ pub fn emit_cfg_with_interrupts(
                         continue;
                     }
 
-                    let resident_zn_branch = if pending.is_empty() && state.zn_a_pending {
-                        match ops.as_slice() {
-                            [IrOp::Branch { flag, when, target }]
-                                if matches!(flag, Flag::Zero | Flag::Negative)
-                                    && banks.contains_key(target) =>
-                            {
-                                Some((*flag, *when, *target))
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-
-                    if let Some((flag, when, target)) = resident_zn_branch {
-                        let before = out.len();
-                        // The branch consumes the still-resident producer value directly.
-                        // Canonical A/X/Y remain synchronized for the taken side exit.
-                        materialize_a(&mut out, &mut state, &mut stats);
-                        debug_assert!(state.a_live && state.zn_a_pending);
-
-                        let z_needed = z_live_out.get(&block.start).copied().unwrap_or(true);
-                        let n_needed = n_live_out.get(&block.start).copied().unwrap_or(true);
-                        if z_needed {
-                            writeln!(
-                                out,
-                                "    ldh [nes_z_shadow], a ; preserve live Z across direct branch"
-                            )
-                            .unwrap();
-                        } else {
-                            writeln!(out, "    ; dead post-branch Z publication elided").unwrap();
-                            stats.zn_branch_z_stores_elided += 1;
-                        }
-                        if n_needed {
-                            writeln!(
-                                out,
-                                "    ldh [nes_n_shadow], a ; preserve live N across direct branch"
-                            )
-                            .unwrap();
-                        } else {
-                            writeln!(out, "    ; dead post-branch N publication elided").unwrap();
-                            stats.zn_branch_n_stores_elided += 1;
-                        }
-                        state.zn_a_pending = false;
-                        if z_needed || n_needed {
-                            stats.zn_materialized += 1;
-                        } else {
-                            stats.zn_publications_elided += 1;
-                        }
-
-                        // X/Y publication uses host A. Preserve the branch value only
-                        // when that publication can actually clobber it.
-                        let save_a = state.x_dirty || state.y_dirty;
-                        if save_a {
-                            writeln!(out, "    ld d, a ; preserve resident branch value").unwrap();
-                        }
-                        sync_xy(&mut out, &mut state, &mut stats);
-                        if save_a {
-                            writeln!(out, "    ld a, d ; restore resident branch value").unwrap();
-                        }
-                        state.a_live = true;
-                        state.a_dirty = false;
-
-                        write_insn_comment(&mut out, instruction);
-                        match flag {
-                            Flag::Zero => {
-                                writeln!(out, "    and a ; direct resident Z branch").unwrap();
-                                writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" })
-                                    .unwrap();
-                            }
-                            Flag::Negative => {
-                                writeln!(out, "    bit 7, a ; direct resident N branch").unwrap();
-                                writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" })
-                                    .unwrap();
-                            }
-                            _ => unreachable!(),
-                        }
-                        let target_pc = section_pc + approx_code_bytes(&out[before..]);
-                        let _ = emit_static_target(
-                            &mut out,
-                            target,
-                            bank,
-                            &banks,
-                            Some(&section_offs),
-                            target_pc,
-                        );
-                        writeln!(out, ":").unwrap();
-                        stats.zn_direct_branches += 1;
-                        section_pc += approx_code_bytes(&out[before..]);
-                        continue;
-                    }
-
                     let mut probe = String::new();
                     if emit_static_control(&mut probe, &ops, bank, &banks, None, 0) {
                         if !pending.is_empty() {
@@ -1762,12 +1450,6 @@ pub fn emit_cfg_with_interrupts(
         }
 
         if let Some(target) = plan.next.get(&block.start).copied() {
-            // Phase 1 deliberately keeps lazy Z/N block-local. A continuation
-            // target can also be reached through its canonical adapter, and
-            // that alternate predecessor does not prove Z/N == resident A.
-            let before = out.len();
-            materialize_deferred_nz_from_a(&mut out, &mut state, &mut stats);
-            section_pc += approx_code_bytes(&out[before..]);
             debug_assert_eq!(selected_list.get(idx + 1).copied(), Some(target));
             pending_continuation = Some((target, bank));
         } else if let Some(last) = block.instructions.last() {
@@ -1832,7 +1514,7 @@ pub fn emit_cfg_with_interrupts(
     }
 
     println!(
-        "superblock-state: A avoided {} reload(s), deferred {} store(s), materialized {}, seeds {}; avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares, {} ADC/SBC, {} shifts/rotates, {} indexed RMW addr reuses); lazy A-Z/N deferred {}, elided {}, materialized {}; direct Z/N branches {}, dead branch stores Z={} N={}; barriers {}; canonical adapters {}",
+        "superblock-state: A avoided {} reload(s), deferred {} store(s), materialized {}, seeds {}; avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares, {} ADC/SBC, {} shifts/rotates, {} indexed RMW addr reuses); barriers {}; canonical adapters {}",
         stats.a_reload_avoided,
         stats.a_stores_deferred,
         stats.a_materialized,
@@ -1852,12 +1534,6 @@ pub fn emit_cfg_with_interrupts(
         stats.fast_arithmetic,
         stats.fast_shifts,
         stats.fast_rmw_addr_reuse,
-        stats.zn_updates_deferred,
-        stats.zn_publications_elided,
-        stats.zn_materialized,
-        stats.zn_direct_branches,
-        stats.zn_branch_z_stores_elided,
-        stats.zn_branch_n_stores_elided,
         stats.barriers,
         stats.canonical_adapters,
     );
@@ -1993,30 +1669,6 @@ mod tests {
         assert!(asm[store_x..].contains("superblock cached X"));
     }
     #[test]
-    fn resident_a_branch_consumes_zn_directly_when_successors_kill_flags() {
-        let mut prg = vec![0xEA; 0x8000];
-        // LDA #0 / BEQ $8008 / LDA #1 / RTS / NOP / LDA #2 / RTS.
-        // Both successors replace Z/N before any later read.
-        prg[0..11].copy_from_slice(&[
-            0xA9, 0x00, 0xF0, 0x04, 0xA9, 0x01, 0x60, 0xEA, 0xA9, 0x02, 0x60,
-        ]);
-        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
-        let asm = emit_cfg_with_interrupts(
-            &graph,
-            EmitOptions {
-                reset: 0x8000,
-                max_blocks: Some(8),
-                debug_trace: false,
-            },
-            0x8000,
-            0x8000,
-        );
-        assert!(asm.contains("and a ; direct resident Z branch"));
-        assert!(asm.contains("dead post-branch Z publication elided"));
-        assert!(asm.contains("dead post-branch N publication elided"));
-    }
-
-    #[test]
     fn a_stays_dirty_across_store_logic_and_private_trace_edge() {
         let mut prg = vec![0xEA; 0x8000];
         // LDA #$3F / STA $00 / AND #$0F / JMP $8010 ; target STA $01 / RTS.
@@ -2044,34 +1696,5 @@ mod tests {
         let after_rts = &asm[rts..];
         assert!(after_rts.contains("superblock materialize A"));
         assert!(asm.contains("ldh a, [nes_a] ; canonical adapter A"));
-    }
-
-    #[test]
-    fn resident_a_defers_and_elides_redundant_zn_publication() {
-        let mut prg = vec![0xEA; 0x8000];
-        // Two consecutive A flag producers in one block. Only the second Z/N
-        // value should be published before RTS forces a canonical barrier.
-        prg[0..5].copy_from_slice(&[0xA9, 0x01, 0xA9, 0x02, 0x60]);
-        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
-        let asm = emit_cfg_with_interrupts(
-            &graph,
-            EmitOptions {
-                reset: 0x8000,
-                max_blocks: Some(8),
-                debug_trace: false,
-            },
-            0x8000,
-            0x8000,
-        );
-        assert_eq!(
-            asm.matches("materialize deferred Z from resident A")
-                .count(),
-            1
-        );
-        assert_eq!(
-            asm.matches("materialize deferred N from resident A")
-                .count(),
-            1
-        );
     }
 }
