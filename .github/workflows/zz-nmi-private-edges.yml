@@ -26,7 +26,9 @@ jobs:
       - name: Revert neutral conditional side-exit experiment
         run: git revert --no-edit 27579d1
       - name: Apply NMI-private exact-contract edge patch
-        run: python3 tools/apply_nmi_private_edges.py
+        run: |
+          python3 tools/apply_nmi_private_edges.py
+          python3 tools/fix_nmi_private_fixture.py
       - name: Format
         run: cargo fmt --all
       - name: Test
