@@ -1,0 +1,44 @@
+name: Temporary NMI-private edge experiment
+
+on:
+  push:
+    branches:
+      - perf/branch-fusion
+    paths:
+      - .github/workflows/zz-nmi-private-edges.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/branch-fusion
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Revert neutral conditional side-exit experiment
+        run: git revert --no-edit 27579d1
+      - name: Apply NMI-private exact-contract edge patch
+        run: python3 tools/apply_nmi_private_edges.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Test
+        run: cargo test --all-targets
+      - name: Check
+        run: cargo check --all-targets
+      - name: Generate synthetic NES ROM
+        run: python3 tools/make_smoke_rom.py /tmp/nes2gbc-smoke.nes
+      - name: Recompile generated ASM
+        run: make generate ROM=/tmp/nes2gbc-smoke.nes MAX_BLOCKS=16
+      - name: Assemble generated GBC ROM with RGBDS
+        run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make
+      - name: Commit NMI-private source change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/state_superblock.rs
+          git commit -m "Keep exact-contract NMI-only edges private"
+          git push origin HEAD:perf/branch-fusion
