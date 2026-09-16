@@ -278,6 +278,15 @@ nes_gbc_vblank_isr:
     cp $03
     jr nz, .fit_edge_done
 .fit_edge_service:
+    ; Rows 0-1 are the fixed FIT HUD surface. A recycled playfield column may
+    ; reuse the same physical X slot, but it must never replace those two rows.
+    ; Start a fresh recycled-column pass at row 2; preserve later progress.
+    ld a, [nes_fit_recompose_my]
+    and a
+    jr nz, .fit_edge_resume
+    ld a, $02
+    ld [nes_fit_recompose_my], a
+.fit_edge_resume:
     ld a, $01
     ld [nes_vram_unlocked], a
     call nes_video_fit_flush_dirty
@@ -298,8 +307,25 @@ nes_gbc_vblank_isr:
     nop
 
 .bg_publish:
-    ; Preserve the proven background publication order.
+    ; FIT SMB already has authoritative virtual nametable state. Publish only
+    ; the 21 columns that scanout can actually see; the 11 future backing
+    ; columns are filled later by the recycled-column builder. This is the
+    ; scaled equivalent of main's stitch ownership and avoids spending multiple
+    ; host frames composing parser data that is still offscreen.
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .bg_publish_generic
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .bg_publish_generic
+    ldh a, [nes_split_active]
+    and a
+    jr z, .bg_publish_generic
+    call nes_gbc_fit_smb_flush_visible_queue
+    jr .bg_publish_queue_done
+.bg_publish_generic:
     call nes_video_flush_nametable_queue_atomic
+.bg_publish_queue_done:
     call nes_video_update_horizontal_stitch
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
@@ -711,6 +737,181 @@ nes_gbc_stat_isr:
     pop bc
     pop af
     reti
+
+; FIT SMB queue publisher. The NES WRAM nametables are already authoritative
+; when an address is staged. During the active SMB split, compose only output
+; columns 0..20 that can be scanned this frame; offsets 21..31 are future
+; backing and are intentionally left for the recycled-column builder.
+nes_gbc_fit_smb_flush_visible_queue:
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $D8
+    jr nz, .fitq_has_entries
+    ld a, [nes_nametable_queue_ptr_lo]
+    and a
+    ret z
+
+.fitq_has_entries:
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_QUEUE_FLUSH
+    ld [nes_diag_event_flags], a
+
+    ld a, $01
+    ld [nes_vram_unlocked], a
+    ldh [rSVBK], a
+    ld de, nes_nametable_queue
+
+.fitq_loop:
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp d
+    jr nz, .fitq_read
+    ld a, [nes_nametable_queue_ptr_lo]
+    cp e
+    jr z, .fitq_done
+
+.fitq_read:
+    ld a, [de]
+    inc de
+    ld l, a
+    ld a, [de]
+    inc de
+    ld h, a
+
+    ; Current FIT SMB attribute writes are intentionally ignored by the normal
+    ; split path too. Skip them here instead of manufacturing dirty/full rebuilds.
+    ld a, h
+    and $03
+    cp $03
+    jr c, .fitq_tile
+    ld a, l
+    cp $C0
+    jr nc, .fitq_loop
+
+.fitq_tile:
+    push de
+    call nes_gbc_fit_smb_publish_visible_hl
+    pop de
+    jr .fitq_loop
+
+.fitq_done:
+    xor a
+    ld [nes_vram_unlocked], a
+IF DEF(NES2GBC_DEBUG_TRACE)
+    ld a, [nes_ntdiag_commit_serial]
+    inc a
+    ld [nes_ntdiag_commit_serial], a
+ENDC
+    xor a
+    ld [nes_nametable_queue_ptr_lo], a
+    ld [nes_nametable_queue_overflow], a
+    ld a, $D8
+    ld [nes_nametable_queue_ptr_hi], a
+    xor a
+    ldh [rVBK], a
+    ret
+
+; HL = authoritative physical NES tile address. Publish only the scaled output
+; cells touched by this source tile that are inside the 21-column scan window.
+nes_gbc_fit_smb_publish_visible_hl:
+    ; Source NES tile row -> FIT row.
+    ld a, h
+    and $03
+    add a
+    add a
+    add a
+    ld b, a
+    ld a, l
+    and $E0
+    rrca
+    rrca
+    rrca
+    rrca
+    rrca
+    and $07
+    add b
+    srl a
+    cp 15
+    ret nc
+    ld [nes_fit_mt_my], a
+
+    ; Vertical mirroring: physical page 1 is source world columns 32..63.
+    ld a, l
+    and $1F
+    ld c, a
+    ld a, h
+    and $04
+    jr z, .fitq_src_x_ready
+    ld a, c
+    or $20
+    ld c, a
+.fitq_src_x_ready:
+
+    ; host_x = source_tile_x * 5. One NES tile can touch at most two GBC cells.
+    ld d, $00
+    ld e, c
+    ld h, d
+    ld l, e
+    add hl, hl
+    add hl, hl
+    add hl, de
+    ld a, l
+    and $07
+    ld e, a
+    srl h
+    rr l
+    srl h
+    rr l
+    srl h
+    rr l
+    ld a, l
+    cp 40
+    jr c, .fitq_dest0_ready
+    sub 40
+.fitq_dest0_ready:
+    ld d, a
+
+    ; Save the optional second cell as a viewport offset, or $FF if offscreen.
+    ld a, $FF
+    ld [nes_fit_mt_quad + 3], a
+    ld a, e
+    cp 4
+    jr c, .fitq_second_done
+    ld a, d
+    inc a
+    cp 40
+    jr c, .fitq_second_world_ready
+    sub 40
+.fitq_second_world_ready:
+    ld b, a
+    ld a, [nes_fit_origin_mx]
+    ld c, a
+    ld a, b
+    sub c
+    jr nc, .fitq_second_delta_ready
+    add 40
+.fitq_second_delta_ready:
+    cp 21
+    jr nc, .fitq_second_done
+    ld [nes_fit_mt_quad + 3], a
+.fitq_second_done:
+
+    ; First cell, only if it is actually in the 160px + partial-edge scan window.
+    ld a, [nes_fit_origin_mx]
+    ld c, a
+    ld a, d
+    sub c
+    jr nc, .fitq_first_delta_ready
+    add 40
+.fitq_first_delta_ready:
+    cp 21
+    jr nc, .fitq_after_first
+    ld [nes_fit_mt_mx], a
+    call nes_video_fit_publish_at_mx_my
+.fitq_after_first:
+    ld a, [nes_fit_mt_quad + 3]
+    cp $FF
+    ret z
+    ld [nes_fit_mt_mx], a
+    jp nes_video_fit_publish_at_mx_my
 
 ; Record the host frame that just completed into C800-C80F.
 ; Four records of four bytes:
