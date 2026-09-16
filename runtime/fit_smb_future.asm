@@ -13,9 +13,13 @@
 
 ; Bank 6 already owns D000-D8FF for the published shadow/stage bitmap. D900+
 ; is free. Forty world columns * two bytes gives a 15-bit FIT-row dirty mask for
-; each scaled world column.
+; each scaled world column. Keep a tiny authoritative attribute shadow after it;
+; SMB's FIT queue intentionally skips attribute entries, so changed NES
+; attribute bytes are reconciled here without touching tile/ring ownership.
 SECTION "FIT SMB future backing state", WRAMX[$D900], BANK[6]
 nes_fit_future_rows: ds $50
+nes_fit_attr_shadow: ds $80
+nes_fit_attr_shadow_valid: ds 1
 
 SECTION "FIT SMB future backing", ROM0
 
@@ -24,7 +28,7 @@ nes_gbc_fit_smb_future_init:
     ldh [rSVBK], a
     xor a
     ld hl, nes_fit_future_rows
-    ld b, $50
+    ld b, $D1
 .clear:
     ld [hli], a
     dec b
@@ -178,6 +182,260 @@ nes_gbc_fit_smb_mark_future_a:
     pop bc
     ret
 
+; SMB updates NES attribute RAM after many of the corresponding tile writes.
+; The active FIT split queue deliberately skips attribute entries to avoid a
+; whole-page dirty rebuild, which leaves the correct composed pixels carrying
+; an old CGB palette number (the green strips visible in 1-1).
+;
+; Track only the 128 authoritative attribute bytes. On an actual value change,
+; refresh palette bits for the small scaled region covered by that one 4x4 NES
+; attribute cell. Pattern data and ring ownership are never touched here.
+nes_gbc_fit_smb_sync_attributes:
+    ldh a, [nes_split_active]
+    and a
+    ret z
+
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [nes_fit_attr_shadow_valid]
+    and a
+    jr nz, .scan
+
+    ; First established split: seed from the already-authoritative NES RAM.
+    ; Do not repaint anything on this first observation.
+    ld a, $01
+    ld [nes_fit_attr_shadow_valid], a
+    ldh [rSVBK], a
+
+    ld hl, $D3C0
+    ld de, nes_fit_attr_shadow
+    ld b, $40
+.seed0:
+    ld a, [hli]
+    ld [nes_fit_mt_tmp_l], a
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [nes_fit_mt_tmp_l]
+    ld [de], a
+    inc de
+    ld a, $01
+    ldh [rSVBK], a
+    dec b
+    jr nz, .seed0
+
+    ld hl, $D7C0
+    ld b, $40
+.seed1:
+    ld a, [hli]
+    ld [nes_fit_mt_tmp_l], a
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [nes_fit_mt_tmp_l]
+    ld [de], a
+    inc de
+    ld a, $01
+    ldh [rSVBK], a
+    dec b
+    jr nz, .seed1
+    ret
+
+.scan:
+    ld a, $01
+    ldh [rSVBK], a
+    ld hl, $D3C0
+    ld de, nes_fit_attr_shadow
+    xor a
+    ld [nes_fit_mt_page], a
+    ld c, $00
+    call .scan_page
+
+    ld hl, $D7C0
+    ld de, nes_fit_attr_shadow + $40
+    ld a, $01
+    ld [nes_fit_mt_page], a
+    ld c, $00
+    call .scan_page
+
+    ld a, $01
+    ldh [rSVBK], a
+    ret
+
+.scan_page:
+    ld b, $40
+.scan_loop:
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, [hl]
+    ld [nes_fit_mt_tmp_l], a
+
+    ld a, $06
+    ldh [rSVBK], a
+    push bc
+    ld a, [de]
+    ld b, a
+    ld a, [nes_fit_mt_tmp_l]
+    cp b
+    jr z, .scan_same
+    ld [de], a
+    pop bc
+
+    ; Return to authoritative WRAM before the palette helper follows source
+    ; tiles/attributes through the ordinary FIT address routines.
+    ld a, $01
+    ldh [rSVBK], a
+    push bc
+    push de
+    push hl
+    ld a, c
+    call nes_gbc_fit_smb_refresh_attribute_a
+    pop hl
+    pop de
+    pop bc
+    jr .scan_next
+
+.scan_same:
+    pop bc
+
+.scan_next:
+    inc hl
+    inc de
+    inc c
+    dec b
+    jr nz, .scan_loop
+    ret
+
+; A = physical NES attribute index 0..63. nes_fit_mt_page is physical NT0/NT1.
+; One 4x4 NES attribute cell is 20 scaled pixels wide and two FIT rows tall.
+; Refresh those three GBC columns for each affected playfield row. Row 0 of the
+; NES attribute table maps to FIT rows 0-1 (HUD) and is intentionally untouched.
+nes_gbc_fit_smb_refresh_attribute_a:
+    ld d, a
+
+    ; FIT row = attribute_row * 2.
+    srl a
+    srl a
+    srl a
+    add a
+    cp 2
+    ret c
+    cp 15
+    ret nc
+    ld [nes_fit_mt_my], a
+
+    ; floor(attribute_col * 20 / 8) = 2*col + floor(col/2).
+    ld a, d
+    and $07
+    ld c, a
+    add a
+    ld b, a
+    ld a, c
+    srl a
+    add b
+    ld b, a
+
+    ld a, [nes_fit_mt_page]
+    and a
+    jr z, .base_ready
+    ld a, b
+    add 20
+    ld b, a
+.base_ready:
+    ld a, b
+    ld [nes_fit_mt_quad + 2], a
+
+    call nes_gbc_fit_smb_refresh_attribute_three
+
+    ld a, [nes_fit_mt_my]
+    inc a
+    cp 15
+    ret nc
+    ld [nes_fit_mt_my], a
+    jp nes_gbc_fit_smb_refresh_attribute_three
+
+nes_gbc_fit_smb_refresh_attribute_three:
+    ld a, [nes_fit_mt_quad + 2]
+    call nes_gbc_fit_smb_refresh_palette_world_a
+    ld a, [nes_fit_mt_quad + 2]
+    inc a
+    call nes_gbc_fit_smb_refresh_palette_world_a
+    ld a, [nes_fit_mt_quad + 2]
+    add 2
+    jp nes_gbc_fit_smb_refresh_palette_world_a
+
+; A = scaled world column 0..39. Update only if that column is currently owned
+; by the 32-column physical ring; off-ring data will be assigned a fresh palette
+; when it is recycled into backing later.
+nes_gbc_fit_smb_refresh_palette_world_a:
+    ld b, a
+    ld a, [nes_fit_origin_mx]
+    ld c, a
+    ld a, b
+    sub c
+    jr nc, .delta_ready
+    add 40
+.delta_ready:
+    cp 32
+    ret nc
+    ld [nes_fit_mt_mx], a
+    jp nes_gbc_fit_smb_refresh_palette_cell
+
+; Refresh only CGB palette bits for one resident scaled cell. This deliberately
+; mirrors the center-source palette rule in nes_video_fit_publish_at_mx_my but
+; preserves the existing pattern-bank bit and never recomposes pixel data.
+nes_gbc_fit_smb_refresh_palette_cell:
+    call nes_video_fit_world_col
+    add a
+    ld e, a
+    ld d, $00
+    ld hl, nes_video_fit_wide_x_table
+    add hl, de
+    ld a, [hli]
+    ld b, a
+    ld a, [hl]
+    and a
+    jr z, .center_ready
+    inc b
+.center_ready:
+    ld a, b
+    and $3F
+    ld b, a
+    ld a, [nes_fit_mt_my]
+    add a
+    inc a
+    ld [nes_fit_mt_tmp_h], a
+    ld a, b
+    call nes_video_fit_read_nt_tile_a
+    call nes_video_authoritative_tile_palette
+    and $07
+    ld [nes_fit_mt_tmp_h], a
+
+    ; Physical map column = ring head + resident offset (mod 32).
+    ld a, [nes_fit_vram_page]
+    and $F8
+    srl a
+    srl a
+    srl a
+    ld b, a
+    ld a, [nes_fit_mt_mx]
+    add b
+    and $1F
+    call nes_video_fit_map_addr_a
+
+    call nes_video_wait_vram
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [de]
+    and $F8
+    ld b, a
+    ld a, [nes_fit_mt_tmp_h]
+    or b
+    ld [de], a
+    xor a
+    ldh [rVBK], a
+    ld a, $01
+    ldh [rSVBK], a
+    ret
+
 ; Publish every unique future FIT cell touched by the just-completed NES NMI.
 ; There is no background catch-up and no 30-second eventual repair: before the
 ; transaction is retired, future backing reflects its final authoritative WRAM
@@ -208,6 +466,10 @@ nes_gbc_fit_smb_service_future:
     ld a, $03                  ; allow VBlank + STAT during long future compose
     ldh [rIE], a
 .service_begin:
+
+    ; Attribute reconciliation is palette-only. It never changes tile patterns,
+    ; ring ownership, or the future-cell dirty masks below.
+    call nes_gbc_fit_smb_sync_attributes
 
     ld b, 21
 .col_loop:
