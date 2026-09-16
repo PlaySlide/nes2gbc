@@ -190,6 +190,25 @@ nes_gbc_fit_smb_service_future:
     cp $01
     ret nz
 
+    ; The MLVs show the future-cell compose can legitimately span several host
+    ; frames. The outer VBlank ISR normally masks VBlank during this section,
+    ; leaving SCX at the playfield value for those intervening frames; the HUD
+    ; therefore jumps horizontally until the long compose finishes.
+    ;
+    ; Keep the exact same synchronous future publication, but let host VBlank
+    ; preempt it. Mark the translated NES NMI as temporarily active so a nested
+    ; VBlank takes the existing display-only path: it reapplies HUD SCX/SCY,
+    ; rearms the line-28 STAT split, then returns without re-entering BG work.
+    ; STAT remains enabled as before. No tile/ring/cache ownership changes here.
+    ldh a, [nes_split_active]
+    and a
+    jr z, .service_begin
+    ld a, $01
+    ld [nes_nmi_active], a
+    ld a, $03                  ; allow VBlank + STAT during long future compose
+    ldh [rIE], a
+.service_begin:
+
     ld b, 21
 .col_loop:
     ; C = persistent scaled world column for this resident future offset.
@@ -267,4 +286,14 @@ nes_gbc_fit_smb_service_future:
 
     ld a, $01
     ldh [rSVBK], a
+
+    ; Restore the outer VBlank ISR's original publication state before
+    ; returning. Mask nested VBlank first, then clear the temporary NMI guard.
+    ldh a, [nes_split_active]
+    and a
+    ret z
+    ld a, $02
+    ldh [rIE], a
+    xor a
+    ld [nes_nmi_active], a
     ret
