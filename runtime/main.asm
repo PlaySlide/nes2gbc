@@ -104,11 +104,17 @@ nes_gbc_vblank_isr:
     jp .early_split_capture
 
 .early_split_fit:
-    ; Fit: arm scroll-only half-scale split. Never touch LCDC map select or
-    ; hstitch — identity maps stay put; only SCX/SCY switch at LYC.
+    ; Fit uses its own scaled ring, but once SMB has established the HUD/playfield
+    ; split it needs the same persistent "stitched presentation is valid" lifetime
+    ; as main.  Do not run the raw $9C00 stitch; just retain valid/seen so a
+    ; transient duplicate-only NMI or PPUCTRL page crossing cannot fall into the
+    ; generic PPUMASK screen-rebuild path.
     ldh a, [nes_split_active]
     and a
     jp z, .early_split_done
+    ld a, $01
+    ld [nes_hstitch_valid], a
+    ld [nes_hstitch_seen], a
 
 .early_split_capture:
     ; A completed translated NMI has a coherent new split state. Freeze it now
@@ -247,7 +253,6 @@ nes_gbc_vblank_isr:
     jp z, .oam_done
     xor a
     ld [nes_oam_dirty], a
-
     ldh a, [nes_oam_shadow_ready]
     and a
     jp nz, .oam_shadow_ready
@@ -309,9 +314,8 @@ nes_gbc_vblank_isr:
 .bg_publish:
     ; FIT SMB already has authoritative virtual nametable state. Publish only
     ; the 21 columns that scanout can actually see; the 11 future backing
-    ; columns are filled later by the recycled-column builder. This is the
-    ; scaled equivalent of main's stitch ownership and avoids spending multiple
-    ; host frames composing parser data that is still offscreen.
+    ; columns are coalesced by scaled destination and committed once per
+    ; completed NES NMI below.
     ld a, [nes_fit_screen]
     and a
     jr z, .bg_publish_generic
@@ -326,10 +330,15 @@ nes_gbc_vblank_isr:
 .bg_publish_generic:
     call nes_video_flush_nametable_queue_atomic
 .bg_publish_queue_done:
-    ; Coalesced future backing maintenance runs only while there is VBlank
-    ; budget left. It never competes with the recycled-column dirty pass above.
     call nes_gbc_fit_smb_service_future
-    call nes_video_update_horizontal_stitch
+
+    ; FIT owns its own scaled 32-column ring. Do not call main's raw stitch
+    ; updater here: its FIT guard clears nes_hstitch_valid, which drops the
+    ; proven SMB presentation exactly at the 160px (one NES nametable) boundary
+    ; and lets PPUMASK trigger the LCD-off generic rebuild/white flash.
+    ld a, [nes_fit_screen]
+    and a
+    call z, nes_video_update_horizontal_stitch
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
     ; before LYC, the still-armed STAT source will fire normally after RETI.
