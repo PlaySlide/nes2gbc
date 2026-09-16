@@ -75,6 +75,19 @@ nes_gbc_vblank_isr:
     ld a, $02
     ld [nes_split_duplicate_streak], a
 .split_grace_done:
+    ; FIT does not use main's raw $9C00 stitch, but it does need the same
+    ; established-SMB presentation lifetime. If the one-shot grace above did
+    ; not restore a retired split, retire FIT's validity here just like the
+    ; ordinary stitch updater would.
+    ld a, [nes_fit_screen]
+    and a
+    jr z, .split_grace_state_done
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .split_grace_state_done
+    xor a
+    ld [nes_hstitch_valid], a
+.split_grace_state_done:
 
     ; Before the first SMB stitched surface is ever exposed, spend otherwise
     ; withheld host frames constructing it in hidden $9C00. A handled step
@@ -104,11 +117,15 @@ nes_gbc_vblank_isr:
     jp .early_split_capture
 
 .early_split_fit:
-    ; Fit: arm scroll-only half-scale split. Never touch LCDC map select or
-    ; hstitch — identity maps stay put; only SCX/SCY switch at LYC.
+    ; Fit: arm scroll-only half-scale split. Do not run the raw $9C00 stitch;
+    ; only share its proven valid/seen bookkeeping so duplicate suppression,
+    ; PPUMASK deferral, and split-retirement grace behave exactly like main.
     ldh a, [nes_split_active]
     and a
     jp z, .early_split_done
+    ld a, $01
+    ld [nes_hstitch_valid], a
+    ld [nes_hstitch_seen], a
 
 .early_split_capture:
     ; A completed translated NMI has a coherent new split state. Freeze it now
@@ -271,9 +288,13 @@ nes_gbc_vblank_isr:
     nop
 
 .bg_publish:
-    ; Preserve the proven background publication order.
+    ; Preserve main's proven publication order. FIT has its own scaled
+    ; compositor, so do not call the raw $9C00 stitch updater afterward; doing
+    ; so would clear the shared valid flag that now protects FIT as well.
     call nes_video_flush_nametable_queue_atomic
-    call nes_video_update_horizontal_stitch
+    ld a, [nes_fit_screen]
+    and a
+    call z, nes_video_update_horizontal_stitch
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
     ; before LYC, the still-armed STAT source will fire normally after RETI.
