@@ -322,7 +322,6 @@ struct SuperblockPlan {
     next: BTreeMap<u16, u16>,
     multi_block_traces: usize,
     chained_edges: usize,
-    nmi_private_chained_edges: usize,
     elided_jumps: usize,
     disabled_for_unresolved_indirect: bool,
 }
@@ -353,7 +352,6 @@ fn plan_superblocks(
     selected: &BTreeSet<u16>,
     banks: &BTreeMap<u16, u16>,
     poll_points: &BTreeSet<u16>,
-    nmi_exclusive: &BTreeSet<u16>,
 ) -> SuperblockPlan {
     let base_order: Vec<u16> = selected.iter().copied().collect();
     let unresolved = selected.iter().any(|addr| {
@@ -407,22 +405,17 @@ fn plan_superblocks(
             let Some((target, is_jump)) = preferred_successor(block) else {
                 break;
             };
-            let nmi_private_edge =
-                nmi_exclusive.contains(&current) && nmi_exclusive.contains(&target);
             if !selected.contains(&target)
                 || claimed.contains(&target)
                 || banks.get(&current) != banks.get(&target)
-                || (!nmi_private_edge && incoming.get(&target).copied().unwrap_or(0) != 1)
+                || incoming.get(&target).copied().unwrap_or(0) != 1
                 || entry_points.contains(&target)
-                || (!nmi_private_edge && poll_points.contains(&target))
+                || poll_points.contains(&target)
             {
                 break;
             }
             plan.next.insert(current, target);
             plan.chained_edges += 1;
-            if nmi_private_edge {
-                plan.nmi_private_chained_edges += 1;
-            }
             if is_jump {
                 plan.elided_jumps += 1;
             }
@@ -467,8 +460,6 @@ struct StateStats {
     fast_shifts: usize,
     fast_rmw_addr_reuse: usize,
     barriers: usize,
-    nmi_private_branches: usize,
-    nmi_private_jumps: usize,
     canonical_adapters: usize,
 }
 
@@ -567,100 +558,6 @@ fn sync_state(out: &mut String, state: &mut TraceState, stats: &mut StateStats) 
     sync_xy(out, state, stats);
     // Even a clean resident A cannot be trusted after X/Y publication.
     state.a_live = false;
-}
-
-fn emit_nmi_private_control(
-    out: &mut String,
-    ops: &[IrOp],
-    state: TraceState,
-    source: u16,
-    current_bank: u16,
-    nmi_exclusive: &BTreeSet<u16>,
-    entry_contracts: &BTreeMap<u16, (u16, TraceState)>,
-    stats: &mut StateStats,
-) -> bool {
-    if !nmi_exclusive.contains(&source) || ops.len() != 1 {
-        return false;
-    }
-
-    let target = match ops[0] {
-        IrOp::Branch { target, .. } | IrOp::Jump(target) => target,
-        _ => return false,
-    };
-    if !nmi_exclusive.contains(&target) {
-        return false;
-    }
-    let Some(&(target_bank, contract)) = entry_contracts.get(&target) else {
-        return false;
-    };
-    if target_bank != current_bank || contract != state {
-        return false;
-    }
-
-    match ops[0] {
-        IrOp::Jump(_) => {
-            writeln!(
-                out,
-                "    jp nes_{target:04X}_trace ; NMI-private exact-contract jump"
-            )
-            .unwrap();
-            stats.nmi_private_jumps += 1;
-            true
-        }
-        IrOp::Branch { flag, when, .. } => {
-            // Branch testing needs host A as scratch.  Keep this first pass
-            // strictly zero-cost for resident A: only specialize contracts in
-            // which A is not live. X/Y remain resident in B/C untouched.
-            if state.a_live {
-                return false;
-            }
-            match flag {
-                Flag::Carry => {
-                    writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(
-                        out,
-                        "    jp {}, nes_{target:04X}_trace ; NMI-private exact-contract branch",
-                        if when { "nz" } else { "z" }
-                    )
-                    .unwrap();
-                }
-                Flag::Zero => {
-                    writeln!(out, "    ldh a, [nes_z_shadow]").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(
-                        out,
-                        "    jp {}, nes_{target:04X}_trace ; NMI-private exact-contract branch",
-                        if when { "z" } else { "nz" }
-                    )
-                    .unwrap();
-                }
-                Flag::Negative => {
-                    writeln!(out, "    ldh a, [nes_n_shadow]").unwrap();
-                    writeln!(out, "    bit 7, a").unwrap();
-                    writeln!(
-                        out,
-                        "    jp {}, nes_{target:04X}_trace ; NMI-private exact-contract branch",
-                        if when { "nz" } else { "z" }
-                    )
-                    .unwrap();
-                }
-                _ => {
-                    writeln!(out, "    ldh a, [nes_p]").unwrap();
-                    writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
-                    writeln!(
-                        out,
-                        "    jp {}, nes_{target:04X}_trace ; NMI-private exact-contract branch",
-                        if when { "nz" } else { "z" }
-                    )
-                    .unwrap();
-                }
-            }
-            stats.nmi_private_branches += 1;
-            true
-        }
-        _ => false,
-    }
 }
 
 fn invalidate_state(state: &mut TraceState) {
@@ -1309,7 +1206,7 @@ pub fn emit_cfg_with_interrupts(
     let banks = assign_code_banks(graph, &selected);
     let poll_points = nmi_poll_points(graph, &selected);
     let nmi_exclusive = nmi_exclusive_blocks(graph, &selected, options.reset, nmi, irq);
-    let plan = plan_superblocks(graph, &selected, &banks, &poll_points, &nmi_exclusive);
+    let plan = plan_superblocks(graph, &selected, &banks, &poll_points);
 
     if plan.disabled_for_unresolved_indirect {
         println!(
@@ -1317,11 +1214,8 @@ pub fn emit_cfg_with_interrupts(
         );
     } else {
         println!(
-            "superblock: formed {} multi-block trace(s), chained {} same-bank edge(s) ({} NMI-private multi-entry/dead-poll), elided {} unconditional JMP(s)",
-            plan.multi_block_traces,
-            plan.chained_edges,
-            plan.nmi_private_chained_edges,
-            plan.elided_jumps
+            "superblock: formed {} multi-block trace(s), chained {} unique-entry same-bank edge(s), elided {} unconditional JMP(s)",
+            plan.multi_block_traces, plan.chained_edges, plan.elided_jumps
         );
     }
     println!(
@@ -1413,34 +1307,28 @@ pub fn emit_cfg_with_interrupts(
         }
 
         if poll_points.contains(&block.start) {
+            debug_assert!(!continuing);
             let exclusive = nmi_exclusive.contains(&block.start);
-            if continuing {
-                // A proven NMI-only trace may cross a backward-loop safe point:
-                // nested NES NMIs are impossible, so this poll is genuinely dead.
-                debug_assert!(exclusive);
-                writeln!(out, "    ; NMI-private trace crosses dead safe-point poll").unwrap();
-            } else {
-                if exclusive {
-                    writeln!(
-                        out,
-                        "    ; NMI-exclusive safe-point retained as analysis barrier"
-                    )
-                    .unwrap();
-                    writeln!(out, "IF 0").unwrap();
-                }
-                let before = out.len();
-                writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
-                writeln!(out, "    and a").unwrap();
-                writeln!(out, "    jr z, :+").unwrap();
-                writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-                writeln!(out, "    call nes_poll_nmi_hl").unwrap();
-                writeln!(out, "    and a").unwrap();
-                writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
-                writeln!(out, ":").unwrap();
-                section_pc += approx_code_bytes(&out[before..]);
-                if exclusive {
-                    writeln!(out, "ENDC").unwrap();
-                }
+            if exclusive {
+                writeln!(
+                    out,
+                    "    ; NMI-exclusive safe-point retained as analysis barrier"
+                )
+                .unwrap();
+                writeln!(out, "IF 0").unwrap();
+            }
+            let before = out.len();
+            writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
+            writeln!(out, "    and a").unwrap();
+            writeln!(out, "    jr z, :+").unwrap();
+            writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
+            writeln!(out, "    call nes_poll_nmi_hl").unwrap();
+            writeln!(out, "    and a").unwrap();
+            writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
+            writeln!(out, ":").unwrap();
+            section_pc += approx_code_bytes(&out[before..]);
+            if exclusive {
+                writeln!(out, "ENDC").unwrap();
             }
         }
 
@@ -1485,22 +1373,9 @@ pub fn emit_cfg_with_interrupts(
                             section_pc += approx_code_bytes(&out[before..]);
                             pending.clear();
                         }
+                        sync_state(&mut out, &mut state, &mut stats);
                         write_insn_comment(&mut out, instruction);
                         let before = out.len();
-                        if emit_nmi_private_control(
-                            &mut out,
-                            &ops,
-                            state,
-                            block.start,
-                            bank,
-                            &nmi_exclusive,
-                            &entry_contracts,
-                            &mut stats,
-                        ) {
-                            section_pc += approx_code_bytes(&out[before..]);
-                            continue;
-                        }
-                        sync_state(&mut out, &mut state, &mut stats);
                         let _ = emit_static_control(
                             &mut out,
                             &ops,
@@ -1623,7 +1498,7 @@ pub fn emit_cfg_with_interrupts(
     }
 
     println!(
-        "superblock-state: A avoided {} reload(s), deferred {} store(s), materialized {}, seeds {}; avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares, {} ADC/SBC, {} shifts/rotates, {} indexed RMW addr reuses); barriers {}; NMI-private exact edges branches={} jumps={}; canonical adapters {}",
+        "superblock-state: A avoided {} reload(s), deferred {} store(s), materialized {}, seeds {}; avoided {} X + {} Y HRAM reload(s); deferred {} X + {} Y canonical store(s); materialized {} X + {} Y at barriers/side exits; cached indexed uses X={} Y={}; seeds X={} Y={}; fast ops {} ({} compares, {} ADC/SBC, {} shifts/rotates, {} indexed RMW addr reuses); barriers {}; canonical adapters {}",
         stats.a_reload_avoided,
         stats.a_stores_deferred,
         stats.a_materialized,
@@ -1644,8 +1519,6 @@ pub fn emit_cfg_with_interrupts(
         stats.fast_shifts,
         stats.fast_rmw_addr_reuse,
         stats.barriers,
-        stats.nmi_private_branches,
-        stats.nmi_private_jumps,
         stats.canonical_adapters,
     );
 
@@ -1690,39 +1563,8 @@ mod tests {
         let selected: BTreeSet<u16> = graph.blocks.keys().copied().collect();
         let banks = assign_code_banks(&graph, &selected);
         let polls = nmi_poll_points(&graph, &selected);
-        let plan = plan_superblocks(&graph, &selected, &banks, &polls, &BTreeSet::new());
+        let plan = plan_superblocks(&graph, &selected, &banks, &polls);
         assert!(!plan.next.values().any(|&target| target == 0x8005));
-    }
-
-    #[test]
-    fn nmi_private_loop_keeps_resident_x_on_backedge() {
-        let mut prg = vec![0xEA; 0x8000];
-        // Reset: RTS. NMI: LDX #4 / JMP $8020. Loop: DEX / BNE $8020 / RTS.
-        // $8020 is both multiply reached and a backward-loop poll point.  The
-        // explicit first JMP gives it a real trace boundary, so proven NMI-only
-        // control can enter it privately and the BNE backedge can reuse the
-        // exact resident-X contract without spilling X.
-        prg[0] = 0x60;
-        prg[0x10..0x15].copy_from_slice(&[0xA2, 0x04, 0x4C, 0x20, 0x80]);
-        prg[0x20..0x24].copy_from_slice(&[0xCA, 0xD0, 0xFD, 0x60]);
-        let graph = cfg::discover(0, &prg, &[0x8000, 0x8010]).unwrap();
-        let asm = emit_cfg_with_interrupts(
-            &graph,
-            EmitOptions {
-                reset: 0x8000,
-                max_blocks: Some(16),
-                debug_trace: false,
-            },
-            0x8010,
-            0x8000,
-        );
-        assert!(asm.contains("nes_8020_trace:"));
-        assert!(asm.contains("NES canonical superblock entry 8020"));
-        assert!(asm.contains("canonical adapter X"));
-        let branch = asm.find("; $8021: $D0 Bne Relative").unwrap();
-        let after = &asm[branch..];
-        let private = after.find("jp nz, nes_8020_trace").unwrap();
-        assert!(!after[..private].contains("superblock materialize X"));
     }
 
     #[test]
