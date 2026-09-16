@@ -6,15 +6,22 @@
 ; recomposed per source byte: doing that is too expensive. Instead mark the
 ; affected scaled world column dirty and refresh it once, in small VBlank chunks,
 ; before it reaches scanout.
-
-SECTION "FIT SMB future backing state", WRAM0[$CA00]
+;
+; WRAM0 is packed through the profiler/OAM/fit/host-stack layout. Keep this tiny
+; persistent state in the unused tail of WRAMX bank 6, after the published-NT
+; shadow ($D000-$D7FF) and stage-seen bitmap ($D800-$D8FF).
+SECTION "FIT SMB future backing state", WRAMX[$D900], BANK[6]
 nes_fit_future_dirty:      ds 5 ; 40 scaled world columns, one bit each
 nes_fit_future_active_col: ds 1 ; world column 0..39, $FF = none
 nes_fit_future_active_row: ds 1 ; next FIT row, 2..14
 
 SECTION "FIT SMB future backing", ROM0
 
+; All callers normally use authoritative nametable WRAM bank 1. These helpers
+; briefly select bank 6 for future-maintenance state and always restore bank 1.
 nes_gbc_fit_smb_future_init:
+    ld a, $06
+    ldh [rSVBK], a
     xor a
     ld hl, nes_fit_future_dirty
     ld b, $05
@@ -26,6 +33,66 @@ nes_gbc_fit_smb_future_init:
     ld [nes_fit_future_active_col], a
     ld a, $02
     ld [nes_fit_future_active_row], a
+    ld a, $01
+    ldh [rSVBK], a
+    ret
+
+nes_gbc_fit_smb_future_clear_active:
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, $FF
+    ld [nes_fit_future_active_col], a
+    ld a, $02
+    ld [nes_fit_future_active_row], a
+    ld a, $01
+    ldh [rSVBK], a
+    ret
+
+; Return A = active world column, with bank 1 restored.
+nes_gbc_fit_smb_future_get_active_col:
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [nes_fit_future_active_col]
+    ld c, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, c
+    ret
+
+; Return A = active row, with bank 1 restored.
+nes_gbc_fit_smb_future_get_active_row:
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [nes_fit_future_active_row]
+    ld c, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, c
+    ret
+
+; Increment active row and return the new value in A, with bank 1 restored.
+nes_gbc_fit_smb_future_advance_row:
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [nes_fit_future_active_row]
+    inc a
+    ld [nes_fit_future_active_row], a
+    ld c, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, c
+    ret
+
+; C = world column. Start a refresh at row 2; bank 1 restored on return.
+nes_gbc_fit_smb_future_start_c:
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, c
+    ld [nes_fit_future_active_col], a
+    ld a, $02
+    ld [nes_fit_future_active_row], a
+    ld a, $01
+    ldh [rSVBK], a
     ret
 
 ; HL = authoritative physical NES tile address. Preserve the existing immediate
@@ -125,15 +192,19 @@ nes_gbc_fit_smb_mark_future_a:
     srl a
     ld l, a
     ld h, HIGH(nes_fit_future_dirty)
+    ld a, $06
+    ldh [rSVBK], a
     ld a, [hl]
     or b
     ld [hl], a
+    ld a, $01
+    ldh [rSVBK], a
     pop hl
     pop bc
     ret
 
 ; A = scaled world column 0..39. Atomically consume its dirty bit.
-; Returns A=1 when a bit was present, A=0 otherwise.
+; Returns A=1 when a bit was present, A=0 otherwise. Bank 1 is restored.
 nes_gbc_fit_smb_take_future_a:
     push bc
     push hl
@@ -152,6 +223,8 @@ nes_gbc_fit_smb_take_future_a:
     srl a
     ld l, a
     ld h, HIGH(nes_fit_future_dirty)
+    ld a, $06
+    ldh [rSVBK], a
     ld a, [hl]
     and b
     jr z, .none
@@ -161,11 +234,14 @@ nes_gbc_fit_smb_take_future_a:
     ld a, [hl]
     and c
     ld [hl], a
-    ld a, $01
-    jr .done
+    ld b, $01
+    jr .restore
 .none:
-    xor a
-.done:
+    ld b, $00
+.restore:
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, b
     pop hl
     pop bc
     ret
@@ -193,7 +269,7 @@ nes_gbc_fit_smb_service_future:
     call nes_video_fit_vblank_ok
     ret z
 
-    ld a, [nes_fit_future_active_col]
+    call nes_gbc_fit_smb_future_get_active_col
     cp $FF
     jr nz, .have_active
 
@@ -222,16 +298,13 @@ nes_gbc_fit_smb_service_future:
     ret
 
 .start_active:
-    ld a, c
-    ld [nes_fit_future_active_col], a
-    ld a, $02
-    ld [nes_fit_future_active_row], a
+    call nes_gbc_fit_smb_future_start_c
 
 .have_active:
     ; Convert the persistent world column back to its current ring offset. This
     ; keeps ownership correct even if the camera advances while the 4-row pass
     ; is in progress.
-    ld a, [nes_fit_future_active_col]
+    call nes_gbc_fit_smb_future_get_active_col
     ld b, a
     ld a, [nes_fit_origin_mx]
     ld c, a
@@ -245,15 +318,11 @@ nes_gbc_fit_smb_service_future:
 
     ; It left the resident ring before completion. No stale physical ownership
     ; remains to repair; any later construction will mark it again when resident.
-    ld a, $FF
-    ld [nes_fit_future_active_col], a
-    ld a, $02
-    ld [nes_fit_future_active_row], a
-    ret
+    jp nes_gbc_fit_smb_future_clear_active
 
 .active_resident:
     ld [nes_fit_mt_mx], a
-    ld a, [nes_fit_future_active_row]
+    call nes_gbc_fit_smb_future_get_active_row
     cp 15
     jr nc, .finish
     ld [nes_fit_mt_my], a
@@ -266,9 +335,7 @@ nes_gbc_fit_smb_service_future:
     call nes_video_fit_publish_at_mx_my
     pop bc
 
-    ld a, [nes_fit_future_active_row]
-    inc a
-    ld [nes_fit_future_active_row], a
+    call nes_gbc_fit_smb_future_advance_row
     cp 15
     jr nc, .finish
     ld [nes_fit_mt_my], a
@@ -278,8 +345,4 @@ nes_gbc_fit_smb_service_future:
     ret
 
 .finish:
-    ld a, $FF
-    ld [nes_fit_future_active_col], a
-    ld a, $02
-    ld [nes_fit_future_active_row], a
-    ret
+    jp nes_gbc_fit_smb_future_clear_active
