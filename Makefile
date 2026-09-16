@@ -4,6 +4,7 @@ TRACE ?= 0
 PROFILE ?= 0
 PROFILE_TRACE ?= 0
 PEEPHOLE ?= 1
+POSTPASS_THROUGH ?= all
 
 .PHONY: help generate gbc test clean
 
@@ -15,6 +16,9 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE_TRACE=1 # expensive rolling block trace'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
 	@echo '  make gbc ROM="path/to/game.nes" PEEPHOLE=0      # disable generated-asm perf pass'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=sprite0 # stop after sprite0 wait passes'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=rts     # stop after RTS passes'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache   # stop after cache passes'
 	@echo '  make test'
 
 generate:
@@ -42,24 +46,30 @@ generate:
 		python3 tools/specialize_sprite0_poll.py runtime/generated.asm; \
 		python3 tools/fuse_sprite0_branch.py runtime/generated.asm; \
 		python3 tools/virtualize_sprite0_waits.py runtime/generated.asm; \
-		python3 tools/dead_terminal_zn.py runtime/generated.asm; \
-		python3 tools/dead_terminal_n.py runtime/generated.asm; \
-		python3 tools/dead_terminal_carry_zn.py runtime/generated.asm; \
-		python3 tools/dead_terminal_overflow_zn.py runtime/generated.asm; \
-		python3 tools/native_leaf_calls.py runtime/generated.asm; \
-		python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm; \
-		python3 tools/fast_subroutine_rts_dispatch.py runtime/generated.asm; \
-		python3 tools/defer_subroutine_rts_increment.py runtime/generated.asm; \
-		python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
-		python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
-		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
-		python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
-		python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
-		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
-		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
-		python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
-		python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
-		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
+		if [ "$(POSTPASS_THROUGH)" != "sprite0" ]; then \
+			python3 tools/dead_terminal_zn.py runtime/generated.asm; \
+			python3 tools/dead_terminal_n.py runtime/generated.asm; \
+			python3 tools/dead_terminal_carry_zn.py runtime/generated.asm; \
+			python3 tools/dead_terminal_overflow_zn.py runtime/generated.asm; \
+			python3 tools/native_leaf_calls.py runtime/generated.asm; \
+			python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm; \
+			python3 tools/fast_subroutine_rts_dispatch.py runtime/generated.asm; \
+			python3 tools/defer_subroutine_rts_increment.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+			python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
+			python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
+			python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
+			python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+			python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
+			python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
+			python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
+			python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
+			python3 tools/widen_generated_jumps.py runtime/generated.asm; \
+		fi; \
 	fi
 
 gbc: generate
