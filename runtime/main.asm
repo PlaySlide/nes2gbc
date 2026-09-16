@@ -326,6 +326,9 @@ nes_gbc_vblank_isr:
 .bg_publish_generic:
     call nes_video_flush_nametable_queue_atomic
 .bg_publish_queue_done:
+    ; Coalesced future backing maintenance runs only while there is VBlank
+    ; budget left. It never competes with the recycled-column dirty pass above.
+    call nes_gbc_fit_smb_service_future
     call nes_video_update_horizontal_stitch
 
     ; Resume ordinary non-nested VBlank work. If BG publication completed
@@ -788,7 +791,7 @@ nes_gbc_fit_smb_flush_visible_queue:
 
 .fitq_tile:
     push de
-    call nes_gbc_fit_smb_publish_visible_hl
+    call nes_gbc_fit_smb_publish_backing_hl
     pop de
     jr .fitq_loop
 
@@ -1050,6 +1053,7 @@ Start:
     ; projection acquires a plausible player sprite.
     xor a
     ld [nes_fit_screen], a
+    call nes_gbc_fit_smb_future_init
     ld a, $04
     ld [nes_view_mode], a
     ld a, $30
@@ -1188,5 +1192,6 @@ INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
 INCLUDE "video.asm"
+INCLUDE "fit_smb_future.asm"
 INCLUDE "input.asm"
 INCLUDE "generated.asm"
