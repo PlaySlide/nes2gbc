@@ -1,0 +1,78 @@
+name: Temporary native-leaf trace-boundary fix
+
+on:
+  push:
+    branches:
+      - perf/branch-fusion
+    paths:
+      - .github/workflows/zz-native-leaf-trace-boundary.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/branch-fusion
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Apply native-leaf trace-boundary fix
+        run: python3 tools/fix_native_leaf_trace_boundary.py
+      - name: Verify private trace truncates canonical block
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('nl', 'tools/native_leaf_calls.py')
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          lines = [
+              'SECTION "x", ROMX, BANK[3]\n',
+              'nes_9000:\n',
+              '    ; $9000: $EA Nop Implied\n',
+              '    nop\n',
+              'nes_9B3C_trace:\n',
+              '    ; $9B3C: $60 Rts Implied\n',
+              '    ret\n',
+          ]
+          blocks, _ = m.parse_blocks(lines)
+          assert blocks[0x9000].end_i == 4, blocks[0x9000]
+          assert all('nes_9B3C_trace:' not in x for x in lines[blocks[0x9000].label_i + 1:blocks[0x9000].end_i])
+          print('native-leaf trace boundary self-test: ok')
+          PY
+      - name: Test
+        run: cargo test --all-targets
+      - name: Check
+        run: cargo check --all-targets
+      - name: Generate synthetic NES ROM
+        run: python3 tools/make_smoke_rom.py /tmp/nes2gbc-smoke.nes
+      - name: Recompile generated ASM
+        run: make generate ROM=/tmp/nes2gbc-smoke.nes MAX_BLOCKS=16
+      - name: Reject duplicate generated labels
+        run: |
+          python3 - <<'PY'
+          import re
+          from collections import Counter
+          from pathlib import Path
+          labels=[]
+          for line in Path('runtime/generated.asm').read_text().splitlines():
+              m=re.match(r'^\s*([A-Za-z_][A-Za-z0-9_]*):\s*$', line)
+              if m:
+                  labels.append(m.group(1))
+          dup=[k for k,v in Counter(labels).items() if v>1]
+          assert not dup, f'duplicate labels: {dup[:20]}'
+          print('duplicate-label scan: ok')
+          PY
+      - name: Assemble generated GBC ROM with RGBDS
+        run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make
+      - name: Commit source fix
+        run: |
+          git add tools/native_leaf_calls.py
+          git commit -m "Keep private trace labels out of native leaf thunks"
+          git push origin HEAD:perf/branch-fusion
