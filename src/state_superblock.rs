@@ -322,6 +322,7 @@ struct SuperblockPlan {
     next: BTreeMap<u16, u16>,
     multi_block_traces: usize,
     chained_edges: usize,
+    nmi_private_chained_edges: usize,
     elided_jumps: usize,
     disabled_for_unresolved_indirect: bool,
 }
@@ -352,6 +353,7 @@ fn plan_superblocks(
     selected: &BTreeSet<u16>,
     banks: &BTreeMap<u16, u16>,
     poll_points: &BTreeSet<u16>,
+    nmi_exclusive: &BTreeSet<u16>,
 ) -> SuperblockPlan {
     let base_order: Vec<u16> = selected.iter().copied().collect();
     let unresolved = selected.iter().any(|addr| {
@@ -405,17 +407,22 @@ fn plan_superblocks(
             let Some((target, is_jump)) = preferred_successor(block) else {
                 break;
             };
+            let nmi_private_edge =
+                nmi_exclusive.contains(&current) && nmi_exclusive.contains(&target);
             if !selected.contains(&target)
                 || claimed.contains(&target)
                 || banks.get(&current) != banks.get(&target)
-                || incoming.get(&target).copied().unwrap_or(0) != 1
+                || (!nmi_private_edge && incoming.get(&target).copied().unwrap_or(0) != 1)
                 || entry_points.contains(&target)
-                || poll_points.contains(&target)
+                || (!nmi_private_edge && poll_points.contains(&target))
             {
                 break;
             }
             plan.next.insert(current, target);
             plan.chained_edges += 1;
+            if nmi_private_edge {
+                plan.nmi_private_chained_edges += 1;
+            }
             if is_jump {
                 plan.elided_jumps += 1;
             }
@@ -1206,7 +1213,7 @@ pub fn emit_cfg_with_interrupts(
     let banks = assign_code_banks(graph, &selected);
     let poll_points = nmi_poll_points(graph, &selected);
     let nmi_exclusive = nmi_exclusive_blocks(graph, &selected, options.reset, nmi, irq);
-    let plan = plan_superblocks(graph, &selected, &banks, &poll_points);
+    let plan = plan_superblocks(graph, &selected, &banks, &poll_points, &nmi_exclusive);
 
     if plan.disabled_for_unresolved_indirect {
         println!(
@@ -1214,8 +1221,11 @@ pub fn emit_cfg_with_interrupts(
         );
     } else {
         println!(
-            "superblock: formed {} multi-block trace(s), chained {} unique-entry same-bank edge(s), elided {} unconditional JMP(s)",
-            plan.multi_block_traces, plan.chained_edges, plan.elided_jumps
+            "superblock: formed {} multi-block trace(s), chained {} same-bank edge(s) ({} NMI-private multi-entry/dead-poll), elided {} unconditional JMP(s)",
+            plan.multi_block_traces,
+            plan.chained_edges,
+            plan.nmi_private_chained_edges,
+            plan.elided_jumps
         );
     }
     println!(
@@ -1307,28 +1317,34 @@ pub fn emit_cfg_with_interrupts(
         }
 
         if poll_points.contains(&block.start) {
-            debug_assert!(!continuing);
             let exclusive = nmi_exclusive.contains(&block.start);
-            if exclusive {
-                writeln!(
-                    out,
-                    "    ; NMI-exclusive safe-point retained as analysis barrier"
-                )
-                .unwrap();
-                writeln!(out, "IF 0").unwrap();
-            }
-            let before = out.len();
-            writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
-            writeln!(out, "    and a").unwrap();
-            writeln!(out, "    jr z, :+").unwrap();
-            writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-            writeln!(out, "    call nes_poll_nmi_hl").unwrap();
-            writeln!(out, "    and a").unwrap();
-            writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
-            writeln!(out, ":").unwrap();
-            section_pc += approx_code_bytes(&out[before..]);
-            if exclusive {
-                writeln!(out, "ENDC").unwrap();
+            if continuing {
+                // Inside a proven NMI-only trace, nested NES NMIs are impossible.
+                // Crossing this safe point changes no architectural behavior.
+                debug_assert!(exclusive);
+                writeln!(out, "    ; NMI-private trace crosses dead safe-point poll").unwrap();
+            } else {
+                if exclusive {
+                    writeln!(
+                        out,
+                        "    ; NMI-exclusive safe-point retained as analysis barrier"
+                    )
+                    .unwrap();
+                    writeln!(out, "IF 0").unwrap();
+                }
+                let before = out.len();
+                writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
+                writeln!(out, "    and a").unwrap();
+                writeln!(out, "    jr z, :+").unwrap();
+                writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
+                writeln!(out, "    call nes_poll_nmi_hl").unwrap();
+                writeln!(out, "    and a").unwrap();
+                writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
+                writeln!(out, ":").unwrap();
+                section_pc += approx_code_bytes(&out[before..]);
+                if exclusive {
+                    writeln!(out, "ENDC").unwrap();
+                }
             }
         }
 
@@ -1563,7 +1579,7 @@ mod tests {
         let selected: BTreeSet<u16> = graph.blocks.keys().copied().collect();
         let banks = assign_code_banks(&graph, &selected);
         let polls = nmi_poll_points(&graph, &selected);
-        let plan = plan_superblocks(&graph, &selected, &banks, &polls);
+        let plan = plan_superblocks(&graph, &selected, &banks, &polls, &BTreeSet::new());
         assert!(!plan.next.values().any(|&target| target == 0x8005));
     }
 
