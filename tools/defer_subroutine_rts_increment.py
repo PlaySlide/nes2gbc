@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 
 MARKER = "guarded multi-block RTS return fast path"
-CANON_LABEL_RE = re.compile(r"^nes_[0-9A-Fa-f]{4}:$")
+BLOCK_ENTRY_RE = re.compile(r"^nes_[0-9A-Fa-f]{4}(?:_trace)?:$")
 SOURCE_RE = re.compile(
     r"; \$[0-9A-Fa-f]{4}: \$[0-9A-Fa-f]{2} [A-Za-z0-9_]+ [A-Za-z0-9_]+"
 )
@@ -54,7 +54,7 @@ def find_preceding_inc(lines: list[str], marker_i: int) -> int | None:
         c = code(lines[i])
         if c == "inc hl":
             return i
-        if SOURCE_RE.search(lines[i]) or c.startswith("SECTION ") or CANON_LABEL_RE.fullmatch(c):
+        if SOURCE_RE.search(lines[i]) or c.startswith("SECTION ") or BLOCK_ENTRY_RE.fullmatch(c):
             break
         if c and not c.startswith(";"):
             # The generated fast path is expected to replace the JP immediately
@@ -69,7 +69,7 @@ def find_fallback(lines: list[str], marker_i: int) -> int | None:
         c = code(lines[i])
         if c == "jp nes_dispatch_hl":
             return i
-        if SOURCE_RE.search(lines[i]) or c.startswith("SECTION ") or CANON_LABEL_RE.fullmatch(c):
+        if SOURCE_RE.search(lines[i]) or c.startswith("SECTION ") or BLOCK_ENTRY_RE.fullmatch(c):
             break
     return None
 

@@ -29,7 +29,8 @@ from pathlib import Path
 
 
 SECTION_BANK_RE = re.compile(r"^SECTION .*BANK\[(\d+)\]")
-BLOCK_LABEL_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+BLOCK_LABEL_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
+CANON_LABEL_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
 INSN_RE = re.compile(
     r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
 )
@@ -50,6 +51,10 @@ class Block:
 
 
 def parse_blocks(lines: list[str]) -> tuple[dict[int, Block], dict[int, int]]:
+    # Physical translated bodies may begin at either nes_XXXX: or
+    # nes_XXXX_trace:.  A later canonical nes_XXXX: adapter can share the same
+    # NES address but contains no source instruction comments.  Segment on every
+    # physical entry label, then retain the code-bearing segment for each address.
     labels: list[tuple[int, int, int]] = []
     label_bank: dict[int, int] = {}
     bank: int | None = None
@@ -58,11 +63,14 @@ def parse_blocks(lines: list[str]) -> tuple[dict[int, Block], dict[int, int]]:
         sm = SECTION_BANK_RE.match(code(line))
         if sm:
             bank = int(sm.group(1))
-        lm = BLOCK_LABEL_RE.match(code(line))
+        c = code(line)
+        lm = BLOCK_LABEL_RE.fullmatch(c)
         if lm and bank is not None:
             addr = int(lm.group(1), 16)
             labels.append((i, addr, bank))
-            label_bank[addr] = bank
+        cm = CANON_LABEL_RE.fullmatch(c)
+        if cm and bank is not None:
+            label_bank[int(cm.group(1), 16)] = bank
 
     blocks: dict[int, Block] = {}
     for n, (label_i, addr, block_bank) in enumerate(labels):
@@ -77,7 +85,12 @@ def parse_blocks(lines: list[str]) -> tuple[dict[int, Block], dict[int, int]]:
             m = INSN_RE.search(lines[j])
             if m:
                 insns.append((j, int(m.group(1), 16), m.group(3), m.group(4)))
-        blocks[addr] = Block(addr, block_bank, label_i, end_i, insns)
+        if insns:
+            # Exactly one physical segment should carry translated source for a
+            # given NES address.  Canonical adapters are intentionally ignored.
+            prev = blocks.get(addr)
+            assert prev is None, f"multiple code-bearing segments for NES ${addr:04X}"
+            blocks[addr] = Block(addr, block_bank, label_i, end_i, insns)
 
     return blocks, label_bank
 
