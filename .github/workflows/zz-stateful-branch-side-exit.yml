@@ -1,0 +1,36 @@
+name: Temporary stateful branch side-exit patch
+
+on:
+  push:
+    branches:
+      - perf/branch-fusion
+    paths:
+      - .github/workflows/zz-stateful-branch-side-exit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/branch-fusion
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Apply A-aware side-exit patch
+        run: python3 tools/apply_stateful_branch_side_exits.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Test
+        run: cargo test --all-targets
+      - name: Check
+        run: cargo check --all-targets
+      - name: Commit source change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/state_superblock.rs
+          git commit -m "Materialize resident state only on taken branch side exits"
+          git push origin HEAD:perf/branch-fusion
