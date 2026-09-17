@@ -195,8 +195,36 @@ nes_gbc_fit_smb_sync_attributes:
     ldh [rSVBK], a
     ld a, [nes_fit_attr_shadow_valid]
     and a
-    jr nz, .scan
+    jr z, .seed
 
+    ; The targeted trace caught a ghost while this routine ran fourteen times,
+    ; but not one attribute byte had changed. Do not poll all 128 bytes every
+    ; host frame. The NMI staging bitmap already tells us whether either physical
+    ; attribute table was written in the completed NES transaction: D3C0-D3FF
+    ; map to stage-seen bytes D878-D87F, and D7C0-D7FF map to D8F8-D8FF.
+    ld hl, nes_nametable_stage_seen + $78
+    ld b, $08
+.attr_seen_page0:
+    ld a, [hli]
+    and a
+    jr nz, .scan
+    dec b
+    jr nz, .attr_seen_page0
+
+    ld hl, nes_nametable_stage_seen + $F8
+    ld b, $08
+.attr_seen_page1:
+    ld a, [hli]
+    and a
+    jr nz, .scan
+    dec b
+    jr nz, .attr_seen_page1
+
+    ld a, $01
+    ldh [rSVBK], a
+    ret
+
+.seed:
     ; First established split: seed the shadow. Existing FIT cells were already
     ; composed from authoritative attribute RAM, so there is nothing to repair.
     ld a, $01
@@ -251,6 +279,25 @@ nes_gbc_fit_smb_sync_attributes:
     ld [nes_fit_mt_page], a
     ld c, $00
     call .scan_page
+
+    ; Consume the attribute-table stage bits now that this completed NMI has
+    ; been reconciled. Otherwise repeated host VBlanks before the next NES NMI
+    ; would rescan the same transaction again.
+    ld a, $06
+    ldh [rSVBK], a
+    xor a
+    ld hl, nes_nametable_stage_seen + $78
+    ld b, $08
+.clear_seen0:
+    ld [hli], a
+    dec b
+    jr nz, .clear_seen0
+    ld hl, nes_nametable_stage_seen + $F8
+    ld b, $08
+.clear_seen1:
+    ld [hli], a
+    dec b
+    jr nz, .clear_seen1
 
     ld a, $01
     ldh [rSVBK], a
@@ -556,11 +603,10 @@ nes_gbc_fit_smb_service_future:
     ld a, $01
     ldh [rSVBK], a
 
-    ; Restore the outer VBlank ISR's original publication state before
-    ; returning. Mask nested VBlank first, then clear the temporary NMI guard.
-    ldh a, [nes_split_active]
-    and a
-    ret z
+    ; Restore the outer VBlank ISR's publication state unconditionally. This
+    ; helper can span host frames; split_active may change while it is running,
+    ; so using the *current* split bit as the cleanup condition can strand the
+    ; temporary nes_nmi_active guard forever.
     ld a, $02
     ldh [rIE], a
     xor a
