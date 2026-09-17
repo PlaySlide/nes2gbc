@@ -36,7 +36,9 @@ from pathlib import Path
 SOURCE_RE = re.compile(
     r"; \$[0-9A-Fa-f]{4}: \$[0-9A-Fa-f]{2} ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
 )
-BASE_RE = re.compile(r"ld hl, \$(C[0-7][0-9A-Fa-f])00$")
+# Mirrored NES internal RAM occupies $C000-$C7FF. A page-aligned base is
+# therefore exactly $C000, $C100, ... $C700.
+BASE_RE = re.compile(r"ld hl, \$(C[0-7]00)$")
 
 
 def code(line: str) -> str:
