@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Fast-forward exact $2002/AND #$40 self-loop waits inside translated NMI.
 
-The GBC renderer already reproduces the visible split with STAT/LYC.  A translated
+The GBC renderer already reproduces the visible split with STAT/LYC. A translated
 NES NMI can span multiple host frames, so tying sprite-0 polling to live host LY
-can make an old NES busy-wait stall on an unrelated host raster phase.  For the
+can make an old NES busy-wait stall on an unrelated host raster phase. For the
 strict idiom
 
     LDA $2002
@@ -12,9 +12,15 @@ strict idiom
 
 preserve the normal physical-raster implementation unless nes_nmi_active != 0.
 Inside translated NMI, synthesize the condition that exits the loop immediately:
-BNE self-loop gets a clear hit; BEQ self-loop gets a set hit.  Preserve PPUSTATUS
+BNE self-loop gets a clear hit; BEQ self-loop gets a set hit. Preserve PPUSTATUS
 read side effects (clear VBlank, reset $2005/$2006 latch), canonical NES A/Z/N,
 and leave all other PPUSTATUS reads untouched.
+
+This pass runs after specialize_sprite0_poll.py. Therefore it recognizes both the
+original inline-PPUSTATUS marker and the specialized marker that replaces it. It
+also treats nes_XXXX_trace labels as real physical block entries: NMI-private
+superblocks can put the hot wait body under the trace label while the self-loop
+branches through the canonical nes_XXXX adapter.
 """
 
 from __future__ import annotations
@@ -24,9 +30,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-INSN_RE = re.compile(r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) (\w+) (\w+)")
-BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+INSN_RE = re.compile(r"; \\$([0-9A-Fa-f]{4}): \\$([0-9A-Fa-f]{2}) (\\w+) (\\w+)")
+BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
 COND_SELF_RE = re.compile(r"^(?:jp|jr) (z|nz), nes_([0-9A-Fa-f]{4})$")
+MARKERS = (
+    "inline exact PPUSTATUS ($2002) read",
+    "specialized $2002 -> AND #$40 sprite-0 poll",
+)
 
 
 def code(line: str) -> str:
@@ -44,6 +54,10 @@ def indent_of(line: str) -> str:
     return line[: len(line) - len(line.lstrip())]
 
 
+def is_marker(line: str) -> bool:
+    return any(marker in line for marker in MARKERS)
+
+
 @dataclass
 class Candidate:
     marker_i: int
@@ -52,75 +66,80 @@ class Candidate:
     wait_for_set: bool
 
 
+def block_end(lines: list[str], start: int) -> int:
+    for i in range(start + 1, len(lines)):
+        c = code(lines[i])
+        if BLOCK_RE.fullmatch(c) or c.startswith("SECTION "):
+            return i
+    return len(lines)
+
+
 def find_candidates(lines: list[str]) -> list[Candidate]:
     out: list[Candidate] = []
-    block_addr: int | None = None
-    block_start = 0
+    physical_addr: int | None = None
+    physical_start = 0
+    physical_end = len(lines)
 
     for i, line in enumerate(lines):
         bm = BLOCK_RE.fullmatch(code(line))
         if bm:
-            block_addr = int(bm.group(1), 16)
-            block_start = i
+            physical_addr = int(bm.group(1), 16)
+            physical_start = i
+            physical_end = block_end(lines, i)
             continue
-        if "inline exact PPUSTATUS ($2002) read" not in line or block_addr is None:
+        if not is_marker(line) or physical_addr is None or i >= physical_end:
             continue
 
-        # Because the emitter batches non-control IR, the LDA and AND source
-        # comments may both appear immediately before the inlined $2002 body.
-        prev = []
-        for j in range(i - 1, block_start, -1):
+        # Prove the exact source idiom by source PCs rather than depending on
+        # where batched comments happen to land relative to the marker. The hot
+        # body may live at nes_XXXX_trace while the branch targets nes_XXXX.
+        by_pc: dict[int, tuple[int, tuple[int, int, str, str]]] = {}
+        for j in range(physical_start + 1, physical_end):
             x = insn(lines[j])
             if x is not None:
-                prev.append(x)
-                if len(prev) == 2:
-                    break
-        if len(prev) != 2:
+                by_pc.setdefault(x[0], (j, x))
+
+        lda_info = by_pc.get(physical_addr)
+        and_info = by_pc.get((physical_addr + 3) & 0xFFFF)
+        branch_info = by_pc.get((physical_addr + 5) & 0xFFFF)
+        if lda_info is None or and_info is None or branch_info is None:
             continue
-        and_i, lda_i = prev[0], prev[1]
-        if not (lda_i[2:] == ("Lda", "Absolute") and and_i[2:] == ("And", "Immediate")):
-            continue
-        if lda_i[0] != block_addr or and_i[0] != ((lda_i[0] + 3) & 0xFFFF):
+        lda_i, lda = lda_info
+        and_i, and_src = and_info
+        branch_i, branch = branch_info
+        if not (
+            lda[2:] == ("Lda", "Absolute")
+            and and_src[2:] == ("And", "Immediate")
+            and branch[2] in {"Beq", "Bne"}
+            and branch[3] == "Relative"
+            and lda_i <= i < branch_i
+        ):
             continue
 
-        # The next source instruction must be BEQ/BNE, immediately after the
-        # 3-byte LDA and 2-byte AND.
-        branch_comment_i = None
-        branch = None
-        for j in range(i + 1, len(lines)):
-            if BLOCK_RE.fullmatch(code(lines[j])):
-                break
-            x = insn(lines[j])
-            if x is not None:
-                branch_comment_i = j
-                branch = x
-                break
-        if branch_comment_i is None or branch is None:
-            continue
-        if branch[2] not in {"Beq", "Bne"} or branch[3] != "Relative":
-            continue
-        if branch[0] != ((lda_i[0] + 5) & 0xFFFF):
-            continue
-
-        # Prove the immediate mask from emitted code, not source comments.
-        if not any(code(lines[j]) == "and $40" for j in range(i + 1, branch_comment_i)):
+        # Prove #$40 from emitted code. The sprite0 branch fuser may replace the
+        # literal AND with a comment while retaining the same exact semantics.
+        mask_proven = any(code(lines[j]) == "and $40" for j in range(and_i + 1, branch_i))
+        if not mask_proven:
+            mask_proven = any(
+                "fused sprite-0 result: A and GB Z already equal AND #$40" in lines[j]
+                for j in range(and_i + 1, branch_i)
+            )
+        if not mask_proven:
             continue
 
         expected_cond = "z" if branch[2] == "Beq" else "nz"
         jump_i = None
-        for j in range(branch_comment_i + 1, len(lines)):
-            if BLOCK_RE.fullmatch(code(lines[j])) or insn(lines[j]) is not None:
-                break
+        for j in range(branch_i + 1, physical_end):
             m = COND_SELF_RE.fullmatch(code(lines[j]))
             if not m:
                 continue
-            if m.group(1) == expected_cond and int(m.group(2), 16) == block_addr:
+            if m.group(1) == expected_cond and int(m.group(2), 16) == physical_addr:
                 jump_i = j
                 break
         if jump_i is None:
             continue
 
-        out.append(Candidate(i, jump_i, block_addr, branch[2] == "Beq"))
+        out.append(Candidate(i, jump_i, physical_addr, branch[2] == "Beq"))
 
     return out
 
@@ -146,25 +165,29 @@ def apply(lines: list[str], candidates: list[Candidate]) -> tuple[int, int]:
         ]
         if c.wait_for_set:
             fast.append(f"{ind}or $40\n")
-        fast.extend([
-            f"{ind}ld [nes_ppu_status], a\n",
-            f"{ind}xor a\n",
-            f"{ind}ld [nes_ppu_latch], a\n",
-        ])
+        fast.extend(
+            [
+                f"{ind}ld [nes_ppu_status], a\n",
+                f"{ind}xor a\n",
+                f"{ind}ld [nes_ppu_latch], a\n",
+            ]
+        )
         if c.wait_for_set:
             fast.append(f"{ind}ld a, $40\n")
-        fast.extend([
-            f"{ind}ldh [nes_a], a\n",
-            f"{ind}ldh [nes_z_shadow], a\n",
-            f"{ind}ldh [nes_n_shadow], a\n",
-            f"{ind}jp {done}\n",
-            f"{physical}:\n",
-        ])
+        fast.extend(
+            [
+                f"{ind}ldh [nes_a], a\n",
+                f"{ind}ldh [nes_z_shadow], a\n",
+                f"{ind}ldh [nes_n_shadow], a\n",
+                f"{ind}jp {done}\n",
+                f"{physical}:\n",
+            ]
+        )
 
         # Put the fast-path destination immediately after the original self
         # branch. Physical execution still loops exactly as before.
         lines.insert(c.branch_jump_i + 1, f"{done}:\n")
-        lines[c.marker_i + 1:c.marker_i + 1] = fast
+        lines[c.marker_i + 1 : c.marker_i + 1] = fast
 
         if c.wait_for_set:
             set_waits += 1
