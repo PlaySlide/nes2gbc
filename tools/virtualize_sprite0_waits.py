@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-INSN_RE = re.compile(r"; \\$([0-9A-Fa-f]{4}): \\$([0-9A-Fa-f]{2}) (\\w+) (\\w+)")
+INSN_RE = re.compile(r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) (\w+) (\w+)")
 BLOCK_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
 COND_SELF_RE = re.compile(r"^(?:jp|jr) (z|nz), nes_([0-9A-Fa-f]{4})$")
 MARKERS = (
