@@ -71,6 +71,7 @@ generate:
 			python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
 		fi; \
 		if [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+			python3 tools/fuse_index_branch_value.py runtime/generated.asm; \
 			python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
 			python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 			python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
