@@ -93,7 +93,7 @@ def fuse(lines: list[str]) -> tuple[int, int, int]:
         if code(lines[i + 9]) != "and a":
             i += 1
             continue
-        if not re.fullmatch(rf"jp {cond}, nes_[0-9A-Fa-f]{{4}}", code(lines[i + 10])):
+        if not re.fullmatch(rf"(?:jp|jr) {cond}, nes_[0-9A-Fa-f]{{4}}", code(lines[i + 10])):
             i += 1
             continue
 
