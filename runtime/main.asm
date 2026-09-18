@@ -278,10 +278,35 @@ nes_gbc_vblank_isr:
     jr z, .fit_edge_done
     call nes_video_fit_update_scroll_window
     ld a, [nes_fit_dirty]
+    cp $01
+    jr z, .fit_full_service
     cp $02
     jr z, .fit_edge_service
     cp $03
     jr nz, .fit_edge_done
+
+.fit_full_service:
+    ; A genuine FIT full invalidation (death/area reload or PPUCTRL.4 tileset
+    ; change) may begin while SMB temporarily has no split, then survive after
+    ; the HUD/playfield split returns. The split path used to service only
+    ; entering-column dirty=2/3, leaving dirty=1 stranded forever with the
+    ; previous area's patterns still resident. Continue the existing chunked
+    ; authoritative rebuild here; do not disable LCD or perform an atomic reset.
+    ;
+    ; Once SMB has established its fixed HUD, rows 0-1 are HUD-owned and must
+    ; not be replaced by the scrolling playfield during a full recompose.
+    ld a, [nes_hstitch_seen]
+    and a
+    jr z, .fit_edge_resume
+    ld a, [nes_fit_recompose_my]
+    cp $02
+    jr nc, .fit_edge_resume
+    ld a, $02
+    ld [nes_fit_recompose_my], a
+    xor a
+    ld [nes_fit_mt_mx], a
+    jr .fit_edge_resume
+
 .fit_edge_service:
     ; Rows 0-1 are the fixed FIT HUD surface. A recycled playfield column may
     ; reuse the same physical X slot, but it must never replace those two rows.
