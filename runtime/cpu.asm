@@ -560,6 +560,48 @@ nes_cpu_read_hi32::
 ; Y = 0, Z set / N clear (DEY), [zp] = last read, stack byte at SP = last
 ; pushed A. X, V, SP unchanged. Clobbers AF/BC/DE/HL.
 nes_joy_serial_loop::
+    ; Fast path: the loop-invariant address is $4016 and the strobe is low
+    ; (only a write can change it), so each read returns bit 0 of the shift
+    ; register and shifts in a 1 at bit 7. Only the last iteration's stack
+    ; byte (A before the final ROL) and zero-page byte survive.
+    ldh a, [nes_x]
+    add d
+    jr c, .generic
+    cp $16
+    jr nz, .generic
+    ld a, [nes_controller_strobe]
+    and a
+    jr nz, .generic
+    ldh a, [nes_y]
+    ld b, a
+    ldh a, [nes_a]
+    ld c, a
+    ld a, [nes_controller_shift]
+    ld d, a
+.fast:
+    ld l, c
+    srl d
+    set 7, d
+    rl c
+    dec b ; DEC keeps the ROL carry
+    jr nz, .fast
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+    ld b, l
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], b
+    ld a, c
+    and $01
+    ld h, $C0
+    ld l, e
+    ld [hl], a
+    ld a, d
+    ld [nes_controller_shift], a
+    jr .done
+.generic:
     ldh a, [nes_y]
     ld b, a
     ldh a, [nes_a]
@@ -595,6 +637,7 @@ nes_joy_serial_loop::
     ld a, $00
     rla
     ldh [nes_c_shadow], a
+.done:
     ld a, c
     ldh [nes_a], a
     xor a
