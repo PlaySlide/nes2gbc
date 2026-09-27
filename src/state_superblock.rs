@@ -448,6 +448,88 @@ fn plan_superblocks(
     plan
 }
 
+
+/// REGALLOC>=2: 6502 overflow (V) liveness over the whole CFG. Returns the PCs
+/// of instructions after which V is provably dead on every path. V is read by
+/// BVC/BVS, PHP and BRK, and by every executed NMI poll (the NMI entry
+/// materializes P). RTS/RTI/BRK, unresolved or unselected edges and anything
+/// unrecognized are treated as reads.
+fn overflow_dead_after(
+    graph: &ControlFlowGraph,
+    selected: &BTreeSet<u16>,
+    poll_points: &BTreeSet<u16>,
+    nmi_exclusive: &BTreeSet<u16>,
+) -> BTreeSet<u16> {
+    use crate::cpu6502::Mnemonic::*;
+    let reads = |m| matches!(m, Bvc | Bvs | Php | Brk);
+    let writes = |m| matches!(m, Adc | Sbc | Bit | Clv | Plp | Rti);
+    let polled = |addr: u16| poll_points.contains(&addr) && !nmi_exclusive.contains(&addr);
+
+    let live_out_of = |addr: u16, live_in: &BTreeMap<u16, bool>| -> bool {
+        let Some(block) = graph.blocks.get(&addr) else { return true };
+        let Some(last) = block.instructions.last() else { return true };
+        if matches!(last.def.mnemonic, Rts | Rti | Brk) || block.edges.is_empty() {
+            return true;
+        }
+        block.edges.iter().any(|edge| match edge.target {
+            Some(t) if selected.contains(&t) => live_in.get(&t).copied().unwrap_or(false),
+            _ => true,
+        })
+    };
+    let block_live_in = |addr: u16, out: bool| -> bool {
+        let block = &graph.blocks[&addr];
+        let mut live = out;
+        for insn in block.instructions.iter().rev() {
+            let m = insn.def.mnemonic;
+            if writes(m) {
+                live = false;
+            }
+            if reads(m) {
+                live = true;
+            }
+        }
+        live || polled(addr)
+    };
+
+    let mut live_in: BTreeMap<u16, bool> = selected.iter().map(|&a| (a, false)).collect();
+    loop {
+        let mut changed = false;
+        for &addr in selected.iter().rev() {
+            if !graph.blocks.contains_key(&addr) {
+                continue;
+            }
+            let out = live_out_of(addr, &live_in);
+            let new_in = block_live_in(addr, out);
+            if new_in && !live_in[&addr] {
+                live_in.insert(addr, true);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut dead = BTreeSet::new();
+    for &addr in selected {
+        let Some(block) = graph.blocks.get(&addr) else { continue };
+        let mut live = live_out_of(addr, &live_in);
+        for insn in block.instructions.iter().rev() {
+            if !live {
+                dead.insert(insn.pc);
+            }
+            let m = insn.def.mnemonic;
+            if writes(m) {
+                live = false;
+            }
+            if reads(m) {
+                live = true;
+            }
+        }
+    }
+    dead
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct TraceState {
     a_live: bool,
@@ -459,6 +541,8 @@ struct TraceState {
     /// REGALLOC: 6502 carry statically known within the current block
     /// (after CLC/SEC). Never part of a trace entry contract.
     carry: Option<bool>,
+    /// REGALLOC>=2: V is dead after the instruction being emitted.
+    v_dead: bool,
 }
 
 #[derive(Debug, Default)]
@@ -1143,11 +1227,26 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             writeln!(out, "    ld l, a ; arithmetic result").unwrap();
 
             // Capture 6502 carry before any flag-clobbering status work.
-            writeln!(out, "    ld a, $00").unwrap();
-            writeln!(out, "    jr nc, :+").unwrap();
-            writeln!(out, "    inc a").unwrap();
-            writeln!(out, ":").unwrap();
+            if regalloc_level() >= 2 {
+                writeln!(out, "    ld a, $00").unwrap();
+                writeln!(out, "    rla ; branchless carry capture").unwrap();
+            } else {
+                writeln!(out, "    ld a, $00").unwrap();
+                writeln!(out, "    jr nc, :+").unwrap();
+                writeln!(out, "    inc a").unwrap();
+                writeln!(out, ":").unwrap();
+            }
             writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+            if state.v_dead {
+                writeln!(out, "    ; V dead on every path (compiler overflow liveness)").unwrap();
+                writeln!(out, "    ld a, l").unwrap();
+                write_a_resident(state, stats);
+                emit_update_nz(out);
+                stats.fast_arithmetic += 1;
+                state.carry = None;
+                stats.fast_ops += 1;
+                return;
+            }
 
             // Only V remains material in nes_p. For SBC, E is ~rhs, so the
             // normal ADC identity ~(lhs^E)&(lhs^result) becomes the SBC
@@ -1270,6 +1369,11 @@ pub fn emit_cfg_with_interrupts(
     let poll_points = nmi_poll_points(graph, &selected);
     let nmi_exclusive = nmi_exclusive_blocks(graph, &selected, options.reset, nmi, irq);
     let plan = plan_superblocks(graph, &selected, &banks, &poll_points, &nmi_exclusive);
+    let v_dead = if regalloc_level() >= 2 {
+        overflow_dead_after(graph, &selected, &poll_points, &nmi_exclusive)
+    } else {
+        BTreeSet::new()
+    };
 
     if plan.disabled_for_unresolved_indirect {
         println!(
@@ -1288,6 +1392,9 @@ pub fn emit_cfg_with_interrupts(
         "nmi-superblock-proof: {} block(s) proven NMI-exclusive",
         nmi_exclusive.len()
     );
+    if regalloc_level() >= 2 {
+        println!("regalloc: V dead after {} instruction(s)", v_dead.len());
+    }
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
     writeln!(out, "nes_reset:").unwrap();
@@ -1472,7 +1579,9 @@ pub fn emit_cfg_with_interrupts(
                         }
                         write_insn_comment(&mut out, instruction);
                         let before = out.len();
+                        state.v_dead = v_dead.contains(&instruction.pc);
                         emit_fast_op(&mut out, &ops[0], &mut state, &mut stats);
+                        state.v_dead = false;
                         section_pc += approx_code_bytes(&out[before..]);
                     } else {
                         write_insn_comment(&mut out, instruction);
