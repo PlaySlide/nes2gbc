@@ -517,6 +517,14 @@ nes_cpu_read_joy_hl::
     xor a
     ret
 
+; Emitted (tools/fast_nonram_reads.py) where the inline $0000-$1FFF RAM test
+; already failed, so H >= $20: PRG goes straight to the PRG path, anything
+; else takes the generic ladder. Same results and flags as nes_cpu_read.
+nes_cpu_read_hi::
+    bit 7, h
+    jp nz, nes_cpu_read.prg
+    jp nes_cpu_read
+
 ; Generic CPU write. Input HL = NES CPU address, A = value.
 nes_cpu_write:
     PROFILE_INC nes_profile_cpu_write

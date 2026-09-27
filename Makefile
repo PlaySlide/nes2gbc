@@ -90,6 +90,7 @@ generate:
 			python3 tools/fast_fill_loops.py runtime/generated.asm; \
 			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)" --identity "$(REPACK_IDENTITY)" --bank-profile "$(BANK_PROFILE)"; \
 			python3 tools/dead_hram_state_global.py runtime/generated.asm; \
+			python3 tools/fast_nonram_reads.py runtime/generated.asm; \
 		fi; \
 	fi
 
