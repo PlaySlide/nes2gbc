@@ -625,86 +625,61 @@ nes_stage_bit_masks:
     db $01, $02, $04, $08, $10, $20, $40, $80
 
 SECTION "NES stage first visit", ROM0
-; Input HL = physical nametable address $D000-$D7FF.
-; Return A=1 on first visit during this translated NMI, A=0 on repeats.
-; HL is preserved and WRAM bank 1 is restored before returning.
-nes_ppu_nametable_stage_first_visit:
-    push hl
-    ld a, $01
-    ld [nes_nametable_stage_used], a
-
-    ; E = low byte of the bit-mask table entry (low three address bits).
-    ld a, l
-    and $07
-    add LOW(nes_stage_bit_masks)
-    ld e, a
-
-    ; D800 + (((H & 7) << 5) | (L >> 3)) selects the bitmap byte.
-    ld a, l
-    srl a
-    srl a
-    srl a
-    ld c, a
-    ld a, h
-    and $07
-    swap a
-    add a
-    or c
-    ld c, a
-    ld h, HIGH(nes_stage_bit_masks)
-    ld l, e
-    ld b, [hl]
-    ld l, c
-    ld h, HIGH(nes_nametable_stage_seen)
-
-    ld a, $06
-    ldh [rSVBK], a
-    ld a, [hl]
-    ld c, a
-    and b
-    jr nz, .stage_duplicate
-
-    ld a, c
-    or b
-    ld [hl], a
-    ld a, $01
-    jr .stage_finish
-
-.stage_duplicate:
-    xor a
-
-.stage_finish:
-    ld b, a
-    ld a, $01
-    ldh [rSVBK], a
-    ld a, b
-    pop hl
-    ret
-
 ; Append physical virtual nametable address HL ($D000-$D7FF) to the
 ; current translated-NMI transaction. The tile/attribute value itself is already
-; stored in authoritative WRAM, so duplicate addresses are harmless.
+; stored in authoritative WRAM, so duplicate addresses are harmless; the queue
+; reads the final byte after RTI, so repeats within one NMI are suppressed via
+; the WRAMX bank-6 staging bitmap (one bit per physical address).
+; HL is preserved; BC/DE are clobbered; WRAM bank 1 is restored.
 nes_ppu_stage_nametable_hl:
     ld a, [nes_nametable_queue_overflow]
     and a
     ret nz
 
-    ; The queue reads the final byte from authoritative nametable WRAM after
-    ; RTI, so multiple writes to the same physical PPU address in one NMI need
-    ; only one queue entry. Suppress repeats now, outside host VBlank.
-    call nes_ppu_nametable_stage_first_visit
-    and a
-    ret z
+    ld a, $01
+    ld [nes_nametable_stage_used], a
+
+    ; B = bit mask for the low three address bits.
+    ld a, l
+    and $07
+    add LOW(nes_stage_bit_masks)
+    ld c, a
+    ld b, HIGH(nes_stage_bit_masks)
+    ld a, [bc]
+    ld b, a
+
+    ; DE = D800 + (((H & 7) << 5) | (L >> 3)) selects the bitmap byte.
+    ld a, l
+    srl a
+    srl a
+    srl a
+    ld e, a
+    ld a, h
+    and $07
+    swap a
+    add a
+    or e
+    ld e, a
+    ld d, HIGH(nes_nametable_stage_seen)
+
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [de]
+    ld c, a
+    and b
+    jr nz, .stage_duplicate
+    ld a, c
+    or b
+    ld [de], a
+    ld a, $01
+    ldh [rSVBK], a
 
     ld a, [nes_nametable_queue_ptr_hi]
     cp $E0
     jr nc, .overflow
-
-    push hl
     ld d, a
     ld a, [nes_nametable_queue_ptr_lo]
     ld e, a
-    pop hl
 
     ld a, l
     ld [de], a
@@ -717,6 +692,11 @@ nes_ppu_stage_nametable_hl:
     ld [nes_nametable_queue_ptr_lo], a
     ld a, d
     ld [nes_nametable_queue_ptr_hi], a
+    ret
+
+.stage_duplicate:
+    ld a, $01
+    ldh [rSVBK], a
     ret
 
 .overflow:
