@@ -7,6 +7,12 @@ PEEPHOLE ?= 1
 # Compiler register allocation level (src/state_superblock.rs); 0 = previous emission.
 REGALLOC ?= 3
 POSTPASS_THROUGH ?= all
+# Profile-guided translated-code bank packing (tools/bench/bank_profile.py).
+# Defaults to profiles/<rom name>.bankprof when that file exists; BANK_PROFILE=
+# (empty) or a missing file keeps the static whole-bank packing.
+BANK_PROFILE ?= profiles/$(basename $(notdir $(ROM))).bankprof
+# 1 = keep every emitter bank unmerged (layout used to record a bank profile).
+REPACK_IDENTITY ?= 0
 
 .PHONY: help generate gbc test clean
 
@@ -82,7 +88,7 @@ generate:
 			python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
 			python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 			python3 tools/fast_fill_loops.py runtime/generated.asm; \
-			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)"; \
+			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)" --identity "$(REPACK_IDENTITY)" --bank-profile "$(BANK_PROFILE)"; \
 			python3 tools/dead_hram_state_global.py runtime/generated.asm; \
 		fi; \
 	fi
