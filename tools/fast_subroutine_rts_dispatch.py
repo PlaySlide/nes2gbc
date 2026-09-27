@@ -275,6 +275,18 @@ def pessimistic_bytes(text: str) -> int:
     return max(0, n - 3)  # replacing an existing three-byte JP
 
 
+def load_rts_profile(path: str) -> dict[int, float]:
+    """Parse "<entries per frame> <PC hex>" lines; missing file -> {}."""
+    out: dict[int, float] = {}
+    if not path or not Path(path).is_file():
+        return out
+    for line in Path(path).read_text().splitlines():
+        parts = line.split("#", 1)[0].split()
+        if len(parts) == 2:
+            out[int(parts[1], 16)] = float(parts[0])
+    return out
+
+
 def rank_returns(weighted: collections.Counter[int], limit: int) -> list[int]:
     """Choose the hottest exact return PCs, deterministic on equal weights."""
     return [
@@ -290,7 +302,10 @@ def main() -> int:
     p.add_argument("--bank-budget", type=int, default=640,
                    help="maximum pessimistic extra bytes added per ROMX bank")
     p.add_argument("--max-rts-per-bank", type=int, default=12)
+    p.add_argument("--rts-profile", default="",
+                   help="tools/bench/rts_profile.py block-entry counts; orders returns dynamically")
     args = p.parse_args()
+    dyn = load_rts_profile(args.rts_profile)
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     blocks, label_bank = parse_blocks(lines)
@@ -301,6 +316,11 @@ def main() -> int:
     for entry, weighted_returns in call_returns.items():
         for rts in reachable_rts(entry, lines, blocks, labels):
             rts_return_weight[rts].update(weighted_returns)
+    if dyn:
+        # Dynamic entry counts dominate; static JSR-site weight breaks ties.
+        for rts, weighted in rts_return_weight.items():
+            for ret in list(weighted):
+                weighted[ret] += int(dyn.get(ret, 0.0) * 1000) * 1000
 
     # -covered_weight, addr, extra, text, selected_count, was_wide
     candidates: list[tuple[int, int, int, str, int, bool]] = []

@@ -177,7 +177,11 @@ def main() -> int:
     p.add_argument("asm", type=Path)
     p.add_argument("--max-returns", type=int, default=4,
                    help="skip leaf RTS blocks with more static continuations than this")
+    p.add_argument("--rts-profile", default="",
+                   help="tools/bench/rts_profile.py block-entry counts; orders returns dynamically")
     args = p.parse_args()
+    from fast_subroutine_rts_dispatch import load_rts_profile
+    dyn = load_rts_profile(args.rts_profile)
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     blocks, label_bank = parse_blocks(lines)
@@ -213,7 +217,7 @@ def main() -> int:
         ordered = [
             ret
             for ret, _weight in sorted(
-                weighted_returns.items(), key=lambda item: (-item[1], item[0])
+                weighted_returns.items(), key=lambda item: (-dyn.get(item[0], 0.0), -item[1], item[0])
             )
         ]
         rewrites.append(

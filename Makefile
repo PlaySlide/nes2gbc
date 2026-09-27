@@ -15,6 +15,9 @@ POSTPASS_THROUGH ?= all
 # Defaults to profiles/<rom name>.bankprof when that file exists; BANK_PROFILE=
 # (empty) or a missing file keeps the static whole-bank packing.
 BANK_PROFILE ?= profiles/$(basename $(notdir $(ROM))).bankprof
+# Block-entry profile (tools/bench/rts_profile.py) ordering guarded RTS returns;
+# RTS_PROFILE= (empty) or a missing file keeps static JSR-site ordering.
+RTS_PROFILE ?= profiles/$(basename $(notdir $(ROM))).rtsprof
 # 1 = keep every emitter bank unmerged (layout used to record a bank profile).
 REPACK_IDENTITY ?= 0
 # APU=1 only: audio host-speed compensation for testing under 2x/4x fast-forward.
@@ -74,8 +77,8 @@ generate:
 			python3 tools/dead_terminal_carry_zn.py runtime/generated.asm; \
 			python3 tools/dead_terminal_overflow_zn.py runtime/generated.asm; \
 			python3 tools/native_leaf_calls.py runtime/generated.asm; \
-			python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm; \
-			python3 tools/fast_subroutine_rts_dispatch_inline.py runtime/generated.asm --max-returns 8 --bank-budget 2400 --max-rts-per-bank 40; \
+			python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm --rts-profile "$(RTS_PROFILE)"; \
+			python3 tools/fast_subroutine_rts_dispatch_inline.py runtime/generated.asm --max-returns 8 --bank-budget 2400 --max-rts-per-bank 40 --rts-profile "$(RTS_PROFILE)"; \
 			python3 tools/defer_subroutine_rts_increment.py runtime/generated.asm; \
 		fi; \
 		if [ "$(POSTPASS_THROUGH)" = "cache-xy-zp" ] || [ "$(POSTPASS_THROUGH)" = "cache-a" ] || [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
