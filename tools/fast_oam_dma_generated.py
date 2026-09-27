@@ -233,7 +233,9 @@ def gbc_attr(nes_attr: int, bank: int) -> int:
 
 def attr_table() -> str:
     out = [
-        "\nSECTION \"Generated fast OAM attr page\", WRAM0\n",
+        # Fixed address: NES internal RAM ($C000-$C7FF) must never host
+        # floating runtime variables.
+        "\nSECTION \"Generated fast OAM attr page\", WRAM0[$CBE1]\n",
         "nes_oam_attr_page8: ds 1\n",
         "\nSECTION \"Generated OAM attribute table\", ROM0, ALIGN[8]\n",
         "nes_oam_attr_table:\n",

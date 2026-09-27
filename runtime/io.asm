@@ -245,6 +245,11 @@ nes_host_stack_reserve: ds $0100
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
 
+; NES internal RAM mirror used directly by translated code. Reserve it so the
+; linker never places a floating WRAM0 section on top of NES zero page.
+SECTION "NES internal RAM", WRAM0[$C000]
+    ds $0800
+
 SECTION "NES virtual OAM", WRAM0[$C900]
 nes_oam_ram: ds 256
 
