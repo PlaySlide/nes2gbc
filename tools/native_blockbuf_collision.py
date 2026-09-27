@@ -23,6 +23,9 @@ from __future__ import annotations
 import re, sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from dead_overflow import v_observable  # noqa: E402
+
 LABEL_RE = re.compile(r"^(nes_([0-9A-F]{4})_trace):$")
 ANY_LABEL = re.compile(r"^[A-Za-z_][\w]*:$")
 PC_COMMENT = re.compile(r"^\s*; \$([0-9A-F]{4}): \$[0-9A-F]{2} ")
@@ -76,8 +79,22 @@ def match(read, pc):
                 ret=pc + 26, k=k, t1=t1, t2=t2, s=s)
 
 
-def emit(pc, m):
+V_BLOCK = """ld a, d
+cpl
+and e
+and $80
+rrca
+ld e, a
+ldh a, [nes_p]
+and $BF
+or e
+ldh [nes_p], a
+"""
+
+
+def emit(pc, m, keep_v=True):
     ind = "    "
+    vblock = V_BLOCK if keep_v else "; V not observable in this ROM: overflow flag not produced\n"
     t1 = f"nes_native_bbc_t1_{pc:04X}"
     t2 = f"nes_native_bbc_t2_{pc:04X}"
     r = m["ret"]
@@ -173,17 +190,7 @@ ccf
 ld a, $00
 rla
 ldh [nes_c_shadow], a
-ld a, d
-cpl
-and e
-and $80
-rrca
-ld e, a
-ldh a, [nes_p]
-and $BF
-or e
-ldh [nes_p], a
-pop hl
+{vblock}pop hl
 ld a, l
 add d
 ld l, a
@@ -234,7 +241,9 @@ def main(asm, rom_path):
         print("native-blockbuf-collision: non-NROM mapper, skipped")
         return
     p = Path(asm)
-    lines = p.read_text().splitlines(keepends=True)
+    text = p.read_text()
+    keep_v = v_observable(text)
+    lines = text.splitlines(keepends=True)
     done = 0
     i = 0
     while i < len(lines):
@@ -262,7 +271,7 @@ def main(asm, rom_path):
         if max(pcs) != pc + 24:
             i += 1
             continue
-        lines[first:e] = emit(pc, m)
+        lines[first:e] = emit(pc, m, keep_v)
         done += 1
         i = first + 1
     p.write_text("".join(lines))
