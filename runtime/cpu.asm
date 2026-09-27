@@ -187,6 +187,7 @@ ENDC
     ld b, h
     ld e, l
     ld a, l
+    sub h ; index (lo - hi) & $7F (fewer hot collisions than lo & $7F)
     and $7F
     ld l, a
     ld h, HIGH(nes_dispatch_dm_tag)
@@ -255,12 +256,14 @@ ENDC
     ld [nes_dispatch_cache_addr_lo], a
 
     ; Fill the direct-mapped cache entry for this PC.
+    ld a, [nes_dispatch_cache_pc_hi]
+    ld c, a
     ld a, [nes_dispatch_cache_pc_lo]
+    sub c
     and $7F
     ld l, a
     ld h, HIGH(nes_dispatch_dm_tag)
-    ld a, [nes_dispatch_cache_pc_hi]
-    ld [hl], a
+    ld [hl], c
     set 7, l
     ld [hl], b
     inc h
