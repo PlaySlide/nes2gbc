@@ -450,30 +450,28 @@ ENDC
     ret
 
 .prg_banked_rom:
-    ; Preserve NES address, select the ROMX bank, then map offset to $4000-$7FFF.
-    ld d, h
-    ld e, l
-
-    ld a, d
-    cp $C0
-    ld a, $01
-    jr c, .prg_select
-    ld a, $02
-
+    ; Select ROMX bank 1 ($8000-$BFFF) or 2 ($C000-$FFFF), map the offset to
+    ; $4000-$7FFF, read, then restore the translated-code bank inline. The
+    ; upper MBC5 bank bit ($3000) is always 0 in this runtime. Returned flags
+    ; are those of `or $40` (NZ, NC), exactly as the old push/pop path left.
+    ld a, h
+    rlca
+    rlca
+    and $01
+    inc a
 .prg_select:
     ld [$2000], a
-    ld a, d
+    ld a, h
     and $3F
     or $40
     ld h, a
-    ld l, e
-    ld a, [hl]
+    ld l, [hl]
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    ld a, l
 IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_debug_bus_value], a
 ENDC
-    push af
-    call nes_restore_code_bank
-    pop af
     ret
 
 .read_4011:
