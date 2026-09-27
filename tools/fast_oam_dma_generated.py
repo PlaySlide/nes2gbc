@@ -28,6 +28,13 @@ def helper() -> str:
     out: list[str] = [
         "\nSECTION \"Generated fast OAM DMA\", ROM0\n",
         "nes_oam_dma_fast_unrolled:\n",
+        "    ; FIT has its own scaled sprite projector/tile-bank ownership.\n",
+        "    ; Keep the fast normal-renderer projector out of that path.\n",
+        "    ld b, a\n",
+        "    ld a, [nes_fit_screen]\n",
+        "    and a\n",
+        "    ld a, b\n",
+        "    jp nz, nes_oam_dma\n",
         "    ; Input A = NES DMA source page. Preserve exact runtime semantics.\n",
         "    ld h, a\n",
         "    ld l, $00\n",
