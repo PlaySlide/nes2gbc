@@ -278,6 +278,16 @@ nes_ppu_cpu_write:
     call nes_video_rebuild_generic_maps_atomic
 
 .mask_apply_now:
+IF !DEF(NES2GBC_NO_PACING)
+    ; An early-started (paced) NMI is logically in NES VBlank while the host
+    ; is still scanning out the previous frame: publish at the next VBlank.
+    ld a, [nes_pace_early]
+    and a
+    jr z, .mask_apply_live
+    ld [nes_pace_mask_deferred], a
+    ret
+.mask_apply_live:
+ENDC
     jp nes_video_update_mask
 
 .mask_defer:
@@ -575,6 +585,13 @@ nes_ppu_write_data:
     jr nz, .nametable_stage
 
 .nametable_generic_nmi:
+IF !DEF(NES2GBC_NO_PACING)
+    ; Rendering-off direct writes are only hidden once the (deferred) mask
+    ; is live; before the next VBlank of an early NMI, stage them.
+    ld a, [nes_pace_early]
+    and a
+    jr nz, .nametable_stage
+ENDC
     ld a, [nes_ppumask]
     and $18
     jr z, .nametable_sync_now

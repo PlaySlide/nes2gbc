@@ -792,6 +792,24 @@ nes_brk_hl:
 nes_rti_pop_hl:
     xor a
     ld [nes_nmi_active], a
+IF !DEF(NES2GBC_NO_PACING)
+    ; This NES frame is complete but not yet published. If a host VBlank
+    ; already elapsed while it ran, let the next NMI start right away.
+    inc a
+    ld [nes_pace_unpublished], a
+    ld a, [nes_pace_credit]
+    and a
+    jr z, .no_credit
+    ld a, [nes_pace_idle_hi]
+    and a
+    jr z, .no_credit
+    xor a
+    ld [nes_pace_credit], a
+    inc a
+    ld [nes_pace_armed], a
+    ldh [nes_host_vblank_pending], a
+.no_credit:
+ENDC
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -809,6 +827,27 @@ nes_poll_nmi_hl:
     ldh a, [nes_host_vblank_pending]
     and a
     ret z
+IF !DEF(NES2GBC_NO_PACING)
+    ; An early (paced) NMI start must not preempt main-thread work that on
+    ; hardware would finish before the next NMI: only start it once the game
+    ; is back in its idle loop. Keep the event pending otherwise.
+    ld a, [nes_pace_armed]
+    and a
+    jr z, .pace_any_pc
+    ld a, [nes_pace_idle_lo]
+    cp l
+    jr nz, .pace_not_idle
+    ld a, [nes_pace_idle_hi]
+    cp h
+    jr nz, .pace_not_idle
+    xor a
+    ld [nes_pace_armed], a
+    jr .pace_any_pc
+.pace_not_idle:
+    xor a
+    ret
+.pace_any_pc:
+ENDC
 
     ; Consume the host event. If NES NMI is disabled or already active, this
     ; frame is intentionally dropped instead of creating back-to-back NMIs.
@@ -817,14 +856,55 @@ nes_poll_nmi_hl:
 
     ld a, [nes_ppuctrl]
     bit 7, a
+IF !DEF(NES2GBC_NO_PACING)
+    jp z, .no_nmi ; out of JR range with pacing + debug flavours
+ELSE
     jr z, .no_nmi
+ENDC
 
     ld a, [nes_nmi_active]
     and a
+IF !DEF(NES2GBC_NO_PACING)
+    jp nz, .no_nmi
+ELSE
     jr nz, .no_nmi
+ENDC
 
     ld a, $01
     ld [nes_nmi_active], a
+
+IF !DEF(NES2GBC_NO_PACING)
+    ; Early start while the previous frame is still unpublished: snapshot it
+    ; for the VBlank ISR and keep its queued nametable entries (the next frame
+    ; appends to the same queue; values come from authoritative WRAM).
+    ld a, [nes_pace_unpublished]
+    and a
+    jr z, .pace_normal
+    push hl
+    call nes_pace_take_snapshot
+    pop hl
+    ld a, $01
+    ld [nes_pace_early], a
+    jp .stage_seen_clear_done
+.pace_normal:
+    ; VBlank-triggered start: two in a row at the same resume PC identify
+    ; the idle loop.
+    ld a, [nes_pace_cand_lo]
+    cp l
+    jr nz, .pace_new_cand
+    ld a, [nes_pace_cand_hi]
+    cp h
+    jr nz, .pace_new_cand
+    ld a, l
+    ld [nes_pace_idle_lo], a
+    ld a, h
+    ld [nes_pace_idle_hi], a
+.pace_new_cand:
+    ld a, l
+    ld [nes_pace_cand_lo], a
+    ld a, h
+    ld [nes_pace_cand_hi], a
+ENDC
 
     ; Begin a fresh all-or-nothing nametable transaction for this NES NMI.
     ; The previous transaction was published before the host VBlank that
@@ -898,3 +978,216 @@ nes_unimplemented_operand_read:
 
 nes_unimplemented_operand_write:
     ret
+
+IF !DEF(NES2GBC_NO_PACING)
+; Live video state produced by translated NMI code and consumed by the VBlank
+; commit. Swapped with nes_pace_snap around a paced publication.
+MACRO PACE_SWAP_VAR ; var, snapshot index
+    ld a, [\1]
+    ld b, a
+    ld a, [nes_pace_snap + \2]
+    ld [\1], a
+    ld a, b
+    ld [nes_pace_snap + \2], a
+ENDM
+
+MACRO PACE_COPY_VAR ; var, snapshot index
+    ld a, [\1]
+    ld [nes_pace_snap + \2], a
+ENDM
+
+DEF PACE_IDX_OAM_DIRTY EQU 4
+DEF PACE_IDX_MASK_DIRTY EQU 8
+DEF PACE_IDX_PALETTE_DIRTY EQU 18
+DEF PACE_IDX_SCROLL_DIRTY EQU 19
+DEF PACE_IDX_CTRL_DIRTY EQU 20
+
+MACRO PACE_FOR_VARS ; op macro
+    \1 nes_ppuctrl, 0
+    \1 nes_ppumask, 1
+    \1 nes_ppu_scroll_x, 2
+    \1 nes_ppu_scroll_y, 3
+    \1 nes_oam_dirty, 4
+    \1 nes_nametable_queue_ptr_lo, 5
+    \1 nes_nametable_queue_ptr_hi, 6
+    \1 nes_nametable_queue_overflow, 7
+    \1 nes_mask_dirty, 8
+    \1 nes_nametable_stage_used, 9
+    \1 nes_split_duplicate_streak, 10
+    \1 nes_split_retire_grace_used, 11
+    \1 nes_generic_map_rebuild_dirty, 12
+    \1 nes_generic_hidden_change_count, 13
+    \1 nes_view_x, 14
+    \1 nes_view_y, 15
+    \1 nes_oam_emit_count, 16
+    \1 nes_oam_shadow_ready, 17
+    \1 nes_palette_dirty, 18
+    \1 nes_scroll_dirty, 19
+    \1 nes_ctrl_dirty, 20
+    \1 nes_scroll_pair_count, 21
+    \1 nes_split_active, 22
+    \1 nes_split_top_x, 23
+    \1 nes_split_top_y, 24
+    \1 nes_split_bottom_x, 25
+    \1 nes_split_bottom_y, 26
+    \1 nes_split_line, 27
+    \1 nes_split_top_ctrl, 28
+    \1 nes_split_bottom_ctrl, 29
+    \1 nes_split_pending_x, 30
+    \1 nes_split_pending_y, 31
+    \1 nes_split_pending_ctrl, 32
+ENDM
+
+ASSERT 33 <= $30 ; PACE_FOR_VARS entries fit nes_pace_snap
+
+; Copy the just-completed frame's publishable state into the pacing snapshot.
+; Clobbers AF/BC/DE/HL.
+nes_pace_take_snapshot:
+    ; Project OAM now if needed, exactly as the commit would have.
+    ld a, [nes_oam_dirty]
+    and a
+    jr z, .oam_ok
+    ldh a, [nes_oam_shadow_ready]
+    and a
+    jr nz, .oam_ok
+    call nes_video_build_oam_shadow
+.oam_ok:
+    ld hl, nes_gbc_oam_shadow
+    ld de, nes_pace_oam
+    ld b, $A0
+.copy_oam:
+    ld a, [hli]
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .copy_oam
+
+    ldh a, [nes_palette_dirty]
+    ld [nes_pace_snap_palette], a
+    and a
+    jr z, .palette_done
+    ld hl, nes_gbc_palette_shadow
+    ld de, nes_pace_palette
+    ld b, $40
+.copy_palette:
+    ld a, [hli]
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .copy_palette
+.palette_done:
+
+    PACE_FOR_VARS PACE_COPY_VAR
+    ; The snapshot now owns this frame's pending publications; the running
+    ; NMI starts with nothing dirty, as after an ordinary commit.
+    xor a
+    ld [nes_oam_dirty], a
+    ld [nes_mask_dirty], a
+    ldh [nes_palette_dirty], a
+    ldh [nes_scroll_dirty], a
+    ldh [nes_ctrl_dirty], a
+    ld a, $01
+    ld [nes_pace_snap_valid], a
+    xor a
+    ld [nes_pace_unpublished], a
+    ldh [nes_scroll_pair_count], a
+    ret
+
+; After a paced publication flushed the snapshot's queue prefix
+; [$D800, nes_pace_q_end), drop that prefix from the live queue (the running
+; NMI appended after it) and clear its dedupe-bitmap bytes so later writes to
+; those addresses are queued again. Clearing a whole bitmap byte can only
+; cause harmless duplicate entries. Runs in the ISR; WRAM bank 1 is current.
+nes_pace_retire_flushed_queue:
+    ld a, [nes_pace_q_end_lo]
+    ld e, a
+    ld a, [nes_pace_q_end_hi]
+    ld d, a
+    ; Empty prefix?
+    cp HIGH(nes_nametable_queue)
+    jr nz, .clear_bits
+    ld a, e
+    and a
+    ret z
+.clear_bits:
+    ; Walk prefix entries, clearing the stage-seen byte for each.
+    ld hl, nes_nametable_queue
+.bit_loop:
+    ld a, l
+    cp e
+    jr nz, .bit_entry
+    ld a, h
+    cp d
+    jr z, .bits_done
+.bit_entry:
+    ld a, [hli]
+    ld c, a
+    ld a, [hli]
+    ld b, a
+    ; index = ((B & 7) << 5) | (C >> 3)
+    ld a, c
+    srl a
+    srl a
+    srl a
+    ld c, a
+    ld a, b
+    and $07
+    swap a
+    add a
+    or c
+    ld c, a
+    ld b, HIGH(nes_nametable_stage_seen)
+    ld a, $06
+    ldh [rSVBK], a
+    xor a
+    ld [bc], a
+    ld a, $01
+    ldh [rSVBK], a
+    jr .bit_loop
+.bits_done:
+    ; Move live entries [prefix_end, ptr) down to the queue start.
+    ld hl, nes_nametable_queue
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld c, a
+    ld a, [nes_nametable_queue_ptr_hi]
+    ld b, a
+.move_loop:
+    ld a, e
+    cp c
+    jr nz, .move_one
+    ld a, d
+    cp b
+    jr z, .move_done
+.move_one:
+    ld a, [de]
+    inc de
+    ld [hli], a
+    jr .move_loop
+.move_done:
+    ld a, l
+    ld [nes_nametable_queue_ptr_lo], a
+    ld a, h
+    ld [nes_nametable_queue_ptr_hi], a
+    ret
+
+; Exchange live state with the snapshot (used on ISR entry and exit).
+; Clobbers AF/BC/DE/HL.
+nes_pace_swap:
+    PACE_FOR_VARS PACE_SWAP_VAR
+    ld a, [nes_pace_snap_palette]
+    and a
+    ret z
+    ld hl, nes_gbc_palette_shadow
+    ld de, nes_pace_palette
+    ld b, $40
+.swap_palette:
+    ld c, [hl]
+    ld a, [de]
+    ld [hli], a
+    ld a, c
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .swap_palette
+    ret
+ENDC

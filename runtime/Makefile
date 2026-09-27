@@ -4,6 +4,7 @@ HEADER_OBJ := build/header_reserve.o
 TRACE ?= 0
 PROFILE ?= 0
 PROFILE_TRACE ?= 0
+PACING ?= 1
 
 RGBASM_FLAGS :=
 ifeq ($(TRACE),1)
@@ -14,6 +15,9 @@ RGBASM_FLAGS += -D NES2GBC_PROFILE=1
 endif
 ifeq ($(PROFILE_TRACE),1)
 RGBASM_FLAGS += -D NES2GBC_PROFILE=1 -D NES2GBC_PROFILE_TRACE=1
+endif
+ifeq ($(PACING),0)
+RGBASM_FLAGS += -D NES2GBC_NO_PACING=1
 endif
 
 .PHONY: all clean
