@@ -1250,15 +1250,9 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                     writeln!(out, "    scf ; known 6502 C=1 (SEC)").unwrap();
                 }
                 None => {
-                    writeln!(out, "    ld a, d").unwrap();
+                    // nes_c_shadow is normalized to 0/1: RRA seeds host C.
                     writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(out, "    jr z, :+").unwrap();
-                    writeln!(out, "    scf").unwrap();
-                    writeln!(out, "    jr :++").unwrap();
-                    writeln!(out, ":").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(out, ":").unwrap();
+                    writeln!(out, "    rra ; seed host carry from 6502 C").unwrap();
                 }
             }
             writeln!(out, "    ld a, d").unwrap();
