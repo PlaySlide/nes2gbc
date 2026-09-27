@@ -1108,6 +1108,9 @@ nes_pace_take_snapshot:
     ld [nes_oam_pace_page], a
     xor HIGH(nes_gbc_oam_shadow) ^ HIGH(nes_pace_oam)
     ld [nes_oam_live_page], a
+    ; Non-paced DMA source follows the live page (a paced publish overrides
+    ; it with the pace page and restores the live page afterwards).
+    ld [nes_oam_dma_page], a
     ld a, $01
     ld [nes_oam_live_stale], a
 .oam_snap_done:
