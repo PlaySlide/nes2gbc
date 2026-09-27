@@ -567,6 +567,8 @@ nes_joy_serial_loop::
     ldh a, [nes_x]
     add d
     jr c, .generic
+    cp $17
+    jr z, .fast4017
     cp $16
     jr nz, .generic
     ld a, [nes_controller_strobe]
@@ -600,6 +602,29 @@ nes_joy_serial_loop::
     ld [hl], a
     ld a, d
     ld [nes_controller_shift], a
+    jr .done
+.fast4017:
+    ; $4017 reads are 0 (nes_cpu_read_joy_hl): each bit shifts a 0 into A.
+    ldh a, [nes_y]
+    ld b, a
+    ldh a, [nes_a]
+    ld c, a
+.fast17_loop:
+    ld l, c
+    sla c
+    dec b
+    jr nz, .fast17_loop
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+    ld b, l
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], b
+    ld h, $C0
+    ld l, e
+    ld [hl], $00
     jr .done
 .generic:
     ldh a, [nes_y]
