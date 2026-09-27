@@ -14,7 +14,8 @@ This final pass (run after all pattern passes):
   PROFILE_TRACE variables, so `make gbc PROFILE=1` packs for that build),
 * merges consecutive old code banks, whole-bank at a time, into new banks up
   to LIMIT bytes. Whole-bank merging keeps every block together with the
-  "Hot PRG mirrors bNN" section its mirrored table reads refer to,
+  "Hot PRG mirrors bNN" section its mirrored table reads refer to and the
+  "Native leaf XXXX bank NN" sections its blocks `call` directly,
 * rewrites every cross-bank transfer to use a symbolic `BANK(target)`, and
   when source and target now share a bank replaces the trampoline with
   `xor a` (the helper's host-flag normalization) + direct `jp target`.
@@ -24,7 +25,7 @@ import re, sys
 from pathlib import Path
 
 LIMIT = 0x4000 - 0x200
-SEC_RE = re.compile(r'^(\s*SECTION\s+"(NES block [0-9A-Fa-f]{4}|NES canonical superblock entry [0-9A-Fa-f]{4}|Hot PRG mirrors b\d+)",\s*ROMX,\s*BANK\[)(\d+)(\].*)$')
+SEC_RE = re.compile(r'^(\s*SECTION\s+"(NES block [0-9A-Fa-f]{4}|NES canonical superblock entry [0-9A-Fa-f]{4}|Hot PRG mirrors b\d+|Native leaf [0-9A-Fa-f]{4} bank \d+)",\s*ROMX,\s*BANK\[)(\d+)(\].*)$')
 ANY_SEC = re.compile(r"^\s*SECTION\b")
 LABEL_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):{1,2}$")
 REG8 = {"a", "b", "c", "d", "e", "h", "l", "[hl]"}
