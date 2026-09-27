@@ -45,7 +45,28 @@ fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
 // Return (indirect JMP PC, pointer zp) when the entry has this shape.
 fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
  let start=off(mapper,prg.len(),entry).ok()?;
- let end=(start+48).min(prg.len());
+ let hard_end=(start+48).min(prg.len());
+
+ // Do not let byte-pattern recognition bleed into the next routine. Tennis
+ // places an ordinary returning subroutine at $C375 immediately before its
+ // real inline-table dispatcher at $C38B; scanning blindly across the RTS at
+ // $C38A misclassifies $C375 as non-returning and drops its real return PC.
+ let mut end=hard_end;
+ let mut scan_pc=entry;
+ while let Ok(ins)=dec(mapper,prg,scan_pc){
+  let o=match off(mapper,prg.len(),scan_pc){Ok(o)=>o,Err(_)=>break};
+  if o>=hard_end{break}
+  let next=scan_pc.wrapping_add(ins.def.len()as u16);
+  if matches!(ins.def.mnemonic,Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){
+   end=(o+ins.def.len()).min(hard_end);
+   break
+  }
+  if matches!(ins.def.mnemonic,Mnemonic::Jmp){
+   end=(o+ins.def.len()).min(hard_end);
+   break
+  }
+  scan_pc=next;
+ }
  if end<=start+12{return None}
 
  let mut pop=None;
@@ -359,6 +380,40 @@ mod tests {
         put(&mut prg, 0x8E04, &[0x60]);
 
         assert!(looks_like_code(0, &prg, 0x8231));
+    }
+
+    #[test]
+    fn x_temp_dispatcher_probe_does_not_cross_prior_rts() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        // Ordinary returning subroutine immediately followed by a genuine
+        // TAX/STX inline-table dispatcher, matching Tennis $C375/$C38B.
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xA2, 0x03,       // LDX #3
+                0xC6, 0x20,       // DEC $20
+                0x10, 0x02,       // BPL +2
+                0xEA, 0xEA,       // harmless body
+                0x60,             // RTS
+                0x0A,             // dispatcher begins here
+                0xA8,
+                0xC8,
+                0x68, 0x85, 0x14,
+                0x68, 0x85, 0x15,
+                0xB1, 0x14,
+                0xAA,
+                0xC8,
+                0xB1, 0x14,
+                0x85, 0x15,
+                0x86, 0x14,
+                0x6C, 0x14, 0x00,
+            ],
+        );
+
+        assert!(inline_jsr_dispatcher(0, &prg, 0x9000).is_none());
+        assert!(inline_jsr_dispatcher(0, &prg, 0x9009).is_some());
     }
 
     #[test]
