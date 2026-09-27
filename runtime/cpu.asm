@@ -525,6 +525,57 @@ nes_cpu_read_hi::
     jp nz, nes_cpu_read.prg
     jp nes_cpu_read
 
+; Native serial joypad loop (tools/native_joypad_loops.py):
+;   loop: PHA / LDA $40D,X / STA $00E / LSR / ORA $00E / LSR / PLA / ROL /
+;         DEY / BNE loop
+; In: D = low byte of the port base ($16/$17), E = zero-page address.
+; Runs NES Y iterations (0 = 256). Out (HRAM state): A, C = last ROL carry,
+; Y = 0, Z set / N clear (DEY), [zp] = last read, stack byte at SP = last
+; pushed A. X, V, SP unchanged. Clobbers AF/BC/DE/HL.
+nes_joy_serial_loop::
+    ldh a, [nes_y]
+    ld b, a
+    ldh a, [nes_a]
+    ld c, a
+.loop:
+    ; PHA ... PLA leaves SP unchanged but the pushed byte stays in memory.
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], c
+    ldh a, [nes_x]
+    add d
+    ld l, a
+    ld a, $40
+    adc 0
+    ld h, a
+    push bc
+    push de
+    call nes_cpu_read_joy_hl
+    pop de
+    pop bc
+    ld h, $C0
+    ld l, e
+    ld [hl], a
+    ; carry = bit0 of (v | v >> 1), rotated into the pulled A.
+    ld l, a
+    srl a
+    or l
+    rra
+    rl c
+    dec b ; DEC keeps the ROL carry
+    jr nz, .loop
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+    ld a, c
+    ldh [nes_a], a
+    xor a
+    ldh [nes_y], a
+    ldh [nes_z_shadow], a
+    ldh [nes_n_shadow], a
+    ret
+
 ; Generic CPU write. Input HL = NES CPU address, A = value.
 nes_cpu_write:
     PROFILE_INC nes_profile_cpu_write
