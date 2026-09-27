@@ -6,6 +6,10 @@ PROFILE_TRACE ?= 0
 PEEPHOLE ?= 1
 # Compiler register allocation level (src/state_superblock.rs); 0 = previous emission.
 REGALLOC ?= 3
+# NES APU/sound emulation (runtime/apu.asm, docs/APU.md). 0 (default) = silent,
+# no APU cost; 1 = APU register writes/$4015 reads drive CGB sound. Set it on
+# `make generate`/`make gbc`; it is recorded in runtime/generated_config.inc.
+APU ?= 0
 POSTPASS_THROUGH ?= all
 # Profile-guided translated-code bank packing (tools/bench/bank_profile.py).
 # Defaults to profiles/<rom name>.bankprof when that file exists; BANK_PROFILE=
@@ -29,14 +33,17 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-xy-zp # add X/Y + hot-ZP caches only'
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-a     # add A cache too'
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache       # add all cache passes'
+	@echo '  make gbc ROM="path/to/game.nes" APU=1         # enable NES sound (APU emulation)'
 	@echo '  make test'
 
 generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
+	@if [ "$(APU)" = "1" ]; then echo 'DEF NES2GBC_APU EQU 1 ; make generate APU=1' > runtime/generated_config.inc; \
+	else echo '; make generate APU=0: NES APU emulation disabled' > runtime/generated_config.inc; fi
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
-		NES2GBC_REGALLOC="$(REGALLOC)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	else \
-		NES2GBC_REGALLOC="$(REGALLOC)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \

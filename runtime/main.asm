@@ -1,3 +1,6 @@
+; Build configuration written by `make generate` (APU=1 defines NES2GBC_APU).
+INCLUDE "generated_config.inc"
+
 ; nes2gbc Game Boy Color runtime skeleton.
 INCLUDE "hardware.inc"
 
@@ -115,6 +118,9 @@ nes_gbc_vblank_isr:
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
     call nes_diag_snapshot_frame
+IF DEF(NES2GBC_APU)
+    call nes_apu_frame_tick
+ENDC
 
 IF !DEF(NES2GBC_NO_PACING)
     ; Frame pacing: a completed-but-unpublished frame was snapshotted when the
@@ -1067,6 +1073,9 @@ ENDC
     call nes_generated_init
     call nes_generated_follow_init
     call nes_video_init
+IF DEF(NES2GBC_APU)
+    call nes_apu_init
+ENDC
     ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
     call nes_profile_reset
 
@@ -1083,6 +1092,9 @@ ENDC
     jp nes_reset
 
 INCLUDE "io.asm"
+IF DEF(NES2GBC_APU)
+INCLUDE "apu.asm"
+ENDC
 INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
