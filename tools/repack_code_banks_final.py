@@ -397,7 +397,9 @@ def finish(p, lines, codes, sections, sec_of_line, mapping, old_banks, sec_bank=
         src_old = sections[sidx][2] if sidx is not None else None
         if tgt in label_bank and src_old is not None and not sections[sidx][3] and \
                 sec_bank[sidx] == label_bank[tgt]:
-            out[i - 2] = "    xor a ; same-bank after repack: keep helper flag normalization\n"
+            # Block entries never assume A/flags (dispatch_hl enters them with
+            # arbitrary values), so the helper's A=0 normalization is dropped.
+            out[i - 2] = ""
             out[i - 1] = ""
             out[i] = f"    jp {tgt} ; repacked same-bank direct transfer\n"
             direct += 1
