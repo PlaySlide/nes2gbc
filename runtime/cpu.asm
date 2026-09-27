@@ -1098,17 +1098,19 @@ nes_pace_take_snapshot:
     jr nz, .oam_ok
     call nes_video_build_oam_shadow
 .oam_ok:
-    ld hl, nes_gbc_oam_shadow
-    ld de, nes_pace_oam
-    ld b, 10
-.copy_oam:
-    REPT 16
-    ld a, [hli]
-    ld [de], a
-    inc e
-    ENDR
-    dec b
-    jr nz, .copy_oam
+    ; Only a dirty snapshot is ever DMA'd (paced publish or inherited flag).
+    ; Hand it the live projected page instead of copying 160 bytes.
+    ld a, [nes_oam_dirty]
+    and a
+    jr z, .oam_snap_done
+    call nes_oam_resolve_stale
+    ld a, [nes_oam_live_page]
+    ld [nes_oam_pace_page], a
+    xor HIGH(nes_gbc_oam_shadow) ^ HIGH(nes_pace_oam)
+    ld [nes_oam_live_page], a
+    ld a, $01
+    ld [nes_oam_live_stale], a
+.oam_snap_done:
 
     ldh a, [nes_palette_dirty]
     ld [nes_pace_snap_palette], a
@@ -1220,6 +1222,22 @@ nes_pace_retire_flushed_queue:
     ld a, h
     ld [nes_nametable_queue_ptr_hi], a
     ret
+
+; A stale live OAM page's true contents are the pace page (nobody writes the
+; pace page but projectors that owned it as live): point live back at it.
+; Keeps the non-paced DMA source in sync. Clobbers A.
+nes_oam_resolve_stale:
+    ld a, [nes_oam_live_stale]
+    and a
+    ret z
+    xor a
+    ld [nes_oam_live_stale], a
+    ld a, [nes_oam_pace_page]
+    ld [nes_oam_live_page], a
+    ld [nes_oam_dma_page], a
+    ret
+
+ASSERT LOW(nes_gbc_oam_shadow) == 0 && LOW(nes_pace_oam) == 0
 
 ; Exchange live state with the snapshot (used on ISR entry and exit).
 ; Clobbers AF/BC/DE/HL.

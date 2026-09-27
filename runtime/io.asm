@@ -232,6 +232,18 @@ nes_pace_cand_lo:       ds 1 ; resume PC of the previous VBlank NMI start
 nes_pace_cand_hi:       ds 1
 nes_pace_snap:          ds $30
 
+IF !DEF(NES2GBC_NO_PACING)
+; Projected-OAM ping-pong between nes_gbc_oam_shadow ($CB00) and nes_pace_oam
+; ($CE00). Projectors write the live page; a pacing snapshot takes ownership
+; of the live page instead of copying it and the live side moves to the other
+; buffer, marked stale ("true contents are the pace page") until the next
+; projection. Consumers resolve staleness first (see nes_oam_resolve_stale).
+SECTION "NES OAM ping-pong state", WRAM0
+nes_oam_live_page:      ds 1
+nes_oam_pace_page:      ds 1
+nes_oam_live_stale:     ds 1
+ENDC
+
 ; Snapshot of the completed frame's projected OAM and palette shadow.
 SECTION "NES pacing OAM snapshot", WRAM0[$CE00]
 nes_pace_oam:           ds $A0

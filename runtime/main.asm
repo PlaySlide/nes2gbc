@@ -160,7 +160,7 @@ IF !DEF(NES2GBC_NO_PACING)
     ld [nes_pace_q_end_lo], a
     ld a, [nes_nametable_queue_ptr_hi]
     ld [nes_pace_q_end_hi], a
-    ld a, HIGH(nes_pace_oam)
+    ld a, [nes_oam_pace_page]
     ld [nes_oam_dma_page], a
     xor a
     ld [nes_nmi_active], a
@@ -318,6 +318,9 @@ ENDC
     jp nz, .oam_shadow_ready
     call nes_video_build_oam_shadow
 .oam_shadow_ready:
+IF !DEF(NES2GBC_NO_PACING)
+    call nes_oam_resolve_stale
+ENDC
     call nes_video_sync_oam_hw
 .oam_done:
 
@@ -499,7 +502,7 @@ IF !DEF(NES2GBC_NO_PACING)
     ld [nes_pace_isr_active], a
     inc a
     ld [nes_nmi_active], a
-    ld a, HIGH(nes_gbc_oam_shadow)
+    ld a, [nes_oam_live_page]
     ld [nes_oam_dma_page], a
     ; The swap-back/retire tail can cross the HUD split line: let only STAT
     ; nest (it reads just nes_split_active from the swapped set, and every
@@ -1005,6 +1008,13 @@ Start:
     ld [nes_pace_cand_hi], a
     ld a, HIGH(nes_gbc_oam_shadow)
     ld [nes_oam_dma_page], a
+IF !DEF(NES2GBC_NO_PACING)
+    ld [nes_oam_live_page], a
+    ld a, HIGH(nes_pace_oam)
+    ld [nes_oam_pace_page], a
+    xor a
+    ld [nes_oam_live_stale], a
+ENDC
     xor a
     ; Empty direct-mapped dispatch cache (tag 0 never matches NES PC >= $8000).
     ld hl, nes_dispatch_dm_tag
