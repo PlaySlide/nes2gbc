@@ -58,11 +58,11 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
   if o>=hard_end{break}
   let next=scan_pc.wrapping_add(ins.def.len()as u16);
   if matches!(ins.def.mnemonic,Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){
-   end=(o+ins.def.len()).min(hard_end);
+   end=(o+ins.def.len() as usize).min(hard_end);
    break
   }
   if matches!(ins.def.mnemonic,Mnemonic::Jmp){
-   end=(o+ins.def.len()).min(hard_end);
+   end=(o+ins.def.len() as usize).min(hard_end);
    break
   }
   scan_pc=next;
