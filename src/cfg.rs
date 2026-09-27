@@ -69,6 +69,41 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
   }
   j+=1;
  }
+ // Some Nintendo dispatchers keep the low target byte in X while reusing
+ // the popped return-address zero-page pair as the final JMP pointer:
+ //
+ //   LDA (base),Y
+ //   TAX
+ //   INY
+ //   LDA (base),Y
+ //   STA base+1
+ //   STX base
+ //   JMP (base)
+ //
+ // Tennis and Dig Dug use this compact variant. It is the same inline-word
+ // table convention as the STA/STA form below; only the temporary differs.
+ if low.is_none(){
+  let mut j=pop_i+6;
+  while j+2<end{
+   if prg[j]==0xB1&&prg[j+1]==base&&prg[j+2]==0xAA{
+    let mut k=j+3;
+    let k_end=(j+8).min(end.saturating_sub(8));
+    while k<=k_end{
+     if k+8<end
+      &&prg[k]==0xB1&&prg[k+1]==base
+      &&prg[k+2]==0x85&&prg[k+3]==base.wrapping_add(1)
+      &&prg[k+4]==0x86&&prg[k+5]==base
+      &&prg[k+6]==0x6C&&prg[k+7]==base&&prg[k+8]==0x00
+     {
+      let delta=(k+6-start)as u16;
+      return Some((entry.wrapping_add(delta),base as u16))
+     }
+     k+=1;
+    }
+   }
+   j+=1;
+  }
+ }
  let (low_i,pointer)=low?;
 
  let mut high=None;
@@ -324,6 +359,53 @@ mod tests {
         put(&mut prg, 0x8E04, &[0x60]);
 
         assert!(looks_like_code(0, &prg, 0x8231));
+    }
+
+    #[test]
+    fn discovers_inline_table_dispatcher_with_x_temp() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0x20, 0x00, 0x91, // JSR $9100
+                0x00, 0x92,       // .word $9200
+                0x10, 0x92,       // .word $9210
+                0x00, 0x00,       // terminator / following non-code
+            ],
+        );
+        put(
+            &mut prg,
+            0x9100,
+            &[
+                0x0A,             // ASL
+                0xA8,             // TAY
+                0xC8,             // INY
+                0x68, 0x85, 0x14, // PLA / STA $14
+                0x68, 0x85, 0x15, // PLA / STA $15
+                0xB1, 0x14,       // LDA ($14),Y
+                0xAA,             // TAX (hold low target byte)
+                0xC8,             // INY
+                0xB1, 0x14,       // LDA ($14),Y
+                0x85, 0x15,       // STA $15 (high target byte)
+                0x86, 0x14,       // STX $14 (low target byte)
+                0x6C, 0x14, 0x00, // JMP ($0014)
+            ],
+        );
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        assert!(!graph.blocks.contains_key(&0x9003));
+        let dispatcher = graph.blocks.get(&0x9100).unwrap();
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0014 })
+                && edge.target == Some(0x9200)
+        }));
     }
 
     #[test]
