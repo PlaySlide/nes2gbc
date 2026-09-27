@@ -1011,6 +1011,36 @@ MACRO PACE_COPY_VAR ; var, snapshot index
     ld [nes_pace_snap + \2], a
 ENDM
 
+; DE-walking forms (DE = nes_pace_snap + index; the snapshot does not cross a
+; page, so inc e). kind H = HRAM variable (ldh), W = WRAM variable.
+MACRO PACE_SWAP_DE ; var, snapshot index, kind
+IF STRCMP("\3", "H") == 0
+    ldh a, [\1]
+    ld b, a
+    ld a, [de]
+    ldh [\1], a
+    ld a, b
+ELSE
+    ld hl, \1
+    ld b, [hl]
+    ld a, [de]
+    ld [hl], a
+    ld a, b
+ENDC
+    ld [de], a
+    inc e
+ENDM
+
+MACRO PACE_COPY_DE ; var, snapshot index, kind
+IF STRCMP("\3", "H") == 0
+    ldh a, [\1]
+ELSE
+    ld a, [\1]
+ENDC
+    ld [de], a
+    inc e
+ENDM
+
 DEF PACE_IDX_OAM_DIRTY EQU 4
 DEF PACE_IDX_MASK_DIRTY EQU 8
 DEF PACE_IDX_PALETTE_DIRTY EQU 18
@@ -1018,42 +1048,43 @@ DEF PACE_IDX_SCROLL_DIRTY EQU 19
 DEF PACE_IDX_CTRL_DIRTY EQU 20
 
 MACRO PACE_FOR_VARS ; op macro
-    \1 nes_ppuctrl, 0
-    \1 nes_ppumask, 1
-    \1 nes_ppu_scroll_x, 2
-    \1 nes_ppu_scroll_y, 3
-    \1 nes_oam_dirty, 4
-    \1 nes_nametable_queue_ptr_lo, 5
-    \1 nes_nametable_queue_ptr_hi, 6
-    \1 nes_nametable_queue_overflow, 7
-    \1 nes_mask_dirty, 8
-    \1 nes_nametable_stage_used, 9
-    \1 nes_split_duplicate_streak, 10
-    \1 nes_split_retire_grace_used, 11
-    \1 nes_generic_map_rebuild_dirty, 12
-    \1 nes_generic_hidden_change_count, 13
-    \1 nes_view_x, 14
-    \1 nes_view_y, 15
-    \1 nes_oam_emit_count, 16
-    \1 nes_oam_shadow_ready, 17
-    \1 nes_palette_dirty, 18
-    \1 nes_scroll_dirty, 19
-    \1 nes_ctrl_dirty, 20
-    \1 nes_scroll_pair_count, 21
-    \1 nes_split_active, 22
-    \1 nes_split_top_x, 23
-    \1 nes_split_top_y, 24
-    \1 nes_split_bottom_x, 25
-    \1 nes_split_bottom_y, 26
-    \1 nes_split_line, 27
-    \1 nes_split_top_ctrl, 28
-    \1 nes_split_bottom_ctrl, 29
-    \1 nes_split_pending_x, 30
-    \1 nes_split_pending_y, 31
-    \1 nes_split_pending_ctrl, 32
+    \1 nes_ppuctrl, 0, W
+    \1 nes_ppumask, 1, W
+    \1 nes_ppu_scroll_x, 2, W
+    \1 nes_ppu_scroll_y, 3, W
+    \1 nes_oam_dirty, 4, W
+    \1 nes_nametable_queue_ptr_lo, 5, W
+    \1 nes_nametable_queue_ptr_hi, 6, W
+    \1 nes_nametable_queue_overflow, 7, W
+    \1 nes_mask_dirty, 8, W
+    \1 nes_nametable_stage_used, 9, W
+    \1 nes_split_duplicate_streak, 10, W
+    \1 nes_split_retire_grace_used, 11, W
+    \1 nes_generic_map_rebuild_dirty, 12, W
+    \1 nes_generic_hidden_change_count, 13, W
+    \1 nes_view_x, 14, H
+    \1 nes_view_y, 15, H
+    \1 nes_oam_emit_count, 16, H
+    \1 nes_oam_shadow_ready, 17, H
+    \1 nes_palette_dirty, 18, H
+    \1 nes_scroll_dirty, 19, H
+    \1 nes_ctrl_dirty, 20, H
+    \1 nes_scroll_pair_count, 21, H
+    \1 nes_split_active, 22, H
+    \1 nes_split_top_x, 23, H
+    \1 nes_split_top_y, 24, H
+    \1 nes_split_bottom_x, 25, H
+    \1 nes_split_bottom_y, 26, H
+    \1 nes_split_line, 27, H
+    \1 nes_split_top_ctrl, 28, H
+    \1 nes_split_bottom_ctrl, 29, H
+    \1 nes_split_pending_x, 30, H
+    \1 nes_split_pending_y, 31, H
+    \1 nes_split_pending_ctrl, 32, H
 ENDM
 
 ASSERT 33 <= $30 ; PACE_FOR_VARS entries fit nes_pace_snap
+ASSERT HIGH(nes_pace_snap) == HIGH(nes_pace_snap + 32) ; DE walk uses inc e
 
 ; Copy the just-completed frame's publishable state into the pacing snapshot.
 ; Clobbers AF/BC/DE/HL.
@@ -1096,7 +1127,8 @@ nes_pace_take_snapshot:
     jr nz, .copy_palette
 .palette_done:
 
-    PACE_FOR_VARS PACE_COPY_VAR
+    ld de, nes_pace_snap
+    PACE_FOR_VARS PACE_COPY_DE
     ; The snapshot now owns this frame's pending publications; the running
     ; NMI starts with nothing dirty, as after an ordinary commit.
     xor a
@@ -1192,7 +1224,8 @@ nes_pace_retire_flushed_queue:
 ; Exchange live state with the snapshot (used on ISR entry and exit).
 ; Clobbers AF/BC/DE/HL.
 nes_pace_swap:
-    PACE_FOR_VARS PACE_SWAP_VAR
+    ld de, nes_pace_snap
+    PACE_FOR_VARS PACE_SWAP_DE
     ld a, [nes_pace_snap_palette]
     and a
     ret z
