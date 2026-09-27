@@ -1,0 +1,79 @@
+--- pyboy/core/cpu.py	2026-01-24 17:37:19.000000000 +0900
++++ pyboy/core/cpu.py	2026-09-27 13:07:59.974523717 +0900
+@@ -15,6 +15,7 @@
+ 
+ class CPU:
+     def __init__(self, mb):
++        self.prof_on = False
+         self.A = 0
+         self.F = 0
+         self.B = 0
+@@ -216,4 +217,22 @@
+                 b = pc2
+                 v = (a << 8) + b
+ 
+-        return opcodes.execute_opcode(self, opcode, v)
++        if not self.prof_on:
++            return opcodes.execute_opcode(self, opcode, v)
++        c0 = self.cycles
++        if self.PC < 0x4000:
++            key = self.PC
++        elif self.PC < 0x8000:
++            key = (self.mb.cartridge.rombank_selected & 0xFF) * 0x4000 + (self.PC - 0x4000)
++        else:
++            key = 0x400000 + self.PC
++        r = opcodes.execute_opcode(self, opcode, v)
++        self.prof[key] += self.cycles - c0
++        return r
++
++    def prof_attach(self, arr):
++        self.prof = arr
++        self.prof_on = True
++
++    def prof_detach(self):
++        self.prof_on = False
+--- pyboy/core/cpu.pxd	2026-01-24 17:37:19.000000000 +0900
++++ pyboy/core/cpu.pxd	2026-09-27 13:07:54.722537230 +0900
+@@ -4,7 +4,7 @@
+ #
+ 
+ 
+-from libc.stdint cimport int16_t, int64_t, uint8_t, uint16_t
++from libc.stdint cimport int16_t, int64_t, uint8_t, uint16_t, uint64_t
+ 
+ cimport pyboy.core.mb
+ from pyboy.utils cimport IntIOInterface
+@@ -30,12 +30,14 @@
+     cdef uint8_t interrupts_flag, interrupts_enabled, interrupts_flag_register, interrupts_enabled_register
+ 
+     cdef int64_t cycles
++    cdef bint prof_on
++    cdef uint64_t[::1] prof
+ 
+     cdef inline int check_interrupts(self) noexcept nogil
+     cdef void set_interruptflag(self, int) noexcept nogil
+     cdef bint handle_interrupt(self, uint8_t, uint16_t) noexcept nogil
+ 
+-    @cython.locals(pc1=uint16_t,pc2=uint16_t,pc3=uint16_t, opcode=uint16_t, v=cython.int, a=cython.int, b=cython.int)
++    @cython.locals(pc1=uint16_t,pc2=uint16_t,pc3=uint16_t, opcode=uint16_t, v=cython.int, a=cython.int, b=cython.int, c0=int64_t, key=cython.int, r=uint8_t)
+     cdef inline uint8_t fetch_and_execute(self) noexcept nogil
+     @cython.locals(_cycles0=int64_t)
+     cdef int tick(self, int64_t) noexcept nogil
+--- pyboy/pyboy.py	2026-01-24 17:37:19.000000000 +0900
++++ pyboy/pyboy.py	2026-09-27 13:09:42.433326166 +0900
+@@ -1485,6 +1485,15 @@
+         else:
+             raise PyBoyException("There's no RTC for this cartridge type")
+ 
++    def prof_attach(self, arr):
++        self.mb.cpu.prof_attach(arr)
++
++    def prof_detach(self):
++        self.mb.cpu.prof_detach()
++
++    def button_event_now(self, event):
++        self.mb.buttonevent(event)
++
+     def _cycles(self):
+         return self.mb.cpu.cycles
+ 
