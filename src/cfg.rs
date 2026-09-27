@@ -307,13 +307,23 @@ fn rts_stack_table_targets(mapper:u16,prg:&[u8],rts_pc:u16)->Vec<u16>{
  if high_base!=low_base.wrapping_add(1){return Vec::new()}
 
  let mut out=Vec::new();
+ let mut found_any=false;
  for i in 0..MAX_WORD_TABLE_ENTRIES{
   let a=low_base.wrapping_add(i*2);
   let Ok(t)=off(mapper,prg.len(),a)else{break};
   if t+1>=prg.len(){break}
   let raw=u16::from_le_bytes([prg[t],prg[t+1]]);
   let target=raw.wrapping_add(1);
-  if target<0x8000||!looks_like_code(mapper,prg,target){break}
+  let valid=target>=0x8000&&looks_like_code(mapper,prg,target);
+  if !valid{
+   // Some dispatchers deliberately index from a couple of bytes before the
+   // first real word. Bomberman does this at $D244: Y starts at 2, so the
+   // nominal entry 0 is junk ($6005) and the first real stored target-1 is
+   // $D320 at +2 -> destination $D321.
+   if found_any{break}
+   continue
+  }
+  found_any=true;
   if !out.contains(&target){out.push(target)}
  }
  out
@@ -408,8 +418,10 @@ mod tests {
                 0x60,             // RTS -> synthetic target + 1
             ],
         );
-        // Stored words are target-1, exactly like Bomberman's effect table.
-        put(&mut prg, 0xA000, &[0xFF, 0x91, 0x0F, 0x92, 0x00, 0x00]);
+        // The nominal base can begin with a non-target word; Bomberman has one
+        // such leading slot because the runtime index starts at 2. Real stored
+        // words are target-1.
+        put(&mut prg, 0xA000, &[0x05, 0x60, 0xFF, 0x91, 0x0F, 0x92, 0x00, 0x00]);
         put(&mut prg, 0x9200, &[0x60]);
         put(&mut prg, 0x9210, &[0x60]);
 
