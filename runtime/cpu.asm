@@ -538,6 +538,20 @@ nes_cpu_read_hi::
     jp nz, nes_cpu_read.prg
     jp nes_cpu_read
 
+; 32 KiB PRG variant of nes_cpu_read_hi (tools/inline_prg_reads.py): the
+; build knows PRG is not the mirrored 16 KiB layout, so skip that test.
+; Same results and flags as nes_cpu_read (PRG: `or $40` -> NZ, NC).
+nes_cpu_read_hi32::
+    bit 7, h
+    jp z, nes_cpu_read
+    PROFILE_INC nes_profile_read_prg
+    ld a, h
+    rlca
+    rlca
+    and $01
+    inc a
+    jp nes_cpu_read.prg_select
+
 ; Native serial joypad loop (tools/native_joypad_loops.py):
 ;   loop: PHA / LDA $40D,X / STA $00E / LSR / ORA $00E / LSR / PLA / ROL /
 ;         DEY / BNE loop
