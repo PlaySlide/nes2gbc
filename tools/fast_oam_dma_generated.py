@@ -75,6 +75,13 @@ def helper() -> str:
         "\n",
         "    ld a, [nes_ppuctrl]\n",
         "    ldh [nes_oam_ppuctrl_tmp], a\n",
+        "    ; 8x8 sprites: CGB VRAM bank from PPUCTRL bit 3 selects table page.\n",
+        "    and $08\n",
+        "    rrca\n",
+        "    rrca\n",
+        "    rrca\n",
+        "    add HIGH(nes_oam_attr_table)\n",
+        "    ld [nes_oam_attr_page8], a\n",
         "    ld hl, nes_oam_ram\n",
         "    ld de, nes_gbc_oam_shadow\n",
         "\n",
@@ -128,46 +135,24 @@ def helper() -> str:
         "    and $FE\n",
         "    ld [de], a\n",
         "    inc de\n",
-        "    bit 0, c\n",
-        "    ld b, $00\n",
-        "    jr z, .bank_ready\n",
-        "    ld b, $08\n",
+        "    ld a, c\n",
+        "    and $01\n",
+        "    add HIGH(nes_oam_attr_table)\n",
+        "    ld b, a\n",
         "    jr .bank_ready\n",
         "\n",
         ".sprite_8x8:\n",
         "    ld a, c\n",
         "    ld [de], a\n",
         "    inc de\n",
-        "    ldh a, [nes_oam_ppuctrl_tmp]\n",
-        "    and $08\n",
+        "    ld a, [nes_oam_attr_page8]\n",
         "    ld b, a\n",
         "\n",
+        "    ; B = attribute table page (one page per CGB VRAM bank).\n",
         ".bank_ready:\n",
         "    ld a, [hli]\n",
         "    ld c, a\n",
-        "    and $03\n",
-        "    or b\n",
-        "    ld b, a\n",
-        "\n",
-        "    bit 5, c\n",
-        "    jr z, .no_priority\n",
-        "    ld a, b\n",
-        "    or $80\n",
-        "    ld b, a\n",
-        ".no_priority:\n",
-        "    bit 6, c\n",
-        "    jr z, .no_hflip\n",
-        "    ld a, b\n",
-        "    or $20\n",
-        "    ld b, a\n",
-        ".no_hflip:\n",
-        "    bit 7, c\n",
-        "    jr z, .no_vflip\n",
-        "    ld a, b\n",
-        "    or $40\n",
-        "    ld b, a\n",
-        ".no_vflip:\n",
-        "    ld a, b\n",
+        "    ld a, [bc]\n",
         "    ld [de], a\n",
         "    inc de\n",
         "\n",
@@ -230,6 +215,33 @@ def helper() -> str:
         "    ldh [nes_oam_shadow_ready], a\n",
         "    ret\n",
     ])
+    out.append(attr_table())
+    return "".join(out)
+
+
+def gbc_attr(nes_attr: int, bank: int) -> int:
+    """NES OAM attribute -> CGB OAM flags (palette, bank, flips, priority)."""
+    v = (nes_attr & 0x03) | (bank << 3)
+    if nes_attr & 0x20:
+        v |= 0x80  # behind background
+    if nes_attr & 0x40:
+        v |= 0x20  # horizontal flip
+    if nes_attr & 0x80:
+        v |= 0x40  # vertical flip
+    return v
+
+
+def attr_table() -> str:
+    out = [
+        "\nSECTION \"Generated fast OAM attr page\", WRAM0\n",
+        "nes_oam_attr_page8: ds 1\n",
+        "\nSECTION \"Generated OAM attribute table\", ROM0, ALIGN[8]\n",
+        "nes_oam_attr_table:\n",
+    ]
+    for bank in (0, 1):
+        for row in range(0, 256, 16):
+            vals = ", ".join(f"${gbc_attr(a, bank):02X}" for a in range(row, row + 16))
+            out.append(f"    db {vals}\n")
     return "".join(out)
 
 
