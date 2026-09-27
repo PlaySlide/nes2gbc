@@ -1054,11 +1054,13 @@ nes_pace_take_snapshot:
 .oam_ok:
     ld hl, nes_gbc_oam_shadow
     ld de, nes_pace_oam
-    ld b, $A0
+    ld b, 10
 .copy_oam:
+    REPT 16
     ld a, [hli]
     ld [de], a
     inc e
+    ENDR
     dec b
     jr nz, .copy_oam
 
@@ -1068,11 +1070,13 @@ nes_pace_take_snapshot:
     jr z, .palette_done
     ld hl, nes_gbc_palette_shadow
     ld de, nes_pace_palette
-    ld b, $40
+    ld b, 4
 .copy_palette:
+    REPT 16
     ld a, [hli]
     ld [de], a
     inc e
+    ENDR
     dec b
     jr nz, .copy_palette
 .palette_done:
