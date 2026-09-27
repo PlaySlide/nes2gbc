@@ -107,15 +107,6 @@ nes_gbc_vblank_isr:
     push bc
     push de
     push hl
-
-    ; NES PPUSTATUS bit 7 is a latch, not merely a live scanline test. Set it
-    ; immediately on the host VBlank edge so translated $2002 polling can see
-    ; the event after this (potentially long) ISR returns. $2002 itself clears
-    ; the latch, matching NES behavior.
-    ld a, [nes_ppu_status]
-    or $80
-    ld [nes_ppu_status], a
-
     ; Translated code may be interrupted between selecting a WRAMX bank and
     ; using it (mirrored-PRG reads select banks 2-5). This ISR assumes bank 1
     ; and ends in bank 1, so save and restore the interrupted selection.
