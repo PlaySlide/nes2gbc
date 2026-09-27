@@ -198,21 +198,22 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
  // Form 1b: adjacent low/high table bytes without INY:
  //   LDA table,Y   / STA ptr
  //   LDA table+1,Y / STA ptr+1
+ //   ... optional selector/state work ...
  //   JMP (ptr)
  //
- // Dig Dug uses this compact form at $E4FD to dispatch through the word table
- // at $E563. Y is already an even byte offset, so table/table+1 select the low
- // and high bytes of the same little-endian target.
+ // Dig Dug uses this compact form. Y is already an even byte offset, so
+ // table/table+1 select the low and high bytes of the same little-endian
+ // target. Do not require the JMP to follow immediately: one Dig Dug
+ // dispatcher builds the pointer at $D3DC, performs another small state-table
+ // lookup, then finally JMPs through $EA at $D3EE.
  let mut pc=start;
- while pc.saturating_add(13)<=jmp_pc.saturating_add(3){
+ while pc.saturating_add(10)<=jmp_pc{
   let o=match off(mapper,prg.len(),pc){Ok(o)=>o,Err(_)=>break};
-  if o+13<=prg.len()
-   &&pc.wrapping_add(10)==jmp_pc
+  if o+10<=prg.len()
    &&prg[o]==0xB9
    &&prg[o+3]==0x85&&prg[o+4]==pointer as u8
    &&prg[o+5]==0xB9
    &&prg[o+8]==0x85&&prg[o+9]==pointer.wrapping_add(1)as u8
-   &&prg[o+10]==0x6C&&prg[o+11]==pointer as u8&&prg[o+12]==0x00
   {
    let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
    let high_base=u16::from_le_bytes([prg[o+6],prg[o+7]]);
@@ -359,6 +360,10 @@ mod tests {
                 0x85, 0xEA,       // STA $EA
                 0xB9, 0x01, 0xA0, // LDA $A001,Y
                 0x85, 0xEB,       // STA $EB
+                0xAD, 0x60, 0x04, // unrelated state read
+                0x4A,             // LSR
+                0x29, 0x01,       // AND #1
+                0xA8,             // TAY
                 0x6C, 0xEA, 0x00, // JMP ($00EA)
             ],
         );
