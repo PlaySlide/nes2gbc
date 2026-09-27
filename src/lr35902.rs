@@ -4,6 +4,27 @@ use crate::ir::{ArithmeticOp, Flag, IrOp, LogicOp, ModifyOp, ModifyTarget, Opera
 
 pub const NES_RAM_BASE: u16 = 0xC000;
 
+thread_local! {
+    /// Test-only override of the APU setting (per test thread).
+    static APU_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// NES APU emulation (runtime/apu.asm) is compiled in only with `APU=1`
+/// (environment NES2GBC_APU=1, set by the Makefile). With APU=0, fixed APU
+/// register writes emit nothing and $4015 reads return 0, exactly as before.
+fn apu_enabled() -> bool {
+    if let Some(v) = APU_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    static APU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *APU.get_or_init(|| std::env::var("NES2GBC_APU").map(|v| v == "1").unwrap_or(false))
+}
+
+#[cfg(test)]
+fn set_apu_for_test(v: bool) {
+    APU_OVERRIDE.with(|c| c.set(Some(v)));
+}
+
 fn state_label(reg: Register) -> &'static str {
     match reg {
         Register::A => "nes_a",
@@ -175,9 +196,31 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                 writeln!(out, "    ld a, [hl]").unwrap();
             } else {
                 match src {
+                    Operand::Absolute(0x4016) => {
+                        // Controller 1 serial port: skip the generic bus ladder.
+                        writeln!(out, "    ld hl, $4016").unwrap();
+                        writeln!(out, "    call nes_controller_read").unwrap();
+                    }
+                    Operand::Absolute(0x4017) => {
+                        // No controller 2: nes_cpu_read returns `xor a` here.
+                        writeln!(out, "    ld hl, $4017").unwrap();
+                        writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                    }
                     Operand::Absolute(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                         writeln!(out, "    call nes_cpu_read").unwrap();
+                    }
+                    Operand::AbsoluteX(addr @ (0x4016 | 0x4017)) => {
+                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+                        writeln!(out, "    ldh a, [nes_x]").unwrap();
+                        emit_add_a_to_hl(out);
+                        writeln!(out, "    call nes_cpu_read_joy_hl").unwrap();
+                    }
+                    Operand::AbsoluteY(addr @ (0x4016 | 0x4017)) => {
+                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+                        writeln!(out, "    ldh a, [nes_y]").unwrap();
+                        emit_add_a_to_hl(out);
+                        writeln!(out, "    call nes_cpu_read_joy_hl").unwrap();
                     }
                     Operand::AbsoluteX(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
@@ -801,6 +844,9 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     0x4011 => {
                         writeln!(out, "    ld a, [nes_dac]").unwrap();
                     }
+                    0x4015 if apu_enabled() => {
+                        writeln!(out, "    call nes_apu_read_status").unwrap();
+                    }
                     0x4016 => {
                         writeln!(out, "    call nes_controller_read").unwrap();
                     }
@@ -870,7 +916,22 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         writeln!(out, "    call nes_controller_write").unwrap();
                         a_live = false;
                     }
-                    _ => {}
+                    0x4000..=0x4013 | 0x4015 | 0x4017 if apu_enabled() => {
+                        if src == Register::A {
+                            if !a_live {
+                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            }
+                        } else {
+                            writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                        }
+                        writeln!(out, "    ld e, a").unwrap();
+                        writeln!(out, "    ld l, ${:02X}", addr as u8).unwrap();
+                        writeln!(out, "    call nes_apu_write").unwrap();
+                        a_live = false;
+                    }
+                    _ => {
+                        // Other fixed IO writes (and APU writes with APU=0) emit nothing.
+                    }
                 }
             }
 
@@ -898,13 +959,29 @@ mod tests {
     }
 
     #[test]
-    fn ignored_fixed_apu_writes_emit_nothing() {
+    fn fixed_apu_writes_emit_nothing_without_apu() {
+        set_apu_for_test(false);
         let asm = emit_ops(&[
             IrOp::WriteIo { addr: 0x4000, src: Register::A },
             IrOp::WriteIo { addr: 0x4004, src: Register::X },
             IrOp::WriteIo { addr: 0x400C, src: Register::Y },
         ]);
         assert!(asm.is_empty());
+    }
+
+    #[test]
+    fn fixed_apu_writes_call_nes_apu_write() {
+        set_apu_for_test(true);
+        let asm = emit_ops(&[
+            IrOp::WriteIo { addr: 0x4000, src: Register::A },
+            IrOp::WriteIo { addr: 0x4004, src: Register::X },
+            IrOp::WriteIo { addr: 0x400C, src: Register::Y },
+        ]);
+        assert!(asm.contains("ld l, $00"));
+        assert!(asm.contains("ld l, $04"));
+        assert!(asm.contains("ld l, $0C"));
+        assert!(asm.contains("call nes_apu_write"));
+        assert!(!asm.contains("call nes_cpu_write"));
     }
 
     #[test]

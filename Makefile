@@ -5,7 +5,26 @@ PROFILE ?= 0
 PROFILE_TRACE ?= 0
 FIT_SCREEN ?= 0
 PEEPHOLE ?= 1
-BANK_LOCALITY ?= 0
+# Compiler register allocation level (src/state_superblock.rs); 0 = previous emission.
+REGALLOC ?= 3
+# NES APU/sound emulation (runtime/apu.asm, docs/APU.md). 0 (default) = silent,
+# no APU cost; 1 = APU register writes/$4015 reads drive CGB sound. Set it on
+# `make generate`/`make gbc`; it is recorded in runtime/generated_config.inc.
+APU ?= 0
+POSTPASS_THROUGH ?= all
+# Profile-guided translated-code bank packing (tools/bench/bank_profile.py).
+# Defaults to profiles/<rom name>.bankprof when that file exists; BANK_PROFILE=
+# (empty) or a missing file keeps the static whole-bank packing.
+BANK_PROFILE ?= profiles/$(basename $(notdir $(ROM))).bankprof
+# Block-entry profile (tools/bench/rts_profile.py) ordering guarded RTS returns;
+# RTS_PROFILE= (empty) or a missing file keeps static JSR-site ordering.
+RTS_PROFILE ?= profiles/$(basename $(notdir $(ROM))).rtsprof
+# 1 = keep every emitter bank unmerged (layout used to record a bank profile).
+REPACK_IDENTITY ?= 0
+# APU=1 only: audio host-speed compensation for testing under 2x/4x fast-forward.
+APU_TEST_SPEED ?= 1
+# Keep grok frame pacing for normal builds; FIT retains its proven raster timing until pacing is validated there.
+PACING ?= $(if $(filter 1,$(FIT_SCREEN)),0,1)
 
 .PHONY: help generate gbc test clean
 
@@ -16,48 +35,97 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE=1     # light runtime counters'
 	@echo '  make gbc ROM="path/to/game.nes" PROFILE_TRACE=1 # expensive rolling block trace'
 	@echo '  make gbc ROM="path/to/game.nes" MAX_BLOCKS=64   # optional development slice'
-	@echo '  make gbc ROM="path/to/game.nes" FIT_SCREEN=1  # half-scale full frame into 160x144'
+	@echo '  make gbc ROM="path/to/game.nes" FIT_SCREEN=1  # 160x120 4:3 full-frame FIT renderer'
 	@echo '  make gbc ROM="path/to/game.nes" PEEPHOLE=0      # disable generated-asm perf pass'
-	@echo '  make gbc ROM="path/to/game.nes" BANK_LOCALITY=1 # enable legacy exhaustive bank repack'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=sprite0     # stop after sprite0 wait passes'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=rts         # stop after RTS passes'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-xy-zp # add X/Y + hot-ZP caches only'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-a     # add A cache too'
+	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache       # add all cache passes'
+	@echo '  make gbc ROM="path/to/game.nes" APU=1         # enable NES sound (APU emulation)'
+	@echo '  make gbc ROM="path/to/game.nes" APU=1 APU_TEST_SPEED=2 # compensate audio for mGBA 2x fast-forward'
 	@echo '  make test'
 
 generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
+	@if [ "$(APU)" = "1" ]; then echo 'DEF NES2GBC_APU EQU 1 ; make generate APU=1' > runtime/generated_config.inc; \
+	else echo '; make generate APU=0: NES APU emulation disabled' > runtime/generated_config.inc; fi
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,) $(if $(filter 1,$(FIT_SCREEN)),--fit-screen,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,) $(if $(filter 1,$(FIT_SCREEN)),--fit-screen,); \
 	else \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,) $(if $(filter 1,$(FIT_SCREEN)),--fit-screen,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,) $(if $(filter 1,$(FIT_SCREEN)),--fit-screen,); \
 	fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
-		if [ "$(BANK_LOCALITY)" = "1" ]; then python3 tools/repack_code_banks.py runtime/generated.asm; fi; \
+		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \
 		python3 tools/peephole_generated.py runtime/generated.asm; \
 		python3 tools/collapse_conditional_jp.py runtime/generated.asm; \
 		python3 tools/tighten_stack_generated.py runtime/generated.asm; \
 		python3 tools/shrink_compare_generated.py runtime/generated.asm; \
 		python3 tools/hot_alu_generated.py runtime/generated.asm; \
+		python3 tools/fast_oam_dma_generated.py runtime/generated.asm; \
+		python3 tools/lazy_overflow_updates.py runtime/generated.asm; \
 		python3 tools/fold_fixed_prg_reads.py runtime/generated.asm "$(ROM)"; \
 		python3 tools/trim_indexed_ram_bus.py runtime/generated.asm; \
 		if [ "$(TRACE)" != "1" ]; then python3 tools/mirror_indexed_prg_tables.py runtime/generated.asm "$(ROM)"; fi; \
 		python3 tools/index_math_generated.py runtime/generated.asm; \
+		python3 tools/fuse_index_branch_value.py runtime/generated.asm; \
+		python3 tools/fuse_page_aligned_cached_store.py runtime/generated.asm; \
 		python3 tools/remove_index_flag_scaffolding.py runtime/generated.asm; \
 		python3 tools/inline_ppustatus_generated.py runtime/generated.asm; \
 		python3 tools/specialize_sprite0_poll.py runtime/generated.asm; \
 		python3 tools/fuse_sprite0_branch.py runtime/generated.asm; \
-		python3 tools/dead_terminal_zn.py runtime/generated.asm; \
-		python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm; \
-		python3 tools/fast_subroutine_rts_dispatch.py runtime/generated.asm; \
-		python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
-		python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
-		python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
-		python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
-		python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
-		python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
-		python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
-		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
+		python3 tools/virtualize_sprite0_waits.py runtime/generated.asm; \
+		if [ "$(POSTPASS_THROUGH)" != "sprite0" ]; then \
+			python3 tools/dead_terminal_zn.py runtime/generated.asm; \
+			python3 tools/dead_terminal_n.py runtime/generated.asm; \
+			python3 tools/dead_terminal_carry_zn.py runtime/generated.asm; \
+			python3 tools/dead_terminal_overflow_zn.py runtime/generated.asm; \
+			python3 tools/native_leaf_calls.py runtime/generated.asm; \
+			python3 tools/fast_leaf_rts_dispatch.py runtime/generated.asm --rts-profile "$(RTS_PROFILE)"; \
+			python3 tools/fast_subroutine_rts_dispatch_inline.py runtime/generated.asm --max-returns 8 --bank-budget 2400 --max-rts-per-bank 40 --rts-profile "$(RTS_PROFILE)"; \
+			python3 tools/defer_subroutine_rts_increment.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "cache-xy-zp" ] || [ "$(POSTPASS_THROUGH)" = "cache-a" ] || [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+			python3 tools/cache_xy_in_blocks.py runtime/generated.asm; \
+			python3 tools/cache_hot_zp_in_blocks.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "cache-a" ] || [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+			python3 tools/cache_a_in_blocks.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "cache" ] || [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+			python3 tools/cache_de_in_blocks.py runtime/generated.asm; \
+		fi; \
+		if [ "$(POSTPASS_THROUGH)" = "all" ]; then \
+			if [ "$(TRACE)" != "1" ]; then python3 tools/mirror_indexed_prg_tables.py runtime/generated.asm "$(ROM)"; fi; \
+			python3 tools/fuse_index_branch_value.py runtime/generated.asm; \
+			python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
+			python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
+			python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
+			python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
+			python3 tools/widen_generated_jumps.py runtime/generated.asm; \
+			python3 tools/fast_fill_loops.py runtime/generated.asm; \
+			python3 tools/native_joypad_loops.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_blockbuf_collision.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_offscreen_bits.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_draw_sprite_object.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_multibyte_compare_copy.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_small_loops.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_bounding_box.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)" --identity "$(REPACK_IDENTITY)" --bank-profile "$(BANK_PROFILE)"; \
+			python3 tools/dead_hram_state_global.py runtime/generated.asm; \
+			python3 tools/fast_nonram_reads.py runtime/generated.asm; \
+			python3 tools/inline_prg_reads.py runtime/generated.asm; \
+			python3 tools/chain_indexed_hl.py runtime/generated.asm; \
+			python3 tools/dead_overflow.py runtime/generated.asm; \
+			python3 tools/final_peephole.py runtime/generated.asm; \
+			python3 tools/cheap_carry_materialize.py runtime/generated.asm; \
+			python3 tools/sbc_carry_capture.py runtime/generated.asm; \
+		fi; \
 	fi
 
 gbc: generate
-	$(MAKE) -C runtime TRACE="$(TRACE)" PROFILE="$(PROFILE)" PROFILE_TRACE="$(PROFILE_TRACE)"
+	$(MAKE) -C runtime TRACE="$(TRACE)" PROFILE="$(PROFILE)" PROFILE_TRACE="$(PROFILE_TRACE)" APU_TEST_SPEED="$(APU_TEST_SPEED)" PACING="$(PACING)"
 
 test:
 	cargo test --all-targets

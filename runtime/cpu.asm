@@ -181,35 +181,37 @@ ENDC
     cp $80
     jp c, nes_unimplemented
 
-    ; Tight NES loops repeatedly branch to the same translated PC. Avoid a full
-    ; dispatch-table bank switch/lookup when the requested PC matches the most
-    ; recently resolved target.
-    ld a, [nes_dispatch_cache_valid]
-    and a
-    jr z, .cache_miss
-    ld a, [nes_dispatch_cache_pc_hi]
-    cp h
-    jr nz, .cache_miss
-    ld a, [nes_dispatch_cache_pc_lo]
-    cp l
-    jr nz, .cache_miss
-
-    ld a, [nes_dispatch_cache_bank]
-    ld b, a
-    ld a, [nes_current_code_bank]
-    cp b
-    jr z, .cache_bank_ready
-    ld a, b
+    ; Direct-mapped cache of resolved translations: 128 entries indexed by
+    ; (lo - hi) & $7F (fewer hot collisions than lo & $7F), tagged by
+    ; hi ^ ((lo - hi) & $80) so the tag and index identify the PC exactly
+    ; (hi >= $80). Empty entries carry tag 0 and point at
+    ; nes_dispatch_dm_empty, which takes the miss path. Hits avoid the
+    ; dispatch-table bank switch and lookup. Clobbers B/E like the miss path.
+    ld b, h
+    ld e, l
+    ld a, l
+    sub h
+    ld l, a
+    and $80
+    xor b
+    res 7, l
+    ld h, HIGH(nes_dispatch_dm_tag)
+    cp [hl]
+    jr nz, .dm_miss
+    set 7, l
+    ld a, [hl]
     ld [nes_current_code_bank], a
     ld [$2000], a
-    xor a
-    ld [$3000], a
-.cache_bank_ready:
-    ld a, [nes_dispatch_cache_addr_hi]
+    inc h
+    ld a, [hl]
+    res 7, l
+    ld l, [hl]
     ld h, a
-    ld a, [nes_dispatch_cache_addr_lo]
-    ld l, a
     jp hl
+
+.dm_miss:
+    ld h, b
+    ld l, e
 
 .cache_miss:
     ; Cache-key state is independent from optional debug breadcrumbs.
@@ -269,6 +271,24 @@ ENDC
     ld a, e
     ld [nes_dispatch_cache_addr_lo], a
 
+    ; Fill the direct-mapped cache entry for this PC.
+    ld a, [nes_dispatch_cache_pc_hi]
+    ld c, a
+    ld a, [nes_dispatch_cache_pc_lo]
+    sub c
+    ld l, a
+    and $80
+    xor c
+    res 7, l
+    ld h, HIGH(nes_dispatch_dm_tag)
+    ld [hl], a
+    set 7, l
+    ld [hl], b
+    inc h
+    ld [hl], d
+    res 7, l
+    ld [hl], e
+
     ld a, b
     ld [nes_current_code_bank], a
     ld [$2000], a
@@ -279,6 +299,13 @@ ENDC
     ld l, e
     ei
     jp hl
+
+; Target of empty direct-mapped dispatch entries (tag 0 is a valid tag, for
+; hi=$80 with (lo-hi)&$80 set): resolve through the full lookup instead.
+nes_dispatch_dm_empty::
+    ld h, b
+    ld l, e
+    jp nes_dispatch_hl.cache_miss
 
 ; Fast path for statically known cross-bank transfers.
 ; Input: A = translated code bank, HL = linked ROMX target address.
@@ -380,12 +407,16 @@ IF DEF(NES2GBC_PROFILE)
     cp $80
     jp nc, .prg
 
-    ; Minimal APU / controller register reads for now.
+    ; APU / controller register reads.
     cp $40
     jp nz, .unsupported
     ld a, l
     cp $11
     jp z, .read_4011
+IF DEF(NES2GBC_APU)
+    cp $15
+    jp z, .read_4015
+ENDC
     cp $16
     jp z, .read_4016
     cp $17
@@ -399,12 +430,16 @@ ELSE
     cp $80
     jr nc, .prg
 
-    ; Minimal APU / controller register reads for now.
+    ; APU / controller register reads.
     cp $40
     jr nz, .unsupported
     ld a, l
     cp $11
     jr z, .read_4011
+IF DEF(NES2GBC_APU)
+    cp $15
+    jr z, .read_4015
+ENDC
     cp $16
     jr z, .read_4016
     cp $17
@@ -452,30 +487,28 @@ ENDC
     ret
 
 .prg_banked_rom:
-    ; Preserve NES address, select the ROMX bank, then map offset to $4000-$7FFF.
-    ld d, h
-    ld e, l
-
-    ld a, d
-    cp $C0
-    ld a, $01
-    jr c, .prg_select
-    ld a, $02
-
+    ; Select ROMX bank 1 ($8000-$BFFF) or 2 ($C000-$FFFF), map the offset to
+    ; $4000-$7FFF, read, then restore the translated-code bank inline. The
+    ; upper MBC5 bank bit ($3000) is always 0 in this runtime. Returned flags
+    ; are those of `or $40` (NZ, NC), exactly as the old push/pop path left.
+    ld a, h
+    rlca
+    rlca
+    and $01
+    inc a
 .prg_select:
     ld [$2000], a
-    ld a, d
+    ld a, h
     and $3F
     or $40
     ld h, a
-    ld l, e
-    ld a, [hl]
+    ld l, [hl]
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    ld a, l
 IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_debug_bus_value], a
 ENDC
-    push af
-    call nes_restore_code_bank
-    pop af
     ret
 
 .read_4011:
@@ -483,9 +516,16 @@ ENDC
     ld a, [nes_dac]
     ret
 
+IF DEF(NES2GBC_APU)
+.read_4015:
+    PROFILE_INC nes_profile_read_io
+    jp nes_apu_read_status
+ENDC
+
 .read_4016:
     PROFILE_INC nes_profile_read_io
     jp nes_controller_read
+
 
 .read_4017:
     PROFILE_INC nes_profile_read_io
@@ -499,6 +539,163 @@ ENDC
 .unsupported:
     PROFILE_INC nes_profile_read_other
     xor a
+    ret
+
+; Emitted for LDA/LDX/LDY $4016,X / $4017,X (and ,Y): HL = base + index.
+; Resolves the controller ports without the generic address ladder; any
+; other effective address takes the full nes_cpu_read path. Results and
+; returned flags match nes_cpu_read for every HL.
+nes_cpu_read_joy_hl::
+    ld a, h
+    cp $40
+    jp nz, nes_cpu_read
+    ld a, l
+    cp $16
+    jp z, nes_controller_read
+    cp $17
+    jp nz, nes_cpu_read
+    xor a
+    ret
+
+; Emitted (tools/fast_nonram_reads.py) where the inline $0000-$1FFF RAM test
+; already failed, so H >= $20: PRG goes straight to the PRG path, anything
+; else takes the generic ladder. Same results and flags as nes_cpu_read.
+nes_cpu_read_hi::
+    bit 7, h
+    jp nz, nes_cpu_read.prg
+    jp nes_cpu_read
+
+; 32 KiB PRG variant of nes_cpu_read_hi (tools/inline_prg_reads.py): the
+; build knows PRG is not the mirrored 16 KiB layout, so skip that test.
+; Same results and flags as nes_cpu_read (PRG: `or $40` -> NZ, NC).
+nes_cpu_read_hi32::
+    bit 7, h
+    jp z, nes_cpu_read
+    PROFILE_INC nes_profile_read_prg
+    ld a, h
+    rlca
+    rlca
+    and $01
+    inc a
+    jp nes_cpu_read.prg_select
+
+; Native serial joypad loop (tools/native_joypad_loops.py):
+;   loop: PHA / LDA $40D,X / STA $00E / LSR / ORA $00E / LSR / PLA / ROL /
+;         DEY / BNE loop
+; In: D = low byte of the port base ($16/$17), E = zero-page address.
+; Runs NES Y iterations (0 = 256). Out (HRAM state): A, C = last ROL carry,
+; Y = 0, Z set / N clear (DEY), [zp] = last read, stack byte at SP = last
+; pushed A. X, V, SP unchanged. Clobbers AF/BC/DE/HL.
+nes_joy_serial_loop::
+    ; Fast path: the loop-invariant address is $4016 and the strobe is low
+    ; (only a write can change it), so each read returns bit 0 of the shift
+    ; register and shifts in a 1 at bit 7. Only the last iteration's stack
+    ; byte (A before the final ROL) and zero-page byte survive.
+    ldh a, [nes_x]
+    add d
+    jr c, .generic
+    cp $17
+    jr z, .fast4017
+    cp $16
+    jr nz, .generic
+    ld a, [nes_controller_strobe]
+    and a
+    jr nz, .generic
+    ldh a, [nes_y]
+    ld b, a
+    ldh a, [nes_a]
+    ld c, a
+    ld a, [nes_controller_shift]
+    ld d, a
+.fast:
+    ld l, c
+    srl d
+    set 7, d
+    rl c
+    dec b ; DEC keeps the ROL carry
+    jr nz, .fast
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+    ld b, l
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], b
+    ld a, c
+    and $01
+    ld h, $C0
+    ld l, e
+    ld [hl], a
+    ld a, d
+    ld [nes_controller_shift], a
+    jr .done
+.fast4017:
+    ; $4017 reads are 0 (nes_cpu_read_joy_hl): each bit shifts a 0 into A.
+    ldh a, [nes_y]
+    ld b, a
+    ldh a, [nes_a]
+    ld c, a
+.fast17_loop:
+    ld l, c
+    sla c
+    dec b
+    jr nz, .fast17_loop
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+    ld b, l
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], b
+    ld h, $C0
+    ld l, e
+    ld [hl], $00
+    jr .done
+.generic:
+    ldh a, [nes_y]
+    ld b, a
+    ldh a, [nes_a]
+    ld c, a
+.loop:
+    ; PHA ... PLA leaves SP unchanged but the pushed byte stays in memory.
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], c
+    ldh a, [nes_x]
+    add d
+    ld l, a
+    ld a, $40
+    adc 0
+    ld h, a
+    push bc
+    push de
+    call nes_cpu_read_joy_hl
+    pop de
+    pop bc
+    ld h, $C0
+    ld l, e
+    ld [hl], a
+    ; carry = bit0 of (v | v >> 1), rotated into the pulled A.
+    ld l, a
+    srl a
+    or l
+    rra
+    rl c
+    dec b ; DEC keeps the ROL carry
+    jr nz, .loop
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+.done:
+    ld a, c
+    ldh [nes_a], a
+    xor a
+    ldh [nes_y], a
+    ldh [nes_z_shadow], a
+    ldh [nes_n_shadow], a
     ret
 
 ; Generic CPU write. Input HL = NES CPU address, A = value.
@@ -523,6 +720,10 @@ IF DEF(NES2GBC_PROFILE)
     jp z, .write_4014
     cp $16
     jp z, .write_4016
+IF DEF(NES2GBC_APU)
+    cp $18
+    jp c, .write_apu
+ENDC
     jp .unsupported
 ELSE
     cp $20
@@ -541,6 +742,10 @@ ELSE
     jr z, .write_4014
     cp $16
     jr z, .write_4016
+IF DEF(NES2GBC_APU)
+    cp $18
+    jr c, .write_apu
+ENDC
     jr .unsupported
 ENDC
 
@@ -583,6 +788,13 @@ ENDC
     ld a, e
     ld [nes_dac], a
     ret
+
+IF DEF(NES2GBC_APU)
+.write_apu:
+    PROFILE_INC nes_profile_write_io
+    ; L = register low byte, E = value (already set).
+    jp nes_apu_write
+ENDC
 
 .write_4014:
     PROFILE_INC nes_profile_write_io
@@ -794,6 +1006,24 @@ nes_brk_hl:
 nes_rti_pop_hl:
     xor a
     ld [nes_nmi_active], a
+IF !DEF(NES2GBC_NO_PACING)
+    ; This NES frame is complete but not yet published. If a host VBlank
+    ; already elapsed while it ran, let the next NMI start right away.
+    inc a
+    ld [nes_pace_unpublished], a
+    ld a, [nes_pace_credit]
+    and a
+    jr z, .no_credit
+    ld a, [nes_pace_idle_hi]
+    and a
+    jr z, .no_credit
+    xor a
+    ld [nes_pace_credit], a
+    inc a
+    ld [nes_pace_armed], a
+    ldh [nes_host_vblank_pending], a
+.no_credit:
+ENDC
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -811,6 +1041,27 @@ nes_poll_nmi_hl:
     ldh a, [nes_host_vblank_pending]
     and a
     ret z
+IF !DEF(NES2GBC_NO_PACING)
+    ; An early (paced) NMI start must not preempt main-thread work that on
+    ; hardware would finish before the next NMI: only start it once the game
+    ; is back in its idle loop. Keep the event pending otherwise.
+    ld a, [nes_pace_armed]
+    and a
+    jr z, .pace_any_pc
+    ld a, [nes_pace_idle_lo]
+    cp l
+    jr nz, .pace_not_idle
+    ld a, [nes_pace_idle_hi]
+    cp h
+    jr nz, .pace_not_idle
+    xor a
+    ld [nes_pace_armed], a
+    jr .pace_any_pc
+.pace_not_idle:
+    xor a
+    ret
+.pace_any_pc:
+ENDC
 
     ; Consume the host event. If NES NMI is disabled or already active, this
     ; frame is intentionally dropped instead of creating back-to-back NMIs.
@@ -819,14 +1070,55 @@ nes_poll_nmi_hl:
 
     ld a, [nes_ppuctrl]
     bit 7, a
+IF !DEF(NES2GBC_NO_PACING)
+    jp z, .no_nmi ; out of JR range with pacing + debug flavours
+ELSE
     jr z, .no_nmi
+ENDC
 
     ld a, [nes_nmi_active]
     and a
+IF !DEF(NES2GBC_NO_PACING)
+    jp nz, .no_nmi
+ELSE
     jr nz, .no_nmi
+ENDC
 
     ld a, $01
     ld [nes_nmi_active], a
+
+IF !DEF(NES2GBC_NO_PACING)
+    ; Early start while the previous frame is still unpublished: snapshot it
+    ; for the VBlank ISR and keep its queued nametable entries (the next frame
+    ; appends to the same queue; values come from authoritative WRAM).
+    ld a, [nes_pace_unpublished]
+    and a
+    jr z, .pace_normal
+    push hl
+    call nes_pace_take_snapshot
+    pop hl
+    ld a, $01
+    ld [nes_pace_early], a
+    jp .stage_seen_clear_done
+.pace_normal:
+    ; VBlank-triggered start: two in a row at the same resume PC identify
+    ; the idle loop.
+    ld a, [nes_pace_cand_lo]
+    cp l
+    jr nz, .pace_new_cand
+    ld a, [nes_pace_cand_hi]
+    cp h
+    jr nz, .pace_new_cand
+    ld a, l
+    ld [nes_pace_idle_lo], a
+    ld a, h
+    ld [nes_pace_idle_hi], a
+.pace_new_cand:
+    ld a, l
+    ld [nes_pace_cand_lo], a
+    ld a, h
+    ld [nes_pace_cand_hi], a
+ENDC
 
     ; Begin a fresh all-or-nothing nametable transaction for this NES NMI.
     ; The previous transaction was published before the host VBlank that
@@ -852,9 +1144,11 @@ nes_poll_nmi_hl:
     ldh [rSVBK], a
     xor a
     ld hl, nes_nametable_stage_seen
-    ld b, $00
+    ld b, $100 / 16
 .clear_nametable_stage_seen:
+REPT 16
     ld [hli], a
+ENDR
     dec b
     jr nz, .clear_nametable_stage_seen
     ld a, $01
@@ -900,3 +1194,274 @@ nes_unimplemented_operand_read:
 
 nes_unimplemented_operand_write:
     ret
+
+IF !DEF(NES2GBC_NO_PACING)
+; Live video state produced by translated NMI code and consumed by the VBlank
+; commit. Swapped with nes_pace_snap around a paced publication.
+MACRO PACE_SWAP_VAR ; var, snapshot index
+    ld a, [\1]
+    ld b, a
+    ld a, [nes_pace_snap + \2]
+    ld [\1], a
+    ld a, b
+    ld [nes_pace_snap + \2], a
+ENDM
+
+MACRO PACE_COPY_VAR ; var, snapshot index
+    ld a, [\1]
+    ld [nes_pace_snap + \2], a
+ENDM
+
+; DE-walking forms (DE = nes_pace_snap + index; the snapshot does not cross a
+; page, so inc e). kind H = HRAM variable (ldh), W = WRAM variable.
+MACRO PACE_SWAP_DE ; var, snapshot index, kind
+IF STRCMP("\3", "H") == 0
+    ldh a, [\1]
+    ld b, a
+    ld a, [de]
+    ldh [\1], a
+    ld a, b
+ELSE
+    ld hl, \1
+    ld b, [hl]
+    ld a, [de]
+    ld [hl], a
+    ld a, b
+ENDC
+    ld [de], a
+    inc e
+ENDM
+
+MACRO PACE_COPY_DE ; var, snapshot index, kind
+IF STRCMP("\3", "H") == 0
+    ldh a, [\1]
+ELSE
+    ld a, [\1]
+ENDC
+    ld [de], a
+    inc e
+ENDM
+
+DEF PACE_IDX_OAM_DIRTY EQU 4
+DEF PACE_IDX_MASK_DIRTY EQU 8
+DEF PACE_IDX_PALETTE_DIRTY EQU 18
+DEF PACE_IDX_SCROLL_DIRTY EQU 19
+DEF PACE_IDX_CTRL_DIRTY EQU 20
+
+MACRO PACE_FOR_VARS ; op macro
+    \1 nes_ppuctrl, 0, W
+    \1 nes_ppumask, 1, W
+    \1 nes_ppu_scroll_x, 2, W
+    \1 nes_ppu_scroll_y, 3, W
+    \1 nes_oam_dirty, 4, W
+    \1 nes_nametable_queue_ptr_lo, 5, W
+    \1 nes_nametable_queue_ptr_hi, 6, W
+    \1 nes_nametable_queue_overflow, 7, W
+    \1 nes_mask_dirty, 8, W
+    \1 nes_nametable_stage_used, 9, W
+    \1 nes_split_duplicate_streak, 10, W
+    \1 nes_split_retire_grace_used, 11, W
+    \1 nes_generic_map_rebuild_dirty, 12, W
+    \1 nes_generic_hidden_change_count, 13, W
+    \1 nes_view_x, 14, H
+    \1 nes_view_y, 15, H
+    \1 nes_oam_emit_count, 16, H
+    \1 nes_oam_shadow_ready, 17, H
+    \1 nes_palette_dirty, 18, H
+    \1 nes_scroll_dirty, 19, H
+    \1 nes_ctrl_dirty, 20, H
+    \1 nes_scroll_pair_count, 21, H
+    \1 nes_split_active, 22, H
+    \1 nes_split_top_x, 23, H
+    \1 nes_split_top_y, 24, H
+    \1 nes_split_bottom_x, 25, H
+    \1 nes_split_bottom_y, 26, H
+    \1 nes_split_line, 27, H
+    \1 nes_split_top_ctrl, 28, H
+    \1 nes_split_bottom_ctrl, 29, H
+    \1 nes_split_pending_x, 30, H
+    \1 nes_split_pending_y, 31, H
+    \1 nes_split_pending_ctrl, 32, H
+ENDM
+
+ASSERT 33 <= $30 ; PACE_FOR_VARS entries fit nes_pace_snap
+ASSERT HIGH(nes_pace_snap) == HIGH(nes_pace_snap + 32) ; DE walk uses inc e
+
+; Copy the just-completed frame's publishable state into the pacing snapshot.
+; Clobbers AF/BC/DE/HL.
+nes_pace_take_snapshot:
+    ; Project OAM now if needed, exactly as the commit would have.
+    ld a, [nes_oam_dirty]
+    and a
+    jr z, .oam_ok
+    ldh a, [nes_oam_shadow_ready]
+    and a
+    jr nz, .oam_ok
+    call nes_video_build_oam_shadow
+.oam_ok:
+    ; Only a dirty snapshot is ever DMA'd (paced publish or inherited flag).
+    ; Hand it the live projected page instead of copying 160 bytes.
+    ld a, [nes_oam_dirty]
+    and a
+    jr z, .oam_snap_done
+    call nes_oam_resolve_stale
+    ld a, [nes_oam_live_page]
+    ld [nes_oam_pace_page], a
+    xor HIGH(nes_gbc_oam_shadow) ^ HIGH(nes_pace_oam)
+    ld [nes_oam_live_page], a
+    ; Non-paced DMA source follows the live page (a paced publish overrides
+    ; it with the pace page and restores the live page afterwards).
+    ld [nes_oam_dma_page], a
+    ld a, $01
+    ld [nes_oam_live_stale], a
+.oam_snap_done:
+
+    ldh a, [nes_palette_dirty]
+    ld [nes_pace_snap_palette], a
+    and a
+    jr z, .palette_done
+    ld hl, nes_gbc_palette_shadow
+    ld de, nes_pace_palette
+    ld b, 4
+.copy_palette:
+    REPT 16
+    ld a, [hli]
+    ld [de], a
+    inc e
+    ENDR
+    dec b
+    jr nz, .copy_palette
+.palette_done:
+
+    ld de, nes_pace_snap
+    PACE_FOR_VARS PACE_COPY_DE
+    ; The snapshot now owns this frame's pending publications; the running
+    ; NMI starts with nothing dirty, as after an ordinary commit.
+    xor a
+    ld [nes_oam_dirty], a
+    ld [nes_mask_dirty], a
+    ldh [nes_palette_dirty], a
+    ldh [nes_scroll_dirty], a
+    ldh [nes_ctrl_dirty], a
+    ld a, $01
+    ld [nes_pace_snap_valid], a
+    xor a
+    ld [nes_pace_unpublished], a
+    ldh [nes_scroll_pair_count], a
+    ret
+
+; After a paced publication flushed the snapshot's queue prefix
+; [$D800, nes_pace_q_end), drop that prefix from the live queue (the running
+; NMI appended after it) and clear its dedupe-bitmap bytes so later writes to
+; those addresses are queued again. Clearing a whole bitmap byte can only
+; cause harmless duplicate entries. Runs in the ISR; WRAM bank 1 is current.
+nes_pace_retire_flushed_queue:
+    ld a, [nes_pace_q_end_lo]
+    ld e, a
+    ld a, [nes_pace_q_end_hi]
+    ld d, a
+    ; Empty prefix?
+    cp HIGH(nes_nametable_queue)
+    jr nz, .clear_bits
+    ld a, e
+    and a
+    ret z
+.clear_bits:
+    ; Walk prefix entries, clearing the stage-seen byte for each.
+    ld hl, nes_nametable_queue
+.bit_loop:
+    ld a, l
+    cp e
+    jr nz, .bit_entry
+    ld a, h
+    cp d
+    jr z, .bits_done
+.bit_entry:
+    ld a, [hli]
+    ld c, a
+    ld a, [hli]
+    ld b, a
+    ; index = ((B & 7) << 5) | (C >> 3)
+    ld a, c
+    srl a
+    srl a
+    srl a
+    ld c, a
+    ld a, b
+    and $07
+    swap a
+    add a
+    or c
+    ld c, a
+    ld b, HIGH(nes_nametable_stage_seen)
+    ld a, $06
+    ldh [rSVBK], a
+    xor a
+    ld [bc], a
+    ld a, $01
+    ldh [rSVBK], a
+    jr .bit_loop
+.bits_done:
+    ; Move live entries [prefix_end, ptr) down to the queue start.
+    ld hl, nes_nametable_queue
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld c, a
+    ld a, [nes_nametable_queue_ptr_hi]
+    ld b, a
+.move_loop:
+    ld a, e
+    cp c
+    jr nz, .move_one
+    ld a, d
+    cp b
+    jr z, .move_done
+.move_one:
+    ld a, [de]
+    inc de
+    ld [hli], a
+    jr .move_loop
+.move_done:
+    ld a, l
+    ld [nes_nametable_queue_ptr_lo], a
+    ld a, h
+    ld [nes_nametable_queue_ptr_hi], a
+    ret
+
+; A stale live OAM page's true contents are the pace page (nobody writes the
+; pace page but projectors that owned it as live): point live back at it.
+; Keeps the non-paced DMA source in sync. Clobbers A.
+nes_oam_resolve_stale:
+    ld a, [nes_oam_live_stale]
+    and a
+    ret z
+    xor a
+    ld [nes_oam_live_stale], a
+    ld a, [nes_oam_pace_page]
+    ld [nes_oam_live_page], a
+    ld [nes_oam_dma_page], a
+    ret
+
+ASSERT LOW(nes_gbc_oam_shadow) == 0 && LOW(nes_pace_oam) == 0
+
+; Exchange live state with the snapshot (used on ISR entry and exit).
+; Clobbers AF/BC/DE/HL.
+nes_pace_swap:
+    ld de, nes_pace_snap
+    PACE_FOR_VARS PACE_SWAP_DE
+    ld a, [nes_pace_snap_palette]
+    and a
+    ret z
+    ld hl, nes_gbc_palette_shadow
+    ld de, nes_pace_palette
+    ld b, $40
+.swap_palette:
+    ld c, [hl]
+    ld a, [de]
+    ld [hli], a
+    ld a, c
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .swap_palette
+    ret
+ENDC

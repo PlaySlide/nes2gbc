@@ -35,7 +35,8 @@ nes_profile_vram_wait_block: ds 4 ; C8E1
 nes_profile_oam_wait_block:  ds 4 ; C8E5
 nes_profile_end:
 
-SECTION "NES profile block trace", WRAM0[$CA00]
+; Profile PC trace relocated to WRAMX bank 7 so WRAM0[$CA00] can hold APU state.
+SECTION "NES profile block trace", WRAMX[$D000], BANK[7]
 ; 128 little-endian NES PCs = 256-byte rolling trace.
 nes_profile_trace_buffer: ds $100
 
@@ -74,12 +75,17 @@ IF DEF(NES2GBC_PROFILE)
     push de
     push hl
 
+    ldh a, [rSVBK]
+    ld b, a                       ; save WRAM bank
+    ld a, $07
+    ldh [rSVBK], a
+
     ld a, [nes_profile_trace_index]
     and $7F
     ld c, a
     add a
     ld l, a
-    ld h, $CA
+    ld h, HIGH(nes_profile_trace_buffer)
     ld a, e
     ld [hli], a
     ld a, d
@@ -89,6 +95,9 @@ IF DEF(NES2GBC_PROFILE)
     inc a
     and $7F
     ld [nes_profile_trace_index], a
+
+    ld a, b
+    ldh [rSVBK], a                ; restore WRAM bank
 
     pop hl
     pop de
@@ -110,6 +119,10 @@ IF DEF(NES2GBC_PROFILE)
     or c
     jr nz, .clear_state
 
+    ldh a, [rSVBK]
+    push af
+    ld a, $07
+    ldh [rSVBK], a
     xor a
     ld hl, nes_profile_trace_buffer
     ld bc, $0100
@@ -119,5 +132,7 @@ IF DEF(NES2GBC_PROFILE)
     ld a, b
     or c
     jr nz, .clear_trace
+    pop af
+    ldh [rSVBK], a
 ENDC
     ret
