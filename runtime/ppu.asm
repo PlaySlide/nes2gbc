@@ -25,29 +25,22 @@ nes_ppu_cpu_read:
     ret
 
 .status:
-    ; PPUSTATUS vblank is latched at host VBlank and remains observable until
-    ; the NES CPU reads $2002. Do not rely solely on live GBC LY here: the host
-    ; VBlank ISR can consume the entire hardware VBlank interval, leaving
-    ; translated polling loops (Tennis uses LDA $2002 / BPL at reset) no chance
-    ; to sample LY >= 144 after the ISR returns.
-    ld a, [nes_ppu_status]
-    ld e, a
+    ; Approximate NES vblank from the live GBC scanline.
     ldh a, [rLY]
     cp 144
     jr c, .visible_scan
 
     ; NES clears sprite-0 hit before the next visible frame. Treat host VBlank
     ; as the clear interval so polling loops can observe the old hit disappear.
-    ; Preserve the independently latched vblank bit.
-    ld a, e
-    and $BF
+    ld a, [nes_ppu_status]
+    and $3F
     or $80
     jr .status_ready
 
 .visible_scan:
     ld b, a
-    ld a, e
-    and $BF
+    ld a, [nes_ppu_status]
+    and $3F
     ld e, a
 
     ; Semantic sprite-0 hit fallback. SMB (and many other early NES games)
