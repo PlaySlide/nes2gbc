@@ -102,19 +102,37 @@ def optimize(lines: list[str]) -> int:
             f"{indent}ld l, a\n",
         ]
         if steps > 1:
-            fast += [f"{indent}and ${steps - 1:02X}\n", f"{indent}jr nz, .fill_slow\n"]
-        fast += [
-            f"{indent}ld h, ${page}\n",
-            f"{indent}ldh a, [nes_a]\n",
-            ".fill_loop:\n",
-            f"{indent}ld [hl], a\n",
-        ]
-        fast += [f"{indent}inc l\n"] * steps
-        fast += [
-            f"{indent}jr nz, .fill_loop\n",
-            f"{indent}xor a\n",
-            f"{indent}ld c, a\n",
-        ]
+            fast += [f"{indent}and ${steps - 1:02X}\n", f"{indent}jp nz, .fill_slow\n"]
+        if steps in (4, 8):
+            # Unrolled `ld l, n / ld [hl], a` table entered at entry Y/steps
+            # through push/ret (touches only AF/HL): 4 M-cycles per store.
+            shift = {4: 2, 8: 3}[steps]
+            fast += [f"{indent}ld a, l\n"] + [f"{indent}srl a\n"] * shift + [
+                f"{indent}ld l, a\n", f"{indent}add a\n", f"{indent}add l\n",
+                f"{indent}add LOW(.fill_tbl)\n", f"{indent}ld l, a\n",
+                f"{indent}ld a, HIGH(.fill_tbl)\n", f"{indent}adc $00\n", f"{indent}ld h, a\n",
+                f"{indent}push hl\n",
+                f"{indent}ld h, ${page}\n",
+                f"{indent}ldh a, [nes_a]\n",
+                f"{indent}ret ; enter the unrolled fill\n",
+                ".fill_tbl:\n",
+            ]
+            for k in range(0, 256, steps):
+                fast += [f"{indent}ld l, ${k:02X}\n", f"{indent}ld [hl], a\n"]
+            fast += [f"{indent}xor a\n", f"{indent}ld c, a\n"]
+        else:
+            fast += [
+                f"{indent}ld h, ${page}\n",
+                f"{indent}ldh a, [nes_a]\n",
+                ".fill_loop:\n",
+                f"{indent}ld [hl], a\n",
+            ]
+            fast += [f"{indent}inc l\n"] * steps
+            fast += [
+                f"{indent}jr nz, .fill_loop\n",
+                f"{indent}xor a\n",
+                f"{indent}ld c, a\n",
+            ]
         fast += [f"{indent}{s}\n" for s in shadows]
         fast += [f"{indent}ldh [nes_y], a\n", f"{indent}jp .fill_done\n", ".fill_slow:\n"]
         lines[jp_line] = lines[jp_line] + ".fill_done:\n"
