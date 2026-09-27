@@ -61,14 +61,6 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
  }
  let (pop_i,base)=pop?;
 
- let mut low=None;
- let mut j=pop_i+6;
- while j+3<end{
-  if prg[j]==0xB1&&prg[j+1]==base&&prg[j+2]==0x85{
-   low=Some((j,prg[j+3]));break
-  }
-  j+=1;
- }
  // Some Nintendo dispatchers keep the low target byte in X while reusing
  // the popped return-address zero-page pair as the final JMP pointer:
  //
@@ -80,29 +72,37 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
  //   STX base
  //   JMP (base)
  //
- // Tennis and Dig Dug use this compact variant. It is the same inline-word
- // table convention as the STA/STA form below; only the temporary differs.
- if low.is_none(){
-  let mut j=pop_i+6;
-  while j+2<end{
-   if prg[j]==0xB1&&prg[j+1]==base&&prg[j+2]==0xAA{
-    let mut k=j+3;
-    let k_end=(j+8).min(end.saturating_sub(8));
-    while k<=k_end{
-     if k+8<end
-      &&prg[k]==0xB1&&prg[k+1]==base
-      &&prg[k+2]==0x85&&prg[k+3]==base.wrapping_add(1)
-      &&prg[k+4]==0x86&&prg[k+5]==base
-      &&prg[k+6]==0x6C&&prg[k+7]==base&&prg[k+8]==0x00
-     {
-      let delta=(k+6-start)as u16;
-      return Some((entry.wrapping_add(delta),base as u16))
-     }
-     k+=1;
+ // Tennis and Dig Dug use this compact variant. Recognize it before the
+ // ordinary STA/STA form below, because its second LDA/STA pair otherwise
+ // looks like a candidate low-byte store.
+ let mut j=pop_i+6;
+ while j+2<end{
+  if prg[j]==0xB1&&prg[j+1]==base&&prg[j+2]==0xAA{
+   let mut k=j+3;
+   let k_end=(j+8).min(end.saturating_sub(9));
+   while k<=k_end{
+    if k+8<end
+     &&prg[k]==0xB1&&prg[k+1]==base
+     &&prg[k+2]==0x85&&prg[k+3]==base.wrapping_add(1)
+     &&prg[k+4]==0x86&&prg[k+5]==base
+     &&prg[k+6]==0x6C&&prg[k+7]==base&&prg[k+8]==0x00
+    {
+     let delta=(k+6-start)as u16;
+     return Some((entry.wrapping_add(delta),base as u16))
     }
+    k+=1;
    }
-   j+=1;
   }
+  j+=1;
+ }
+
+ let mut low=None;
+ let mut j=pop_i+6;
+ while j+3<end{
+  if prg[j]==0xB1&&prg[j+1]==base&&prg[j+2]==0x85{
+   low=Some((j,prg[j+3]));break
+  }
+  j+=1;
  }
  let (low_i,pointer)=low?;
 
