@@ -76,7 +76,10 @@ make gbc ROM=game.nes APU=1    # NES sound via CGB channels
 `APU=1` the recompiler emits `call nes_apu_write` for fixed `$4000-$4017`
 writes and `nes_apu_read_status` for `$4015` reads, the generic bus routes
 the same registers to the APU, and VBlank ticks the APU frame sequencer.
-Cost on SMB (bench, unpaced): about +2.3% work per NES frame in play.
+Cost on SMB (bench, unpaced): about +8.7% work per NES frame in play
+(166.6k -> 181.1k cycles; paced play 74.1% -> 67.5% of native speed).
+`APU_TEST_SPEED=2` or `4` (with `APU=1`) compensates audio timing when testing
+under emulator fast-forward; it has no effect with `APU=0`.
 
 ## ROM policy
 

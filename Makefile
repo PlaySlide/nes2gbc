@@ -17,6 +17,8 @@ POSTPASS_THROUGH ?= all
 BANK_PROFILE ?= profiles/$(basename $(notdir $(ROM))).bankprof
 # 1 = keep every emitter bank unmerged (layout used to record a bank profile).
 REPACK_IDENTITY ?= 0
+# APU=1 only: audio host-speed compensation for testing under 2x/4x fast-forward.
+APU_TEST_SPEED ?= 1
 
 .PHONY: help generate gbc test clean
 
@@ -34,6 +36,7 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-a     # add A cache too'
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache       # add all cache passes'
 	@echo '  make gbc ROM="path/to/game.nes" APU=1         # enable NES sound (APU emulation)'
+	@echo '  make gbc ROM="path/to/game.nes" APU=1 APU_TEST_SPEED=2 # compensate audio for mGBA 2x fast-forward'
 	@echo '  make test'
 
 generate:
@@ -115,7 +118,7 @@ generate:
 	fi
 
 gbc: generate
-	$(MAKE) -C runtime TRACE="$(TRACE)" PROFILE="$(PROFILE)" PROFILE_TRACE="$(PROFILE_TRACE)"
+	$(MAKE) -C runtime TRACE="$(TRACE)" PROFILE="$(PROFILE)" PROFILE_TRACE="$(PROFILE_TRACE)" APU_TEST_SPEED="$(APU_TEST_SPEED)"
 
 test:
 	cargo test --all-targets

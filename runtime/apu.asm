@@ -6,50 +6,43 @@
 ; Clobbers: AF, BC, DE, HL (void return; cpu write path ignores result).
 ;
 ; nes_apu_read_status:
-;   Output A = $4015-style status (v1: last written enable bits 0-4).
+;   Output A = $4015-style active-channel status from length counters.
+;   DMC/IRQ status is currently unsupported and reads as 0.
+;
+; NES2GBC_APU_TEST_SPEED is a compile-time host-fast-forward compensation.
+; 1 = normal hardware timing, 2 = compensate mGBA 2x, 4 = compensate mGBA 4x.
+; It changes only the GBC audio renderer/timing, never NES-side register state.
+IF !DEF(NES2GBC_APU_TEST_SPEED)
+    DEF NES2GBC_APU_TEST_SPEED EQU 1
+ENDC
 
 SECTION "NES APU state", WRAM0[$CA00]
 ; Mirror of $4000-$4017 indexed by low address byte.
 nes_apu_regs:       ds $18
-; Previous $4015 channel-enable bits (rising-edge trigger detection).
-nes_apu_prev_4015:  ds 1
 ; Low byte of the register currently being written (survives helpers).
 nes_apu_write_idx:  ds 1
-; Coarse NES-style length counters (pulse1/pulse2/triangle/noise).
+; NES length counters.
 nes_apu_len_p1:     ds 1
 nes_apu_len_p2:     ds 1
 nes_apu_len_tri:    ds 1
 nes_apu_len_noi:    ds 1
-nes_apu_linear_tri: ds 1   ; working triangle linear counter
-; Last written NRx2 (GB volume is write-only; track silence→audible).
-nes_apu_last_nr12_p1: ds 1
-nes_apu_last_nr12_p2: ds 1
-nes_apu_last_nr12_noi: ds 1
-; Pulse1 NES sweep working state (do NOT use GB NR10 — it fights our period map).
-nes_apu_sweep_div:    ds 1
-nes_apu_sweep_period_lo: ds 1
-nes_apu_sweep_period_hi: ds 1
-nes_apu_sweep_start_lo: ds 1  ; period at bend origin (~1 octave cap)
-nes_apu_sweep_start_hi: ds 1
-nes_apu_sweep_active: ds 1   ; 1 while pulse1 software sweep running
-nes_apu_sweep_muted:  ds 1   ; silenced by sweep unit; no retrigger until $4003
-nes_apu_sweep_last:   ds 1   ; last $4001 (detect mid-note mode change)
-; Pulse2 software sweep (fireworks/blast etc.)
-nes_apu_sweep2_div:    ds 1
-nes_apu_sweep2_period_lo: ds 1
-nes_apu_sweep2_period_hi: ds 1
-nes_apu_sweep2_start_lo: ds 1
-nes_apu_sweep2_start_hi: ds 1
-nes_apu_sweep2_active: ds 1
-; Frame sequencer divider (host VBlank ticks).
-nes_apu_frame_div:  ds 1
+; Triangle linear counter and reload flag.
+nes_apu_linear_tri: ds 1
+nes_apu_tri_reload: ds 1
+; Pulse sweep divider counters and reload flags.
+nes_apu_sweep_div_p1:    ds 1
+nes_apu_sweep_reload_p1: ds 1
+nes_apu_sweep_div_p2:    ds 1
+nes_apu_sweep_reload_p2: ds 1
+; Approximate NES frame-counter phase. 4-step uses 0..3, 5-step uses 0..4.
+nes_apu_frame_phase: ds 1
 
 SECTION "NES APU code", ROM0
 
 ; ---------------------------------------------------------------------------
 nes_apu_init:
     ld hl, nes_apu_regs
-    ld b, $18 + 25         ; regs + prev/idx/lens/linear/lastvol/sweep1+2/frame_div
+    ld b, $18 + 12         ; register mirror + APU architectural state
     xor a
 .clear:
     ld [hli], a
@@ -90,8 +83,31 @@ nes_apu_init:
 
 ; ---------------------------------------------------------------------------
 nes_apu_read_status:
-    ld a, [nes_apu_regs + $15]
-    and $1F
+    ; NES $4015 read bits 0-3 report whether each channel length counter is
+    ; non-zero, not whether its enable bit was last written as 1. DMC and IRQ
+    ; status are not implemented yet, so bits 4, 6, and 7 remain clear.
+    ld b, $00
+    ld a, [nes_apu_len_p1]
+    and a
+    jr z, .status_p2
+    set 0, b
+.status_p2:
+    ld a, [nes_apu_len_p2]
+    and a
+    jr z, .status_tri
+    set 1, b
+.status_tri:
+    ld a, [nes_apu_len_tri]
+    and a
+    jr z, .status_noi
+    set 2, b
+.status_noi:
+    ld a, [nes_apu_len_noi]
+    and a
+    jr z, .status_done
+    set 3, b
+.status_done:
+    ld a, b
     ret
 
 ; ---------------------------------------------------------------------------
@@ -119,7 +135,9 @@ nes_apu_write:
     jr z, .dmc_load
     cp $15
     jp z, nes_apu_update_status
-    ; $10/$12/$13 DMC and $17 frame counter: shadow only for v1.
+    cp $17
+    jp z, nes_apu_update_frame_counter
+    ; $10/$12/$13 DMC registers are shadow-only for now.
     ret
 
 .dmc_load:
@@ -128,329 +146,348 @@ nes_apu_write:
     ret
 
 ; ---------------------------------------------------------------------------
-; Pulse 1 → Square 1 (NR10–NR14)
-; Only touch the GB regs that correspond to the NES register written.
+; Pulse helpers. The GBC renderer is gated from NES length/timer/sweep state.
+; ---------------------------------------------------------------------------
+nes_apu_load_p1_timer_bc:
+    ld a, [nes_apu_regs + $02]
+    ld c, a
+    ld a, [nes_apu_regs + $03]
+    and $07
+    ld b, a
+    ret
+
+nes_apu_load_p2_timer_bc:
+    ld a, [nes_apu_regs + $06]
+    ld c, a
+    ld a, [nes_apu_regs + $07]
+    and $07
+    ld b, a
+    ret
+
+; Compute pulse 1 sweep target in HL. Carry means the channel is muted by
+; current-period < 8 or positive target overflow > $7FF.
+nes_apu_sweep_target_p1:
+    ld a, [nes_apu_regs + $02]
+    ld l, a
+    ld a, [nes_apu_regs + $03]
+    and $07
+    ld h, a
+    and a
+    jr nz, .period_ok
+    ld a, l
+    cp $08
+    jr c, .muted
+.period_ok:
+    ld a, [nes_apu_regs + $01]
+    and $07
+    ld c, a
+    ld d, h
+    ld e, l
+    ld a, c
+    and a
+    jr z, .shift_done
+.shift:
+    srl d
+    rr e
+    dec a
+    jr nz, .shift
+.shift_done:
+    ld a, [nes_apu_regs + $01]
+    bit 3, a
+    jr nz, .negative
+    ld a, l
+    add e
+    ld l, a
+    ld a, h
+    adc d
+    ld h, a
+    and $F8
+    jr nz, .muted
+    and a
+    ret
+.negative:
+    ; Pulse 1 uses one's-complement negate: period - change - 1.
+    ld a, l
+    sub e
+    ld l, a
+    ld a, h
+    sbc d
+    ld h, a
+    jr c, .clamp_zero
+    ld a, l
+    sub $01
+    ld l, a
+    ld a, h
+    sbc $00
+    ld h, a
+    jr c, .clamp_zero
+    and a
+    ret
+.clamp_zero:
+    ld hl, $0000
+    and a
+    ret
+.muted:
+    scf
+    ret
+
+; Pulse 2 differs only in negate: two's-complement period - change.
+nes_apu_sweep_target_p2:
+    ld a, [nes_apu_regs + $06]
+    ld l, a
+    ld a, [nes_apu_regs + $07]
+    and $07
+    ld h, a
+    and a
+    jr nz, .period_ok
+    ld a, l
+    cp $08
+    jr c, .muted
+.period_ok:
+    ld a, [nes_apu_regs + $05]
+    and $07
+    ld c, a
+    ld d, h
+    ld e, l
+    ld a, c
+    and a
+    jr z, .shift_done
+.shift:
+    srl d
+    rr e
+    dec a
+    jr nz, .shift
+.shift_done:
+    ld a, [nes_apu_regs + $05]
+    bit 3, a
+    jr nz, .negative
+    ld a, l
+    add e
+    ld l, a
+    ld a, h
+    adc d
+    ld h, a
+    and $F8
+    jr nz, .muted
+    and a
+    ret
+.negative:
+    ld a, l
+    sub e
+    ld l, a
+    ld a, h
+    sbc d
+    ld h, a
+    jr c, .clamp_zero
+    and a
+    ret
+.clamp_zero:
+    ld hl, $0000
+    and a
+    ret
+.muted:
+    scf
+    ret
+
+nes_apu_start_p1:
+    call nes_apu_load_p1_timer_bc
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR13], a
+    ld a, [nes_apu_regs + $00]
+    and $C0
+    ldh [rNR11], a
+    ld a, [nes_apu_regs + $00]
+    call nes_apu_vol_to_nrx2
+    ldh [rNR12], a
+    ld a, d
+    and $07
+    or $80
+    ldh [rNR14], a
+    ret
+
+nes_apu_start_p2:
+    call nes_apu_load_p2_timer_bc
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR23], a
+    ld a, [nes_apu_regs + $04]
+    and $C0
+    ldh [rNR21], a
+    ld a, [nes_apu_regs + $04]
+    call nes_apu_vol_to_nrx2
+    ldh [rNR22], a
+    ld a, d
+    and $07
+    or $80
+    ldh [rNR24], a
+    ret
+
+nes_apu_refresh_p1:
+    ld a, [nes_apu_regs + $15]
+    and $01
+    jr z, .mute
+    ld a, [nes_apu_len_p1]
+    and a
+    jr z, .mute
+    call nes_apu_sweep_target_p1
+    jr c, .mute
+    ld a, [nes_apu_regs + $00]
+    call nes_apu_vol_to_nrx2
+    ldh [rNR12], a
+    and $F8
+    ret z
+    ldh a, [rNR52]
+    bit 0, a
+    ret nz
+    jp nes_apu_start_p1
+.mute:
+    xor a
+    ldh [rNR12], a
+    ret
+
+nes_apu_refresh_p2:
+    ld a, [nes_apu_regs + $15]
+    and $02
+    jr z, .mute
+    ld a, [nes_apu_len_p2]
+    and a
+    jr z, .mute
+    call nes_apu_sweep_target_p2
+    jr c, .mute
+    ld a, [nes_apu_regs + $04]
+    call nes_apu_vol_to_nrx2
+    ldh [rNR22], a
+    and $F8
+    ret z
+    ldh a, [rNR52]
+    bit 1, a
+    ret nz
+    jp nes_apu_start_p2
+.mute:
+    xor a
+    ldh [rNR22], a
+    ret
+
+nes_apu_trigger_p1:
+    ld a, [nes_apu_regs + $15]
+    and $01
+    jr z, .mute
+    ld a, [nes_apu_len_p1]
+    and a
+    jr z, .mute
+    call nes_apu_sweep_target_p1
+    jr c, .mute
+    jp nes_apu_start_p1
+.mute:
+    xor a
+    ldh [rNR12], a
+    ret
+
+nes_apu_trigger_p2:
+    ld a, [nes_apu_regs + $15]
+    and $02
+    jr z, .mute
+    ld a, [nes_apu_len_p2]
+    and a
+    jr z, .mute
+    call nes_apu_sweep_target_p2
+    jr c, .mute
+    jp nes_apu_start_p2
+.mute:
+    xor a
+    ldh [rNR22], a
+    ret
+
+; ---------------------------------------------------------------------------
+; Pulse 1 -> GBC square 1.
 ; ---------------------------------------------------------------------------
 nes_apu_update_pulse1:
     ld a, [nes_apu_write_idx]
     cp $03
-    jr nz, .no_preload
+    jr nz, .dispatch
+    ld a, [nes_apu_regs + $15]
+    and $01
+    jr z, .dispatch
     ld a, [nes_apu_regs + $03]
     ld hl, nes_apu_len_p1
     call nes_apu_load_length
-.no_preload:
-    ld a, [nes_apu_regs + $15]
-    and $01
-    jr nz, .enabled
-    xor a
-    ldh [rNR12], a
-    ret
-
-.enabled:
+.dispatch:
     ld a, [nes_apu_write_idx]
     cp $00
-    jr z, .do_vol_duty
+    jr z, .volume
     cp $01
-    jp z, .do_sweep
+    jr z, .sweep
     cp $02
-    jp z, .do_freq
+    jr z, .freq
     cp $03
-    jp z, .do_freq
+    jr z, .trigger
     ret
-
-.do_vol_duty:
+.volume:
     ld a, [nes_apu_regs + $00]
     and $C0
     ldh [rNR11], a
-    ld a, [nes_apu_regs + $00]
-    call nes_apu_vol_to_nrx2
-    ld b, a
-    ld a, [nes_apu_last_nr12_p1]
-    ld c, a
-    ld a, b
-    ld [nes_apu_last_nr12_p1], a
-    ldh [rNR12], a
-    ; If we were silent and now have volume, retrigger so music/SFX ordered
-    ; as freq-then-volume become audible. Skip if already audible so mid-note
-    ; envelope ticks (jump) do not reset sweep pitch to the bottom.
-    ld a, c
-    and $F0
-    ret nz
-    ld a, b
-    and $F0
-    ret z
-    ; Note: do NOT block silence→audible while sweep is on. Flagpole dumps
-    ; $4001 before $4000; blocking left NR12 silent with no trigger.
-    ; Jump restart-after-mute is prevented by last_nr12=$10 poison instead.
-    jp nes_apu_retrigger_p1
-
-.do_sweep:
-    ; Always disable GB hardware sweep; we emulate NES sweep in software.
-    xor a
-    ldh [rNR10], a
-    ld a, [nes_apu_regs + $01]
-    bit 7, a
-    jr nz, .sweep_on
-    ; Sweep off ($7F): stop the sweep unit only. Do NOT silence NR12 —
-    ; death music Dumps $7F then writes $94 every frame; muting here made
-    ; death silent. Jump/SFX end via $4015 or period mute instead.
-    ld a, [nes_apu_regs + $01]
-    ld [nes_apu_sweep_last], a
-    xor a
-    ld [nes_apu_sweep_active], a
-    ld [nes_apu_sweep_muted], a
-    ret
-.sweep_on:
-    ld a, [nes_apu_regs + $01]
-    ld b, a
-    rrca
-    rrca
-    rrca
-    rrca
-    and $07
-    ld [nes_apu_sweep_div], a
-    ld a, [nes_apu_sweep_last]
-    ld c, a                       ; C = previous $4001
-    bit 7, a
-    ld a, b
-    ld [nes_apu_sweep_last], a
-    jr nz, .sweep_was_on
-    ; 0→1 enable: arm sweep from current timer, do NOT retrigger here —
-    ; $4000/$4003 follow and must apply volume (flagpole order is $4001 then $4000).
-.sweep_arm:
-    xor a
-    ld [nes_apu_sweep_muted], a
+    jp nes_apu_refresh_p1
+.sweep:
     ld a, $01
-    ld [nes_apu_sweep_active], a
-    ld a, [nes_apu_regs + $02]
-    ld [nes_apu_sweep_period_lo], a
-    ld [nes_apu_sweep_start_lo], a
-    ld a, [nes_apu_regs + $03]
-    and $07
-    ld [nes_apu_sweep_period_hi], a
-    ld [nes_apu_sweep_start_hi], a
-    ret
-.sweep_was_on:
-    ld a, [nes_apu_sweep_active]
-    and a
-    jr z, .sweep_inactive
-    ld a, b
-    xor c
-    and $0F
-    ret z
-    ld a, [nes_apu_sweep_period_lo]
-    ld [nes_apu_sweep_start_lo], a
-    ld a, [nes_apu_sweep_period_hi]
-    ld [nes_apu_sweep_start_hi], a
-    ret
-.sweep_inactive:
-    ; Period-muted but enable still on (death $94 spam): stay quiet until $4003.
-    ret
-
-.do_freq:
-    ld a, [nes_apu_write_idx]
-    cp $03
-    jr z, nes_apu_retrigger_p1
-    ld a, [nes_apu_regs + $02]
-    ld c, a
-    ld [nes_apu_sweep_period_lo], a
-    ld a, [nes_apu_regs + $03]
-    and $07
-    ld b, a
-    ld [nes_apu_sweep_period_hi], a
+    ld [nes_apu_sweep_reload_p1], a
+    jp nes_apu_refresh_p1
+.freq:
+    call nes_apu_load_p1_timer_bc
     call nes_apu_timer_to_period
     ld a, e
     ldh [rNR13], a
     ld a, d
     and $07
     ldh [rNR14], a
-    ret
-
-nes_apu_retrigger_p1:
-    xor a
-    ld [nes_apu_sweep_muted], a
-    ld a, [nes_apu_regs + $01]
-    ld [nes_apu_sweep_last], a
-    bit 7, a
-    jr z, .retrig_seed
-    ld a, $01
-    ld [nes_apu_sweep_active], a
-.retrig_seed:
-    ld a, [nes_apu_regs + $02]
-    ld c, a
-    ld a, [nes_apu_regs + $03]
-    and $07
-    ld b, a
-    ; Head-bump ($93, falling, shift 3) ~2 octaves sharp vs NES — drop timer×4.
-    ; Jump uses shift 7; fireball/flagpole are negate (skip).
-    ld a, [nes_apu_regs + $01]
-    bit 7, a
-    jr z, .have_timer
-    bit 3, a
-    jr nz, .have_timer
-    and $07
-    cp $04
-    jr nc, .have_timer
-    sla c
-    rl b
-    sla c
-    rl b
-    ld a, b
-    and $07
-    ld b, a
-.have_timer:
-    ld a, c
-    ld [nes_apu_sweep_period_lo], a
-    ld [nes_apu_sweep_start_lo], a
-    ld a, b
-    ld [nes_apu_sweep_period_hi], a
-    ld [nes_apu_sweep_start_hi], a
-    call nes_apu_timer_to_period
-    ld a, e
-    ldh [rNR13], a
-    ld a, [nes_apu_regs + $00]
-    and $C0
-    ldh [rNR11], a
-    ld a, [nes_apu_regs + $00]
-    call nes_apu_vol_to_nrx2
-    ld [nes_apu_last_nr12_p1], a
-    ldh [rNR12], a
-    ld a, d
-    and $07
-    or $80
-    ldh [rNR14], a
-    ret
+    jp nes_apu_refresh_p1
+.trigger:
+    jp nes_apu_trigger_p1
 
 ; ---------------------------------------------------------------------------
-; Pulse 2 → Square 2 (NR21–NR24)
+; Pulse 2 -> GBC square 2.
 ; ---------------------------------------------------------------------------
 nes_apu_update_pulse2:
     ld a, [nes_apu_write_idx]
     cp $07
-    jr nz, .no_preload
+    jr nz, .dispatch
+    ld a, [nes_apu_regs + $15]
+    and $02
+    jr z, .dispatch
     ld a, [nes_apu_regs + $07]
     ld hl, nes_apu_len_p2
     call nes_apu_load_length
-.no_preload:
-    ld a, [nes_apu_regs + $15]
-    and $02
-    jr nz, .enabled
-    xor a
-    ldh [rNR22], a
-    ret
-
-.enabled:
+.dispatch:
     ld a, [nes_apu_write_idx]
     cp $04
-    jr z, .do_vol_duty
+    jr z, .volume
     cp $05
-    jr z, .do_sweep2
+    jr z, .sweep
     cp $06
-    jr z, .do_freq
+    jr z, .freq
     cp $07
-    jr z, .do_freq
+    jr z, .trigger
     ret
-
-.do_sweep2:
-    ld a, [nes_apu_regs + $05]
-    bit 7, a
-    jr nz, .sweep2_on
-    ld a, [nes_apu_sweep2_active]
-    and a
-    jr z, .sweep2_off_idle
-    ; End of blast-style sweep: silence pulse2 SFX tail.
-    xor a
-    ldh [rNR22], a
-    ld [nes_apu_sweep2_active], a
-    ld a, $10
-    ld [nes_apu_last_nr12_p2], a
-.sweep2_off_idle:
-    ret
-.sweep2_on:
-    ld a, [nes_apu_regs + $05]
-    rrca
-    rrca
-    rrca
-    rrca
-    and $07
-    ld [nes_apu_sweep2_div], a
-    ld a, [nes_apu_sweep2_active]
-    and a
-    jr z, .sweep2_first
-    ld a, [nes_apu_sweep2_period_lo]
-    ld [nes_apu_sweep2_start_lo], a
-    ld a, [nes_apu_sweep2_period_hi]
-    ld [nes_apu_sweep2_start_hi], a
-    ret
-.sweep2_first:
+.volume:
+    ld a, [nes_apu_regs + $04]
+    and $C0
+    ldh [rNR21], a
+    jp nes_apu_refresh_p2
+.sweep:
     ld a, $01
-    ld [nes_apu_sweep2_active], a
-    jp nes_apu_retrigger_p2
-
-.do_vol_duty:
-    ld a, [nes_apu_regs + $04]
-    and $C0
-    ldh [rNR21], a
-    ld a, [nes_apu_regs + $04]
-    call nes_apu_vol_to_nrx2
-    ld b, a
-    ld a, [nes_apu_last_nr12_p2]
-    ld c, a
-    ld a, b
-    ld [nes_apu_last_nr12_p2], a
-    ldh [rNR22], a
-    ld a, c
-    and $F0
-    ret nz
-    ld a, b
-    and $F0
-    ret z
-    jp nes_apu_retrigger_p2
-
-.do_freq:
-    ld a, [nes_apu_write_idx]
-    cp $07
-    jr z, nes_apu_retrigger_p2
-    ld a, [nes_apu_regs + $06]
-    ld c, a
-    ld a, [nes_apu_regs + $07]
-    and $07
-    ld b, a
+    ld [nes_apu_sweep_reload_p2], a
+    jp nes_apu_refresh_p2
+.freq:
+    call nes_apu_load_p2_timer_bc
     call nes_apu_timer_to_period
     ld a, e
     ldh [rNR23], a
     ld a, d
     and $07
     ldh [rNR24], a
-    ret
-
-nes_apu_retrigger_p2:
-    ld a, [nes_apu_regs + $06]
-    ld c, a
-    ld a, [nes_apu_regs + $07]
-    and $07
-    ld b, a
-    ld a, c
-    ld [nes_apu_sweep2_period_lo], a
-    ld [nes_apu_sweep2_start_lo], a
-    ld a, b
-    ld [nes_apu_sweep2_period_hi], a
-    ld [nes_apu_sweep2_start_hi], a
-    call nes_apu_timer_to_period
-    ld a, e
-    ldh [rNR23], a
-    ld a, [nes_apu_regs + $04]
-    and $C0
-    ldh [rNR21], a
-    ld a, [nes_apu_regs + $04]
-    call nes_apu_vol_to_nrx2
-    ld [nes_apu_last_nr12_p2], a
-    ldh [rNR22], a
-    ld a, d
-    and $07
-    or $80
-    ldh [rNR24], a
-    ret
+    jp nes_apu_refresh_p2
+.trigger:
+    jp nes_apu_trigger_p2
 
 ; ---------------------------------------------------------------------------
 ; Triangle → Wave (NR30–NR34)
@@ -459,13 +496,17 @@ nes_apu_update_triangle:
     ld a, [nes_apu_write_idx]
     cp $0B
     jr nz, .no_preload
+    ; $400B sets the triangle linear reload state regardless, but the NES
+    ; length counter only reloads while triangle is enabled in $4015.
+    ld a, [nes_apu_regs + $15]
+    and $04
+    jr z, .reload_linear
     ld a, [nes_apu_regs + $0B]
     ld hl, nes_apu_len_tri
     call nes_apu_load_length
-    ; $400B also reloads the linear counter from $4008 (NES reload flag).
-    ld a, [nes_apu_regs + $08]
-    and $7F
-    ld [nes_apu_linear_tri], a
+.reload_linear:
+    ld a, $01
+    ld [nes_apu_tri_reload], a
 .no_preload:
     ld a, [nes_apu_regs + $15]
     and $04
@@ -486,21 +527,9 @@ nes_apu_update_triangle:
     ret
 
 .do_linear:
-    ; Load working linear counter from $4008. Vol 0 / reload 0 → silence.
-    ld a, [nes_apu_regs + $08]
-    and $7F
-    ld [nes_apu_linear_tri], a
-    jr z, .lin_mute
-    ld a, $80
-    ldh [rNR30], a
-    ld a, $20
-    ldh [rNR32], a
-    ret
-.lin_mute:
-    xor a
-    ldh [rNR30], a
-    ldh [rNR32], a
-    ret
+    ; $4008 changes only control/reload value. The working counter changes on
+    ; the next quarter-frame clock if the reload flag is set.
+    jp nes_apu_apply_triangle_gate
 
 .do_freq:
     ld a, [nes_apu_regs + $0A]
@@ -508,93 +537,63 @@ nes_apu_update_triangle:
     ld a, [nes_apu_regs + $0B]
     and $07
     ld b, a
-    ld a, b
-    or a
-    jr nz, .audible
-    ld a, c
-    cp $02
-    jr c, .silent
-.audible:
-    ld a, $80
-    ldh [rNR30], a
-    ld a, $FF
-    ldh [rNR31], a
-    ld a, [nes_apu_linear_tri]
-    and a
-    jr z, .vol_mute
-    ld a, $20
-    jr .vol_write
-.vol_mute:
-    xor a
-.vol_write:
-    ldh [rNR32], a
     call nes_apu_timer_to_period
-    ; Same octave as pulse mapping (extra triangle drop removed — too low).
+    ; Pulse and triangle use the same NES->GB divisor ratio.
     ld a, e
     ldh [rNR33], a
     ld a, d
     and $07
-    ld d, a
-    ld a, [nes_apu_write_idx]
-    cp $0B
+    ldh [rNR34], a                 ; frequency update only; no phase reset
+    jp nes_apu_apply_triangle_gate
+
+; Gate GB wave output from the NES triangle's two counters. NES triangle phase
+; freezes while either counter is zero. GB CH3 cannot reproduce that perfectly,
+; so we stop CH3 and only retrigger it when the gate opens again.
+nes_apu_apply_triangle_gate:
+    ld a, [nes_apu_regs + $15]
+    and $04
+    jr z, .mute
+    ld a, [nes_apu_len_tri]
+    and a
+    jr z, .mute
+    ld a, [nes_apu_linear_tri]
+    and a
+    jr z, .mute
+
+.audible:
+    ld a, $80
+    ldh [rNR30], a
+    ld a, $20
+    ldh [rNR32], a
+    ldh a, [rNR52]
+    bit 2, a
+    ret nz                          ; already running: preserve GB phase
+
+    ; Gate just reopened: start CH3 at the currently programmed frequency.
+    ld a, [nes_apu_regs + $0A]
+    ld c, a
+    ld a, [nes_apu_regs + $0B]
+    and $07
+    ld b, a
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR33], a
     ld a, d
-    jr nz, .write_nr34
+    and $07
     or $80
-.write_nr34:
     ldh [rNR34], a
     ret
 
-; ---------------------------------------------------------------------------
-; Noise → GB noise (NR41–NR44)
-; ---------------------------------------------------------------------------
-nes_apu_update_noise:
-    ld a, [nes_apu_write_idx]
-    cp $0F
-    jr nz, .no_preload
-    ld a, [nes_apu_regs + $0F]
-    ld hl, nes_apu_len_noi
-    call nes_apu_load_length
-.no_preload:
-    ld a, [nes_apu_regs + $15]
-    and $08
-    jr nz, .enabled
+.mute:
     xor a
-    ldh [rNR42], a
+    ldh [rNR30], a
+    ldh [rNR32], a
     ret
 
-.enabled:
-    ld a, [nes_apu_write_idx]
-    cp $0C
-    jr z, .do_vol
-    cp $0E
-    jr z, .do_freq
-    cp $0F
-    jr z, .do_freq
-    ret
-
-.do_vol:
-    xor a
-    ldh [rNR41], a
-    ld a, [nes_apu_regs + $0C]
-    call nes_apu_vol_to_nrx2
-    ld b, a
-    ld a, [nes_apu_last_nr12_noi]
-    ld c, a
-    ld a, b
-    ld [nes_apu_last_nr12_noi], a
-    ldh [rNR42], a
-    ld a, c
-    and $F0
-    ret nz
-    ld a, b
-    and $F0
-    ret z
-    jp nes_apu_retrigger_noi
-
-.do_freq:
-    ld a, [nes_apu_write_idx]
-    cp $0F
-    jr z, nes_apu_retrigger_noi
+; ---------------------------------------------------------------------------
+; Noise -> GBC noise. NR43 is the closest hardware frequency/LFSR mapping.
+; ---------------------------------------------------------------------------
+nes_apu_write_noise_period:
     ld a, [nes_apu_regs + $0E]
     ld b, a
     and $0F
@@ -603,139 +602,170 @@ nes_apu_update_noise:
     ld hl, nes_apu_noise_nr43
     add hl, de
     ld a, [hl]
+IF NES2GBC_APU_TEST_SPEED == 2
+    ; One NR43 shift step halves the GBC noise clock.
+    add $10
+ELIF NES2GBC_APU_TEST_SPEED == 4
+    ; Two shift steps quarter it for 4x host fast-forward.
+    add $20
+ENDC
     bit 7, b
-    jr z, .nr43
+    jr z, .write
     or $08
-.nr43:
+.write:
     ldh [rNR43], a
-    xor a
-    ldh [rNR44], a
     ret
 
-nes_apu_retrigger_noi:
-    ld a, [nes_apu_regs + $0E]
-    ld b, a
-    and $0F
-    ld e, a
-    ld d, 0
-    ld hl, nes_apu_noise_nr43
-    add hl, de
-    ld a, [hl]
-    bit 7, b
-    jr z, .nr43b
-    or $08
-.nr43b:
-    ldh [rNR43], a
+nes_apu_start_noi:
+    call nes_apu_write_noise_period
     ld a, [nes_apu_regs + $0C]
     call nes_apu_vol_to_nrx2
-    ld [nes_apu_last_nr12_noi], a
     ldh [rNR42], a
     ld a, $80
     ldh [rNR44], a
     ret
 
+nes_apu_refresh_noi:
+    ld a, [nes_apu_regs + $15]
+    and $08
+    jr z, .mute
+    ld a, [nes_apu_len_noi]
+    and a
+    jr z, .mute
+    ld a, [nes_apu_regs + $0C]
+    call nes_apu_vol_to_nrx2
+    ldh [rNR42], a
+    and $F8
+    ret z
+    ldh a, [rNR52]
+    bit 3, a
+    ret nz
+    jp nes_apu_start_noi
+.mute:
+    xor a
+    ldh [rNR42], a
+    ret
+
+nes_apu_update_noise:
+    ld a, [nes_apu_write_idx]
+    cp $0F
+    jr nz, .dispatch
+    ld a, [nes_apu_regs + $15]
+    and $08
+    jr z, .dispatch
+    ld a, [nes_apu_regs + $0F]
+    ld hl, nes_apu_len_noi
+    call nes_apu_load_length
+.dispatch:
+    ld a, [nes_apu_write_idx]
+    cp $0C
+    jr z, .volume
+    cp $0E
+    jr z, .freq
+    cp $0F
+    jr z, .trigger
+    ret
+.volume:
+    xor a
+    ldh [rNR41], a
+    jp nes_apu_refresh_noi
+.freq:
+    call nes_apu_write_noise_period
+    jp nes_apu_refresh_noi
+.trigger:
+    ld a, [nes_apu_regs + $15]
+    and $08
+    jr z, .mute
+    ld a, [nes_apu_len_noi]
+    and a
+    jr z, .mute
+    jp nes_apu_start_noi
+.mute:
+    xor a
+    ldh [rNR42], a
+    ret
+
 ; ---------------------------------------------------------------------------
-; $4015: channel enables. Rising edge reloads/triggers that channel.
+; $4015: channel enables. Clearing a bit clears that channel's length counter;
+; setting a bit does not reload or restart the channel.
 ; ---------------------------------------------------------------------------
 nes_apu_update_status:
-    ld a, [nes_apu_prev_4015]
-    ld b, a
     ld a, e
     and $1F
     ld c, a
-    ld [nes_apu_prev_4015], a
 
-    ; Gate NR51 pans from enable bits 0-3 (duplicate to both nibbles).
-    and $0F
-    ld d, a
-    swap a
-    or d
-    ldh [rNR51], a
-
-    ; NES $4015: clearing an enable bit forces that channel's length to 0
-    ; (silence). Setting it again does NOT restart — stays silent until the
-    ; next length reload ($4003/$4007/$400B/$400F). SMB StopSquare*Sfx toggles
-    ; $4015 to kill SFX; our old rising-edge retrigger brought the tone back
-    ; forever (underground hang) and machine-gunned death music.
-
-    ; ---- pulse1 ----
     bit 0, c
     jr nz, .p2
     xor a
-    ldh [rNR12], a
     ld [nes_apu_len_p1], a
-    ld [nes_apu_sweep_active], a
-    ld [nes_apu_sweep_muted], a
-    ld a, $10
-    ld [nes_apu_last_nr12_p1], a
+    ldh [rNR12], a
 .p2:
     bit 1, c
     jr nz, .tri
     xor a
-    ldh [rNR22], a
     ld [nes_apu_len_p2], a
-    ld [nes_apu_sweep2_active], a
-    ld a, $10
-    ld [nes_apu_last_nr12_p2], a
+    ldh [rNR22], a
 .tri:
     bit 2, c
     jr nz, .noi
     xor a
-    ldh [rNR30], a
     ld [nes_apu_len_tri], a
-    ld [nes_apu_linear_tri], a
+    ldh [rNR30], a
 .noi:
     bit 3, c
     ret nz
     xor a
-    ldh [rNR42], a
     ld [nes_apu_len_noi], a
-    ld a, $10
-    ld [nes_apu_last_nr12_noi], a
+    ldh [rNR42], a
     ret
 
 ; ---------------------------------------------------------------------------
-; A = NES vol/env ($4000/$4004/$400C) → A = NRx2
+; NES volume/envelope register -> GBC NRx2 approximation.
+; Constant volume maps 0..15 directly. For NES decay envelopes, GBC's envelope
+; timer is coarser (64 Hz, 3-bit period), so choose the nearest practical decay
+; period while keeping the NES initial level of 15. No game-specific boosts.
 ; ---------------------------------------------------------------------------
 nes_apu_vol_to_nrx2:
-    ; NES $4000/$4004/$400C:
-    ;   bits0-3 volume OR envelope period
-    ;   bit4    1=constant volume, 0=envelope
-    ;   bit5    length halt / envelope loop
     bit 4, a
     jr z, .envelope
-    ; Constant volume: bits0-3 → NR volume, envelope period 0.
-    ; Vol 0 must stay 0 — SMB music envelope ends in $90 (silence) for note gaps.
-    ; Floor only 1–3 (pipe/injury); never boost rests into legato.
     and $0F
-    jr z, .const_ok
-    cp $04
-    jr nc, .const_ok
-    ld a, $06
-.const_ok:
     swap a
     ret
 .envelope:
-    ; Envelope always starts at volume 15 and decays. Bits0-2 → GB period.
-    ; (Old code wrongly used the period as the volume nibble, muting music.)
-    ld b, a
-    and $07
-    ld c, a
-    ld a, $F0                     ; vol 15, decrease
-    or c
-    bit 5, b                      ; loop/halt: keep a slow decay vs silence
-    ret z
-    ; Sustained notes often set halt+envelope; prefer audible sustain.
-    ld a, $F0
+    and $0F
+    ld e, a
+    ld d, 0
+    ld hl, nes_apu_gb_env_period
+    add hl, de
+    ld a, [hl]
+IF NES2GBC_APU_TEST_SPEED == 2
+    add a
+    cp $08
+    jr c, .env_scaled
+    ld a, $07
+.env_scaled:
+ELIF NES2GBC_APU_TEST_SPEED == 4
+    add a
+    add a
+    cp $08
+    jr c, .env_scaled
+    ld a, $07
+.env_scaled:
+ENDC
+    or $F0
     ret
+
+nes_apu_gb_env_period:
+    ; nearest GB envelope period to (V+1)/240 s, clamped to 1..7
+    db 1,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4
 
 ; ---------------------------------------------------------------------------
 ; Input:  BC = NES 11-bit timer t
-; Output: DE = GBC period n = 2048 - min(2047, ((t+1)*75)/16), in 0..2047
+; Output: DE = GBC period n = 2048 - min(2047, ((t+1)*75)/64), in 0..2047
 ; Clobbers: AF, HL, BC
 ;
-; Base ratio is (t+1)*75/64 ≈ NES→GB square. SMB listening was ~2 octaves
-; sharp, so we *4 the period length afterward (effective /16).
+; 75/64 = 1.171875, within ~0.03% of the NTSC NES->GBC divisor ratio for
+; both pulse and triangle channels. No title-specific pitch scaling is applied.
 ; ---------------------------------------------------------------------------
 nes_apu_timer_to_period:
     ; HL = t + 1
@@ -743,32 +773,32 @@ nes_apu_timer_to_period:
     ld l, c
     ld h, b
 
-    push hl                       ; save (t+1)
+    push hl
     ; DE = HL * 11 = HL*8 + HL*2 + HL
     push hl
     add hl, hl
     add hl, hl
-    add hl, hl                    ; *8
+    add hl, hl
     ld e, l
     ld d, h
     pop hl
     push hl
-    add hl, hl                    ; *2
+    add hl, hl
     ld a, l
     add e
     ld e, a
     ld a, h
     adc d
-    ld d, a                       ; *10
+    ld d, a
     pop hl
     ld a, l
     add e
     ld e, a
     ld a, h
     adc d
-    ld d, a                       ; DE = (t+1)*11
+    ld d, a
 
-    ; DE >>= 6 → ((t+1)*11)/64
+    ; DE = ((t+1)*11)/64
     ld b, 6
 .shr6:
     srl d
@@ -776,43 +806,39 @@ nes_apu_timer_to_period:
     dec b
     jr nz, .shr6
 
-    pop hl                        ; HL = t+1
+    ; + (t+1) = ((t+1)*75)/64
+    pop hl
     ld a, l
     add e
     ld e, a
     ld a, h
     adc d
-    ld d, a                       ; DE = (t+1)*75/64
+    ld d, a
 
-    ; Empirical: first listen was ~2 octaves sharp vs NES, so lengthen
-    ; the GBC period by 4 (drop two octaves) before clamping.
+    ; Fast-forward compensation operates on the GB frequency divisor only.
+    ; Doubling the divisor lowers pitch one octave; x4 lowers two octaves.
+IF NES2GBC_APU_TEST_SPEED == 2
     sla e
     rl d
-    jr c, .period_overflow
+ELIF NES2GBC_APU_TEST_SPEED == 4
     sla e
     rl d
-    jr nc, .period_scaled
-.period_overflow:
-    ld de, $07FF
-    jr .capped
-.period_scaled:
+    sla e
+    rl d
+ENDC
 
-    ; Cap at 2047 ($07FF).
+    ; GB period divisor cannot exceed 2047.
     ld a, d
     cp $08
     jr nc, .cap
     cp $07
-    jr c, .capped
+    jr c, .convert
     ld a, e
     cp $FF
-    jr c, .capped
+    jr c, .convert
 .cap:
     ld de, $07FF
-.capped:
-    ; n = 2048 - DE; if DE==0 → clamp to 2047.
-    ld a, e
-    or d
-    jr z, .max_period
+.convert:
     xor a
     sub e
     ld e, a
@@ -820,9 +846,6 @@ nes_apu_timer_to_period:
     sbc d
     and $07
     ld d, a
-    ret
-.max_period:
-    ld de, $07FF
     ret
 
 
@@ -846,18 +869,141 @@ nes_apu_load_length:
     ret
 
 ; ---------------------------------------------------------------------------
-; Coarse frame tick from host VBlank (~60Hz). NES clocks length at 120Hz
-; (quarter frames); two decrements per VBlank is a usable approximation.
-; ---------------------------------------------------------------------------
+; $4017 frame-counter control. Bit 7 selects 5-step mode. We ignore frame IRQ
+; generation for now, but reset the phase on every write. In 5-step mode the
+; NES immediately generates one quarter+half-frame clock after the write; the
+; real 3/4 CPU-cycle delay is below this bridge's timing resolution.
+nes_apu_update_frame_counter:
+    xor a
+    ld [nes_apu_frame_phase], a
+    ld a, e
+    bit 7, a
+    ret z
+    call nes_apu_clock_quarter
+    jp nes_apu_clock_half
+
+; Host VBlank is ~60 Hz at normal speed. Advance enough ~240 Hz sequencer
+; slots to preserve wall-clock APU timing at the selected emulator test speed.
+; 1x: 4 slots/VBlank, 2x: 2, 4x: 1. Keeping phase across calls preserves the
+; same effective NES quarter/half-frame rates while mGBA is fast-forwarding.
 nes_apu_frame_tick:
-    ; NES sweep unit ~120Hz; two clocks per 60Hz VBlank.
+IF NES2GBC_APU_TEST_SPEED == 2
+    ld b, 2
+ELIF NES2GBC_APU_TEST_SPEED == 4
+    ld b, 1
+ELSE
+    ld b, 4
+ENDC
+.step:
+    push bc
+    call nes_apu_frame_step
+    pop bc
+    dec b
+    jr nz, .step
+    ret
+
+nes_apu_frame_step:
+    ld a, [nes_apu_regs + $17]
+    bit 7, a
+    jr nz, .mode5
+
+.mode4:
+    ld a, [nes_apu_frame_phase]
+    and $03
+    jr z, .m4_q0
+    cp $01
+    jr z, .m4_qh1
+    cp $02
+    jr z, .m4_q2
+    ; phase 3: quarter + half, then wrap.
+    xor a
+    ld [nes_apu_frame_phase], a
+    call nes_apu_clock_quarter
+    jp nes_apu_clock_half
+.m4_q0:
+    ld a, $01
+    ld [nes_apu_frame_phase], a
+    jp nes_apu_clock_quarter
+.m4_qh1:
+    ld a, $02
+    ld [nes_apu_frame_phase], a
+    call nes_apu_clock_quarter
+    jp nes_apu_clock_half
+.m4_q2:
+    ld a, $03
+    ld [nes_apu_frame_phase], a
+    jp nes_apu_clock_quarter
+
+.mode5:
+    ld a, [nes_apu_frame_phase]
+    cp $01
+    jr z, .m5_qh1
+    cp $02
+    jr z, .m5_q2
+    cp $03
+    jr z, .m5_blank3
+    cp $04
+    jr z, .m5_qh4
+    ; phase 0: quarter only.
+    ld a, $01
+    ld [nes_apu_frame_phase], a
+    jp nes_apu_clock_quarter
+.m5_qh1:
+    ld a, $02
+    ld [nes_apu_frame_phase], a
+    call nes_apu_clock_quarter
+    jp nes_apu_clock_half
+.m5_q2:
+    ld a, $03
+    ld [nes_apu_frame_phase], a
+    jp nes_apu_clock_quarter
+.m5_blank3:
+    ld a, $04
+    ld [nes_apu_frame_phase], a
+    ret
+.m5_qh4:
+    xor a
+    ld [nes_apu_frame_phase], a
+    call nes_apu_clock_quarter
+    jp nes_apu_clock_half
+
+; Quarter-frame clocks: triangle linear timing is software-owned. Pulse/noise
+; envelope decay is rendered by the closest GBC hardware envelope period.
+nes_apu_clock_quarter:
+    jp nes_apu_clock_triangle_linear
+
+; Half-frame clocks drive length counters and both software sweep units.
+nes_apu_clock_half:
+    call nes_apu_clock_lengths
     call nes_apu_clock_sweep_p1
-    call nes_apu_clock_sweep_p1
-    call nes_apu_clock_sweep_p2
-    call nes_apu_clock_sweep_p2
-    ; ~60Hz length clock. Mute only on the frame the counter hits zero so we
-    ; do not keep forcing NRx2=0 while music reprograms the channel.
-    ; Pulse1
+    jp nes_apu_clock_sweep_p2
+
+nes_apu_clock_triangle_linear:
+    ld a, [nes_apu_tri_reload]
+    and a
+    jr z, .decrement
+    ld a, [nes_apu_regs + $08]
+    and $7F
+    ld [nes_apu_linear_tri], a
+    jr .reload_done
+.decrement:
+    ld a, [nes_apu_linear_tri]
+    and a
+    jr z, .reload_done
+    dec a
+    ld [nes_apu_linear_tri], a
+.reload_done:
+    ; Control=0 clears the reload flag after the clock. Control=1 leaves it
+    ; asserted, causing the reload value to be applied every quarter frame.
+    ld a, [nes_apu_regs + $08]
+    bit 7, a
+    jr nz, .gate
+    xor a
+    ld [nes_apu_tri_reload], a
+.gate:
+    jp nes_apu_apply_triangle_gate
+
+nes_apu_clock_lengths:
     ld a, [nes_apu_regs + $00]
     bit 5, a
     jr nz, .p2
@@ -867,9 +1013,8 @@ nes_apu_frame_tick:
     dec a
     ld [nes_apu_len_p1], a
     jr nz, .p2
-    ldh [rNR12], a                ; A=0
-    ld a, $10
-    ld [nes_apu_last_nr12_p1], a
+    xor a
+    ldh [rNR12], a
 .p2:
     ld a, [nes_apu_regs + $04]
     bit 5, a
@@ -880,28 +1025,9 @@ nes_apu_frame_tick:
     dec a
     ld [nes_apu_len_p2], a
     jr nz, .tri
+    xor a
     ldh [rNR22], a
-    ld a, $10
-    ld [nes_apu_last_nr12_p2], a
 .tri:
-    ; Linear ~120Hz (2 / VBlank) — middle articulation (lean staccato).
-    ld a, [nes_apu_regs + $08]
-    bit 7, a
-    jr nz, .tri_len
-    ld b, 2
-.lin_clk:
-    ld a, [nes_apu_linear_tri]
-    and a
-    jr z, .tri_len
-    dec a
-    ld [nes_apu_linear_tri], a
-    jr nz, .lin_next
-    ldh [rNR30], a
-    jr .tri_len
-.lin_next:
-    dec b
-    jr nz, .lin_clk
-.tri_len:
     ld a, [nes_apu_regs + $08]
     bit 7, a
     jr nz, .noi
@@ -910,335 +1036,135 @@ nes_apu_frame_tick:
     jr z, .noi
     dec a
     ld [nes_apu_len_tri], a
-    jr nz, .noi
-    ldh [rNR30], a
 .noi:
     ld a, [nes_apu_regs + $0C]
     bit 5, a
-    ret nz
+    jr nz, .gate_triangle
     ld a, [nes_apu_len_noi]
     and a
-    ret z
+    jr z, .gate_triangle
     dec a
     ld [nes_apu_len_noi], a
-    ret nz
+    jr nz, .gate_triangle
+    xor a
     ldh [rNR42], a
-    ld a, $10
-    ld [nes_apu_last_nr12_noi], a
-    ret
+.gate_triangle:
+    jp nes_apu_apply_triangle_gate
 
 
 ; ---------------------------------------------------------------------------
-; NES-style pulse1 sweep at ~60Hz (host VBlank). GB NR10 is left off.
-; Mute when period < 8 or would overflow $7FF — same idea as NES sweep unit.
+; NES pulse sweep units. Target muting is combinational; period updates happen
+; only on half-frame clocks when divider=0, enabled=1, and shift!=0.
 ; ---------------------------------------------------------------------------
 nes_apu_clock_sweep_p1:
-    ld a, [nes_apu_regs + $15]
-    and $01
-    ret z
-    ld a, [nes_apu_sweep_active]
+    ld a, [nes_apu_sweep_div_p1]
     and a
-    ret z                         ; post-mute freeze until $4003
+    jr nz, .divider_nonzero
+
     ld a, [nes_apu_regs + $01]
     bit 7, a
-    ret z
-    ld e, a                       ; E = sweep reg
+    jr z, .reload
     and $07
-    ret z                         ; shift 0 = no change (but still "enabled")
-    ld b, a                       ; B = shift
-    ; Divider
-    ld a, [nes_apu_sweep_div]
-    and a
-    jr z, .do_sweep_step
-    dec a
-    ld [nes_apu_sweep_div], a
-    ret
-.do_sweep_step:
-    ; Reload divider from period bits 4-6
-    ld a, e
-    rrca
-    rrca
-    rrca
-    rrca
-    and $07
-    ld [nes_apu_sweep_div], a
-    ; HL = current working period
-    ld a, [nes_apu_sweep_period_lo]
-    ld l, a
-    ld a, [nes_apu_sweep_period_hi]
-    ld h, a
-    ; NES: channel muted while period < 8
-    ld a, h
-    and a
-    jr nz, .period_ge8
+    jr z, .reload
+    call nes_apu_sweep_target_p1
+    jr c, .reload
+
+    ; Commit target to the NES timer register shadow.
     ld a, l
-    cp $08
-    jp c, .mute
-.period_ge8:
-    ; DE = HL >> shift
-    ld a, l
-    ld e, a
-    ld a, h
-    ld d, a
-    ld a, b
-.shr:
-    srl d
-    rr e
-    dec a
-    jr nz, .shr
-    ; Negate?
-    ld a, [nes_apu_regs + $01]
-    bit 3, a
-    jr nz, .negate
-    ; target = period + delta; mute if target > $7FF
-    ld a, l
-    add e
-    ld c, a
-    ld a, h
-    adc d
-    ld b, a
+    ld [nes_apu_regs + $02], a
+    ld b, h
+    ld a, [nes_apu_regs + $03]
     and $F8
-    jp nz, .mute
-    ld l, c
-    ld h, b
-    jr .store
-.negate:
-    ; target = period - delta - 1 (pulse1 ones-complement approx)
-    ld a, e
-    or d
-    jr z, .store                 ; shift produced 0
-    ld a, l
-    sub e
-    ld c, a
-    ld a, h
-    sbc d
-    ld b, a
-    jp c, .mute
-    ld a, c
-    sub $01
-    ld l, a
-    ld a, b
-    sbc $00
-    ld h, a
-    jp c, .mute
-.store:
-    ; NES mute if period < 8
-    ld a, h
-    and a
-    jr nz, .chk_span
-    ld a, l
-    cp $08
-    jp c, .mute
-.chk_span:
-    ; Rising sweep octave cap only for gentler shifts (jump). Fireball shift 1
-    ; halves every step — cap made it a click; use NES period < 8 only.
-    ld a, [nes_apu_regs + $01]
-    bit 3, a
-    jr z, .ok_period
-    and $07
-    cp $03
-    jr c, .ok_period
-    ld a, [nes_apu_sweep_start_lo]
-    ld e, a
-    ld a, [nes_apu_sweep_start_hi]
-    ld d, a
-    srl d
-    rr e
-    srl d
-    rr e
-    ld a, h
-    cp d
-    jp c, .mute
-    jr nz, .ok_period
-    ld a, l
-    cp e
-    jp c, .mute
-.ok_period:
-    ld a, l
-    ld [nes_apu_sweep_period_lo], a
-    ld c, a
-    ld a, h
-    and $07
-    ld [nes_apu_sweep_period_hi], a
-    ld b, a
+    or b
+    ld [nes_apu_regs + $03], a
+
+    ld c, l
+    ld b, h
     call nes_apu_timer_to_period
     ld a, e
     ldh [rNR13], a
     ld a, d
     and $07
-    ldh [rNR14], a                ; no trigger — continue note
-    ret
-.mute:
-nes_apu_mute_p1_locked:
-    xor a
-    ldh [rNR12], a
-    ld [nes_apu_sweep_active], a
-    ld a, $01
-    ld [nes_apu_sweep_muted], a
-    ; Keep a non-zero high nibble in last_nr12 so the next $4000 envelope
-    ; tick is NOT treated as silence→audible (which would restart jump).
-    ; Do NOT clear $4001 bit7 — death music rewrites $94 every frame; clearing
-    ; enable made each rewrite look like a fresh sweep and machine-gunned.
-    ld a, $10
-    ld [nes_apu_last_nr12_p1], a
-    ret
+    ldh [rNR14], a
+    jr .reload
 
-; Pulse2 software sweep (fireworks/blast). Same rules as pulse1, ~1 octave cap.
+.divider_nonzero:
+    ld a, [nes_apu_sweep_reload_p1]
+    and a
+    jr nz, .reload
+    ld a, [nes_apu_sweep_div_p1]
+    dec a
+    ld [nes_apu_sweep_div_p1], a
+    jp nes_apu_refresh_p1
+
+.reload:
+    ld a, [nes_apu_regs + $01]
+    swap a
+    and $07
+    ld [nes_apu_sweep_div_p1], a
+    xor a
+    ld [nes_apu_sweep_reload_p1], a
+    jp nes_apu_refresh_p1
+
 nes_apu_clock_sweep_p2:
-    ld a, [nes_apu_regs + $15]
-    and $02
-    ret z
+    ld a, [nes_apu_sweep_div_p2]
+    and a
+    jr nz, .divider_nonzero
+
     ld a, [nes_apu_regs + $05]
     bit 7, a
-    ret z
-    ld e, a
+    jr z, .reload
     and $07
-    ret z
-    ld b, a
-    ld a, [nes_apu_sweep2_div]
-    and a
-    jr z, .do2
-    dec a
-    ld [nes_apu_sweep2_div], a
-    ret
-.do2:
-    ld a, e
-    rrca
-    rrca
-    rrca
-    rrca
-    and $07
-    ld [nes_apu_sweep2_div], a
-    ld a, [nes_apu_sweep2_period_lo]
-    ld l, a
-    ld a, [nes_apu_sweep2_period_hi]
-    ld h, a
-    ld a, h
-    and a
-    jr nz, .ge8_2
+    jr z, .reload
+    call nes_apu_sweep_target_p2
+    jr c, .reload
+
     ld a, l
-    cp $08
-    jp c, .mute2
-.ge8_2:
-    ld a, l
-    ld e, a
-    ld a, h
-    ld d, a
-    ld a, b
-.shr2:
-    srl d
-    rr e
-    dec a
-    jr nz, .shr2
-    ld a, [nes_apu_regs + $05]
-    bit 3, a
-    jr nz, .neg2
-    ld a, l
-    add e
-    ld c, a
-    ld a, h
-    adc d
-    ld b, a
+    ld [nes_apu_regs + $06], a
+    ld b, h
+    ld a, [nes_apu_regs + $07]
     and $F8
-    jp nz, .mute2
-    ld l, c
-    ld h, b
-    jr .store2
-.neg2:
-    ld a, e
-    or d
-    jr z, .store2
-    ld a, l
-    sub e
-    ld c, a
-    ld a, h
-    sbc d
-    ld b, a
-    jp c, .mute2
-    ld a, c
-    sub $01
-    ld l, a
-    ld a, b
-    sbc $00
-    ld h, a
-    jp c, .mute2
-.store2:
-    ld a, h
-    and a
-    jr nz, .span2
-    ld a, l
-    cp $08
-    jp c, .mute2
-.span2:
-    ld a, [nes_apu_regs + $05]
-    bit 3, a
-    jr nz, .rise2
-    ld a, [nes_apu_sweep2_start_lo]
-    add a
-    ld e, a
-    ld a, [nes_apu_sweep2_start_hi]
-    adc a
-    ld d, a
-    and $F8
-    jr z, .cmpf2
-    ld de, $07FF
-.cmpf2:
-    ld a, h
-    cp d
-    jr c, .ok2
-    jr nz, .mute2
-    ld a, l
-    cp e
-    jr c, .ok2
-    jr z, .ok2
-    jr .mute2
-.rise2:
-    ld a, [nes_apu_sweep2_start_lo]
-    ld e, a
-    ld a, [nes_apu_sweep2_start_hi]
-    ld d, a
-    srl d
-    rr e
-    ld a, h
-    cp d
-    jr c, .mute2
-    jr nz, .ok2
-    ld a, l
-    cp e
-    jr c, .mute2
-.ok2:
-    ld a, l
-    ld [nes_apu_sweep2_period_lo], a
-    ld c, a
-    ld a, h
-    and $07
-    ld [nes_apu_sweep2_period_hi], a
-    ld b, a
+    or b
+    ld [nes_apu_regs + $07], a
+
+    ld c, l
+    ld b, h
     call nes_apu_timer_to_period
     ld a, e
     ldh [rNR23], a
     ld a, d
     and $07
     ldh [rNR24], a
-    ret
-.mute2:
-    xor a
-    ldh [rNR22], a
-    ld [nes_apu_sweep2_active], a
-    ld a, $10
-    ld [nes_apu_last_nr12_p2], a
+    jr .reload
+
+.divider_nonzero:
+    ld a, [nes_apu_sweep_reload_p2]
+    and a
+    jr nz, .reload
+    ld a, [nes_apu_sweep_div_p2]
+    dec a
+    ld [nes_apu_sweep_div_p2], a
+    jp nes_apu_refresh_p2
+
+.reload:
     ld a, [nes_apu_regs + $05]
-    and $7F
-    ld [nes_apu_regs + $05], a
-    ret
+    swap a
+    and $07
+    ld [nes_apu_sweep_div_p2], a
+    xor a
+    ld [nes_apu_sweep_reload_p2], a
+    jp nes_apu_refresh_p2
 
 ; Official NES length counter table (bits 3-7 of $4003/$4007/$400B/$400F).
 nes_apu_length_table:
     db 10,254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14
     db 12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
 
-; NES noise period index 0..F → rough NR43 encoding (lower = higher pitch).
+; NES noise period index 0..F → nearest GB NR43 clock setting.
+; NES index 0 is the highest clock and index F the lowest. Values below are
+; chosen by nearest log-frequency match using NTSC NES noise periods and the
+; GB clock formula 262144 / (divider * 2^shift). Bit 3 remains clear here and
+; is ORed in separately when NES short/periodic-noise mode is selected.
 nes_apu_noise_nr43:
-    ; One octave up from prior table (stage percussion was dull).
-    db $E7, $E3, $D3, $C3, $B3, $A3, $93, $83
-    db $73, $63, $53, $43, $33, $23, $13, $03
+    db $00, $01, $02, $05, $15, $17, $25, $26
+    db $27, $35, $37, $45, $47, $55, $65, $75
