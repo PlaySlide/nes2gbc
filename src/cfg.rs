@@ -195,6 +195,32 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   pc=pc.wrapping_add(1);
  }
 
+ // Form 1b: adjacent low/high table bytes without INY:
+ //   LDA table,Y   / STA ptr
+ //   LDA table+1,Y / STA ptr+1
+ //   JMP (ptr)
+ //
+ // Dig Dug uses this compact form at $E4FD to dispatch through the word table
+ // at $E563. Y is already an even byte offset, so table/table+1 select the low
+ // and high bytes of the same little-endian target.
+ let mut pc=start;
+ while pc.saturating_add(13)<=jmp_pc.saturating_add(3){
+  let o=match off(mapper,prg.len(),pc){Ok(o)=>o,Err(_)=>break};
+  if o+13<=prg.len()
+   &&pc.wrapping_add(10)==jmp_pc
+   &&prg[o]==0xB9
+   &&prg[o+3]==0x85&&prg[o+4]==pointer as u8
+   &&prg[o+5]==0xB9
+   &&prg[o+8]==0x85&&prg[o+9]==pointer.wrapping_add(1)as u8
+   &&prg[o+10]==0x6C&&prg[o+11]==pointer as u8&&prg[o+12]==0x00
+  {
+   let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+   let high_base=u16::from_le_bytes([prg[o+6],prg[o+7]]);
+   if high_base==base.wrapping_add(1)&&!tables.contains(&base){tables.push(base)}
+  }
+  pc=pc.wrapping_add(1);
+ }
+
  // Form 2: a tiny JMP (ptr) trampoline whose caller builds the pointer:
  //   LDA table,Y / STA ptr / LDA table+1,Y / STA ptr+1 / JSR trampoline
  //   trampoline: JMP (ptr)
@@ -319,6 +345,40 @@ mod tests {
 
         assert!(graph.blocks.contains_key(&0x8004));
         assert!(graph.blocks.contains_key(&0x8006));
+    }
+
+    #[test]
+    fn discovers_adjacent_low_high_indexed_jump_table_targets() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xB9, 0x00, 0xA0, // LDA $A000,Y
+                0x85, 0xEA,       // STA $EA
+                0xB9, 0x01, 0xA0, // LDA $A001,Y
+                0x85, 0xEB,       // STA $EB
+                0x6C, 0xEA, 0x00, // JMP ($00EA)
+            ],
+        );
+
+        // Y is an even byte offset into a little-endian word table.
+        put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92, 0x20, 0x92]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+        put(&mut prg, 0x9220, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        assert!(graph.blocks.contains_key(&0x9220));
+        let dispatcher = graph.blocks.get(&0x9000).unwrap();
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x00EA })
+                && edge.target == Some(0x9200)
+        }));
     }
 
     #[test]
