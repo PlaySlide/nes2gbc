@@ -11,6 +11,7 @@ mirror or wrap differently than the native walk assumes.
 Patterns (a/b/c = RAM absolutes <$0800, z = zero page):
   dec_nonzero: L: LDA a,X / BEQ +3 / DEC a,X / DEX / BPL L
   shift_chain: L: ROR|ROL a,X / INX / DEY / BNE L
+  delay:       L: DEY|DEX / BNE L
   cmp_add_wrap (SMB $81CF):
       L: LDA a,X / CMP z / BCC S / LDY b / CLC / ADC c,Y / BCC T / CLC /
          ADC z / T: STA a,X / S: DEX / BPL L
@@ -50,6 +51,8 @@ def find(prg):
         pc = 0x8000 + o
         if b[0] == 0xBD and b[3:6] == bytes([0xF0, 0x03, 0xDE]) and w(b, 6) == w(b, 1) and b[8:11] == bytes([0xCA, 0x10, 0xF5]) and w(b, 1) < 0x800:
             out.append(("dec_nonzero", pc, pc + 11, dict(a=w(b, 1))))
+        if b[0] in (0x88, 0xCA) and b[1:3] == bytes([0xD0, 0xFD]):
+            out.append(("delay", pc, pc + 3, dict(y=b[0] == 0x88)))
         if b[0] in (0x7E, 0x3E) and b[3:7] == bytes([0xE8, 0x88, 0xD0, 0xF9]) and w(b, 1) < 0x800:
             out.append(("shift_chain", pc, pc + 7, dict(a=w(b, 1), ror=b[0] == 0x7E)))
         if (b[0] == 0xBD and b[3] == 0xC5 and b[5:7] == bytes([0x90, 0x0F]) and b[7] == 0xAC and b[10:12] == bytes([0x18, 0x79])
@@ -75,6 +78,14 @@ def emit(kind, pc, exit_pc, p, xs, ys):
     ldx = "ld a, b" if xs == "b" else "ldh a, [nes_x]"
     ldy = "ld a, c" if ys == "c" else "ldh a, [nes_y]"
     L = [f"; native {kind} loop ${pc:04X} (tools/native_small_loops.py)"]
+    if kind == "delay":
+        # L: DEY|DEX / BNE L  ->  register 0, Z set, N clear, nothing else.
+        other_res = (xs == "b") if p["y"] else (ys == "c")
+        if other_res:
+            L += ["ld a, b", "ldh [nes_x], a"] if p["y"] else ["ld a, c", "ldh [nes_y], a"]
+        L += ["xor a", "ldh [nes_y], a" if p["y"] else "ldh [nes_x], a", "ldh [nes_z_shadow], a", "ldh [nes_n_shadow], a"]
+        L += tail(k, exit_pc)[:-1]
+        return [(x if (x.endswith(":") and not x.startswith(";")) else "    " + x) + "\n" for x in L]
     if kind == "dec_nonzero":
         A = ram(p["a"])
         lim = min(0x7F, 0x7FF - p["a"])
@@ -195,6 +206,11 @@ def main(asm, rom_path):
                 ys = ys or "hram"
             if kind == "dec_nonzero" and ys is None and y_dead_at(prg, exit_pc):
                 ys = "dead"
+            if kind == "delay":  # the counted register is overwritten
+                if prm["y"]:
+                    ys = ys or "dead"
+                else:
+                    xs = xs or "dead"
             if xs is None or ys is None:
                 print(f"native-small-loops: ${pc:04X} {kind}: register source unknown at {want}, skipped")
                 break
