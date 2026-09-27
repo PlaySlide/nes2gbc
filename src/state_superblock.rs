@@ -461,8 +461,49 @@ fn overflow_dead_after(
     nmi_exclusive: &BTreeSet<u16>,
 ) -> BTreeSet<u16> {
     use crate::cpu6502::Mnemonic::*;
-    let reads = |m| matches!(m, Bvc | Bvs | Php | Brk);
-    let writes = |m| matches!(m, Adc | Sbc | Bit | Clv | Plp | Rti);
+    flag_dead_after(
+        graph,
+        selected,
+        poll_points,
+        nmi_exclusive,
+        |m| matches!(m, Bvc | Bvs | Php | Brk),
+        |m| matches!(m, Adc | Sbc | Bit | Clv | Plp | Rti),
+    )
+}
+
+/// REGALLOC>=3: 6502 carry liveness (same conservative model as V).
+fn carry_dead_after(
+    graph: &ControlFlowGraph,
+    selected: &BTreeSet<u16>,
+    poll_points: &BTreeSet<u16>,
+    nmi_exclusive: &BTreeSet<u16>,
+) -> BTreeSet<u16> {
+    use crate::cpu6502::Mnemonic::*;
+    flag_dead_after(
+        graph,
+        selected,
+        poll_points,
+        nmi_exclusive,
+        |m| matches!(m, Adc | Sbc | Rol | Ror | Bcc | Bcs | Php | Brk),
+        |m| {
+            matches!(
+                m,
+                Adc | Sbc | Cmp | Cpx | Cpy | Asl | Lsr | Rol | Ror | Clc | Sec | Plp | Rti
+            )
+        },
+    )
+}
+
+/// Backward liveness of one 6502 status flag over the selected CFG.
+fn flag_dead_after(
+    graph: &ControlFlowGraph,
+    selected: &BTreeSet<u16>,
+    poll_points: &BTreeSet<u16>,
+    nmi_exclusive: &BTreeSet<u16>,
+    reads: impl Fn(crate::cpu6502::Mnemonic) -> bool,
+    writes: impl Fn(crate::cpu6502::Mnemonic) -> bool,
+) -> BTreeSet<u16> {
+    use crate::cpu6502::Mnemonic::*;
     let polled = |addr: u16| poll_points.contains(&addr) && !nmi_exclusive.contains(&addr);
 
     let live_out_of = |addr: u16, live_in: &BTreeMap<u16, bool>| -> bool {
@@ -543,6 +584,8 @@ struct TraceState {
     carry: Option<bool>,
     /// REGALLOC>=2: V is dead after the instruction being emitted.
     v_dead: bool,
+    /// REGALLOC>=3: C is dead after the instruction being emitted.
+    c_dead: bool,
 }
 
 #[derive(Debug, Default)]
@@ -871,6 +914,7 @@ fn emit_fast_modify_value(
     out: &mut String,
     modify: ModifyOp,
     known_carry: Option<bool>,
+    c_dead: bool,
     stats: &mut StateStats,
 ) {
     match modify {
@@ -924,15 +968,19 @@ fn emit_fast_modify_value(
                 _ => unreachable!(),
             };
             let _ = name;
-            writeln!(out, "    ld e, a ; superblock shift/rotate result").unwrap();
+            if c_dead {
+                writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
+            } else {
+                writeln!(out, "    ld e, a ; superblock shift/rotate result").unwrap();
 
-            // Branchless carry capture: LD preserves carry and RL moves C into
-            // bit 0, yielding the canonical normalized 0/1 shadow.
-            writeln!(out, "    ld a, $00").unwrap();
-            writeln!(out, "    rl a ; capture shift/rotate carry").unwrap();
-            writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                // Branchless carry capture: LD preserves carry and RL moves C into
+                // bit 0, yielding the canonical normalized 0/1 shadow.
+                writeln!(out, "    ld a, $00").unwrap();
+                writeln!(out, "    rl a ; capture shift/rotate carry").unwrap();
+                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
 
-            writeln!(out, "    ld a, e").unwrap();
+                writeln!(out, "    ld a, e").unwrap();
+            }
             emit_update_nz(out);
             stats.fast_shifts += 1;
         }
@@ -950,13 +998,13 @@ fn emit_fast_modify_memory(
         Operand::ZeroPage(zp) => {
             let addr = NES_RAM_BASE + zp as u16;
             writeln!(out, "    ld a, [${addr:04X}]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, stats);
+            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [${addr:04X}], a").unwrap();
         }
         Operand::Absolute(addr) => {
             let mapped = direct_ram_addr(addr).unwrap();
             writeln!(out, "    ld a, [${mapped:04X}]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, stats);
+            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [${mapped:04X}], a").unwrap();
         }
         Operand::ZeroPageX(zp) => {
@@ -968,7 +1016,7 @@ fn emit_fast_modify_memory(
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, stats);
+            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -981,7 +1029,7 @@ fn emit_fast_modify_memory(
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, stats);
+            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -993,7 +1041,7 @@ fn emit_fast_modify_memory(
             stats.x_index_uses += 1;
             emit_add_a_to_hl(out);
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, stats);
+            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -1005,7 +1053,7 @@ fn emit_fast_modify_memory(
             stats.y_index_uses += 1;
             emit_add_a_to_hl(out);
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, stats);
+            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -1227,7 +1275,9 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             writeln!(out, "    ld l, a ; arithmetic result").unwrap();
 
             // Capture 6502 carry before any flag-clobbering status work.
-            if regalloc_level() >= 2 {
+            if state.c_dead {
+                writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
+            } else if regalloc_level() >= 2 {
                 writeln!(out, "    ld a, $00").unwrap();
                 writeln!(out, "    rla ; branchless carry capture").unwrap();
             } else {
@@ -1236,7 +1286,9 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                 writeln!(out, "    inc a").unwrap();
                 writeln!(out, ":").unwrap();
             }
-            writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+            if !state.c_dead {
+                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+            }
             if state.v_dead {
                 writeln!(out, "    ; V dead on every path (compiler overflow liveness)").unwrap();
                 writeln!(out, "    ld a, l").unwrap();
@@ -1276,7 +1328,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
         IrOp::Modify { op: modify, target } => match target {
             ModifyTarget::Accumulator => {
                 ensure_a(out, state, stats);
-                emit_fast_modify_value(out, modify, state.carry, stats);
+                emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
                 write_a_resident(state, stats);
             }
             ModifyTarget::Memory(mem) => {
@@ -1312,11 +1364,15 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             writeln!(out, "    sub e ; superblock fast compare").unwrap();
             writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
             writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
-            writeln!(out, "    ld a, $00").unwrap();
-            writeln!(out, "    jr c, :+").unwrap();
-            writeln!(out, "    inc a").unwrap();
-            writeln!(out, ":").unwrap();
-            writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+            if state.c_dead {
+                writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
+            } else {
+                writeln!(out, "    ld a, $00").unwrap();
+                writeln!(out, "    jr c, :+").unwrap();
+                writeln!(out, "    inc a").unwrap();
+                writeln!(out, ":").unwrap();
+                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+            }
             stats.fast_compares += 1;
         }
         IrOp::Nop => {}
@@ -1374,6 +1430,11 @@ pub fn emit_cfg_with_interrupts(
     } else {
         BTreeSet::new()
     };
+    let c_dead = if regalloc_level() >= 3 {
+        carry_dead_after(graph, &selected, &poll_points, &nmi_exclusive)
+    } else {
+        BTreeSet::new()
+    };
 
     if plan.disabled_for_unresolved_indirect {
         println!(
@@ -1393,7 +1454,11 @@ pub fn emit_cfg_with_interrupts(
         nmi_exclusive.len()
     );
     if regalloc_level() >= 2 {
-        println!("regalloc: V dead after {} instruction(s)", v_dead.len());
+        println!(
+            "regalloc: V dead after {} instruction(s), C dead after {}",
+            v_dead.len(),
+            c_dead.len()
+        );
     }
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
@@ -1580,8 +1645,10 @@ pub fn emit_cfg_with_interrupts(
                         write_insn_comment(&mut out, instruction);
                         let before = out.len();
                         state.v_dead = v_dead.contains(&instruction.pc);
+                        state.c_dead = c_dead.contains(&instruction.pc);
                         emit_fast_op(&mut out, &ops[0], &mut state, &mut stats);
                         state.v_dead = false;
+                        state.c_dead = false;
                         section_pc += approx_code_bytes(&out[before..]);
                     } else {
                         write_insn_comment(&mut out, instruction);
