@@ -1,3 +1,6 @@
+; Build configuration written by `make generate` (APU=1 defines NES2GBC_APU).
+INCLUDE "generated_config.inc"
+
 ; nes2gbc Game Boy Color runtime skeleton.
 INCLUDE "hardware.inc"
 
@@ -18,15 +21,166 @@ SECTION "SMB split grace state", WRAM0[$C817]
 nes_split_retire_grace_used: ds 1
 
 SECTION "Runtime", ROM0[$0150]
+; OAM DMA owns the main buses while active, so the wait loop must execute from
+; HRAM. Keep a position-independent 8-byte image in ROM and borrow the first
+; eight bytes of the palette shadow as execution scratch for the short VBlank
+; transfer. The bytes are saved on the native stack and restored immediately
+; after DMA, before palette publication is allowed to run.
+nes_oam_dma_hram_image:
+    ldh [$FF46], a
+    ld a, $28
+.wait:
+    dec a
+    jr nz, .wait
+    ret
+nes_oam_dma_hram_image_end:
+
+nes_video_sync_oam_hw:
+    ; Save palette-shadow bytes 0-7 in four register-pair stack slots.
+    ld hl, nes_gbc_palette_shadow
+    ld a, [hli]
+    ld b, a
+    ld a, [hli]
+    ld c, a
+    push bc
+    ld a, [hli]
+    ld b, a
+    ld a, [hli]
+    ld c, a
+    push bc
+    ld a, [hli]
+    ld b, a
+    ld a, [hli]
+    ld c, a
+    push bc
+    ld a, [hli]
+    ld b, a
+    ld a, [hl]
+    ld c, a
+    push bc
+
+    ; Copy the tiny DMA routine into HRAM while all buses are still available.
+    ld hl, nes_oam_dma_hram_image
+    ld c, LOW(nes_gbc_palette_shadow)
+    ld b, nes_oam_dma_hram_image_end - nes_oam_dma_hram_image
+.copy_dma_hram:
+    ld a, [hli]
+    ldh [c], a
+    inc c
+    dec b
+    jr nz, .copy_dma_hram
+
+    ; Projected OAM is deliberately page-aligned at $CB00. FF46 copies exactly
+    ; $A0 bytes to hardware OAM; the HRAM routine waits until the transfer ends.
+IF !DEF(NES2GBC_NO_PACING)
+    ld a, [nes_oam_dma_page]
+ELSE
+    ld a, HIGH(nes_gbc_oam_shadow)
+ENDC
+    call nes_gbc_palette_shadow
+
+    ; Restore the temporarily borrowed palette-shadow bytes in reverse order.
+    ld hl, nes_gbc_palette_shadow + 7
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    dec hl
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    dec hl
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    dec hl
+    pop bc
+    ld [hl], c
+    dec hl
+    ld [hl], b
+    ret
+
 nes_gbc_vblank_isr:
     push af
     push bc
     push de
     push hl
+    ; Translated code may be interrupted between selecting a WRAMX bank and
+    ; using it (mirrored-PRG reads select banks 2-5). This ISR assumes bank 1
+    ; and ends in bank 1, so save and restore the interrupted selection.
+    ldh a, [rSVBK]
+    push af
+    ld a, $01
+    ldh [rSVBK], a
 
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
     call nes_diag_snapshot_frame
+IF DEF(NES2GBC_APU)
+    call nes_apu_frame_tick
+ENDC
+
+IF !DEF(NES2GBC_NO_PACING)
+    ; Frame pacing: a completed-but-unpublished frame was snapshotted when the
+    ; next NMI started early. If that NMI is still running, publish the
+    ; snapshot by running this whole ISR against it (swapped in, NMI shown as
+    ; inactive). If the next NMI has also completed, the live state is newer
+    ; and already contains the snapshot's queued nametable entries.
+    xor a
+    ld [nes_pace_committed], a
+    ld [nes_pace_armed], a
+    ld a, [nes_pace_snap_valid]
+    and a
+    jr z, .pace_setup_done
+    ld a, [nes_nmi_active]
+    and a
+    jr nz, .pace_publish_snapshot
+    ; The early NMI already completed: its live state is newer and includes
+    ; the snapshot's queue, OAM and palette; inherit its pending flags.
+    xor a
+    ld [nes_pace_snap_valid], a
+    ld a, [nes_pace_snap + PACE_IDX_OAM_DIRTY]
+    ld b, a
+    ld a, [nes_oam_dirty]
+    or b
+    ld [nes_oam_dirty], a
+    ld a, [nes_pace_snap + PACE_IDX_MASK_DIRTY]
+    ld b, a
+    ld a, [nes_mask_dirty]
+    or b
+    ld [nes_mask_dirty], a
+    ld a, [nes_pace_snap + PACE_IDX_PALETTE_DIRTY]
+    ld b, a
+    ldh a, [nes_palette_dirty]
+    or b
+    ldh [nes_palette_dirty], a
+    ld a, [nes_pace_snap + PACE_IDX_SCROLL_DIRTY]
+    ld b, a
+    ldh a, [nes_scroll_dirty]
+    or b
+    ldh [nes_scroll_dirty], a
+    ld a, [nes_pace_snap + PACE_IDX_CTRL_DIRTY]
+    ld b, a
+    ldh a, [nes_ctrl_dirty]
+    or b
+    ldh [nes_ctrl_dirty], a
+    jr .pace_setup_done
+.pace_publish_snapshot:
+    call nes_pace_swap
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld [nes_pace_q_end_lo], a
+    ld a, [nes_nametable_queue_ptr_hi]
+    ld [nes_pace_q_end_hi], a
+    ld a, [nes_oam_pace_page]
+    ld [nes_oam_dma_page], a
+    xor a
+    ld [nes_nmi_active], a
+    inc a
+    ld [nes_pace_isr_active], a
+.pace_setup_done:
+ENDC
 
     ; A proven SMB split occasionally emits two duplicate-only scroll NMIs in a
     ; row even though gameplay has not left the stitched presentation. The PPU
@@ -153,15 +307,19 @@ nes_gbc_vblank_isr:
     jp .done
 
 .commit_ready:
+IF !DEF(NES2GBC_NO_PACING)
+    ld a, $01
+    ld [nes_pace_committed], a
+    xor a
+    ld [nes_pace_unpublished], a
+ENDC
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_COMMIT
     ld [nes_diag_event_flags], a
 
-    ; Sprite OAM has a hard scanout deadline: once visible lines begin, a
-    ; 160-byte hardware-OAM copy can mix two NES metasprite states in one GBC
-    ; frame. Publish ONLY OAM before the heavier BG transaction. Palette,
-    ; control, scroll, and all BG ordering remain unchanged from the stable
-    ; renderer baseline.
+    ; Sprite OAM has a hard scanout deadline. Publish only OAM before the
+    ; heavier BG transaction. The projected shadow is copied with hardware
+    ; FF46 DMA from its page-aligned $CB00 backing store.
     ld a, [nes_oam_dirty]
     and a
     jp z, .oam_done
@@ -173,7 +331,10 @@ nes_gbc_vblank_isr:
     jp nz, .oam_shadow_ready
     call nes_video_build_oam_shadow
 .oam_shadow_ready:
-    call nes_video_sync_oam
+IF !DEF(NES2GBC_NO_PACING)
+    call nes_oam_resolve_stale
+ENDC
+    call nes_video_sync_oam_hw
 .oam_done:
 
     ; SMB's stitched BG publication can run well past the line-32 HUD split.
@@ -193,6 +354,26 @@ nes_gbc_vblank_isr:
     call nes_video_flush_nametable_queue_atomic
     call nes_video_update_horizontal_stitch
 
+IF !DEF(NES2GBC_NO_PACING)
+    ; If publication ended just before the armed HUD split, the non-nested
+    ; tail below would delay it past LYC and expose the backing map for a few
+    ; lines. Let the split fire first (STAT may still nest here).
+    ldh a, [nes_split_active]
+    and a
+    jr z, .split_wait_done
+.split_wait:
+    ldh a, [rSTAT]
+    bit 6, a
+    jr z, .split_wait_done
+    ldh a, [rLY]
+    ld b, a
+    ldh a, [rLYC]
+    sub b
+    jr c, .split_wait_done
+    cp 12
+    jr c, .split_wait
+.split_wait_done:
+ENDC
     ; Resume ordinary non-nested VBlank work. If BG publication completed
     ; before LYC, the still-armed STAT source will fire normally after RETI.
     di
@@ -324,6 +505,61 @@ nes_gbc_vblank_isr:
     ld a, $01
     ldh [nes_host_vblank_pending], a
 .done:
+IF !DEF(NES2GBC_NO_PACING)
+    ld a, [nes_pace_isr_active]
+    and a
+    jr z, .pace_not_paced
+    ; Restore the running NMI's live state. The commit's VBlank event becomes
+    ; a pacing credit consumed at that NMI's RTI.
+    xor a
+    ld [nes_pace_isr_active], a
+    inc a
+    ld [nes_nmi_active], a
+    ld a, [nes_oam_live_page]
+    ld [nes_oam_dma_page], a
+    ; The swap-back/retire tail can cross the HUD split line: let only STAT
+    ; nest (it reads just nes_split_active from the swapped set, and every
+    ; byte is either the old or the new value).
+    ld a, $02
+    ld [rIE], a
+    ei
+    call nes_pace_swap
+    ld a, [nes_pace_committed]
+    and a
+    jr z, .pace_tail_done
+    xor a
+    ld [nes_pace_snap_valid], a
+    call nes_pace_retire_flushed_queue
+.pace_tail_done:
+    di
+    ld a, $03
+    ld [rIE], a
+    jr .pace_credit
+.pace_not_paced:
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .pace_done
+.pace_credit:
+    ; Never more than one NMI start per host VBlank (60 NES fps cap).
+    xor a
+    ldh [nes_host_vblank_pending], a
+    inc a
+    ld [nes_pace_credit], a
+.pace_done:
+    ; VBlank has now passed for an early-started NMI: its PPUMASK writes may
+    ; go live again; apply the latest deferred one.
+    xor a
+    ld [nes_pace_early], a
+    ld a, [nes_pace_mask_deferred]
+    and a
+    jr z, .pace_mask_done
+    xor a
+    ld [nes_pace_mask_deferred], a
+    call nes_video_update_mask
+.pace_mask_done:
+ENDC
+    pop af
+    ldh [rSVBK], a
     pop hl
     pop de
     pop bc
@@ -772,6 +1008,50 @@ Start:
     ldh [nes_split_line], a
     xor a
 
+    ld [nes_pace_credit], a
+    ld [nes_pace_unpublished], a
+    ld [nes_pace_snap_valid], a
+    ld [nes_pace_snap_palette], a
+    ld [nes_pace_isr_active], a
+    ld [nes_pace_committed], a
+    ld [nes_pace_early], a
+    ld [nes_pace_mask_deferred], a
+    ld [nes_pace_armed], a
+    ld [nes_pace_idle_lo], a
+    ld [nes_pace_idle_hi], a
+    ld [nes_pace_cand_lo], a
+    ld [nes_pace_cand_hi], a
+    ld a, HIGH(nes_gbc_oam_shadow)
+    ld [nes_oam_dma_page], a
+IF !DEF(NES2GBC_NO_PACING)
+    ld [nes_oam_live_page], a
+    ld a, HIGH(nes_pace_oam)
+    ld [nes_oam_pace_page], a
+    xor a
+    ld [nes_oam_live_stale], a
+ENDC
+    ; Empty direct-mapped dispatch cache: tag 0, code bank 1, and a linked
+    ; address of nes_dispatch_dm_empty (a false tag-0 hit takes the miss path).
+    ld hl, nes_dispatch_dm_tag
+    ld b, $80
+.clear_dispatch_dm:
+    xor a
+    ld [hl], a
+    set 7, l
+    inc a
+    ld [hl], a
+    inc h
+    ld a, HIGH(nes_dispatch_dm_empty)
+    ld [hl], a
+    res 7, l
+    ld a, LOW(nes_dispatch_dm_empty)
+    ld [hl], a
+    dec h
+    inc l
+    dec b
+    jr nz, .clear_dispatch_dm
+    xor a
+
     ld hl, nes_gbc_palette_shadow
     ld b, $40
 .clear_palette_shadow:
@@ -793,6 +1073,9 @@ Start:
     call nes_generated_init
     call nes_generated_follow_init
     call nes_video_init
+IF DEF(NES2GBC_APU)
+    call nes_apu_init
+ENDC
     ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
     call nes_profile_reset
 
@@ -809,6 +1092,9 @@ Start:
     jp nes_reset
 
 INCLUDE "io.asm"
+IF DEF(NES2GBC_APU)
+INCLUDE "apu.asm"
+ENDC
 INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"

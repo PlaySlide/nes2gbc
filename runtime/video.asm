@@ -1344,7 +1344,15 @@ nes_video_build_oam_shadow:
     ld a, [nes_ppuctrl]
     ldh [nes_oam_ppuctrl_tmp], a
     ld hl, nes_oam_ram
+IF !DEF(NES2GBC_NO_PACING)
+    xor a
+    ld [nes_oam_live_stale], a
+    ld a, [nes_oam_live_page]
+    ld d, a
+    ld e, 0
+ELSE
     ld de, nes_gbc_oam_shadow
+ENDC
     ld b, 64
     xor a
     ldh [nes_oam_emit_count], a

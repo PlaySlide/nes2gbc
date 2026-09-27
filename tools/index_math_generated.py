@@ -22,6 +22,12 @@ SOURCE_RE = re.compile(
 ABS_RAM_BASE_RE = re.compile(r"ld hl, \$(C[0-7][0-9A-Fa-f]{2})$")
 INDEX_LOADS = {"ldh a, [nes_x]", "ldh a, [nes_y]"}
 RMW_MNEMONICS = {"Inc", "Dec", "Asl", "Lsr", "Rol", "Ror"}
+INDEX_STEP_PATTERNS = {
+    "Inx": ("inc b", "ld a, b"),
+    "Iny": ("inc c", "ld a, c"),
+    "Dex": ("dec b", "ld a, b"),
+    "Dey": ("dec c", "ld a, c"),
+}
 
 
 def is_absolute_indexed_rmw_source(lines: list[str], start: int) -> bool:
@@ -121,6 +127,78 @@ def fuse_absolute_indexed_rmw_recalc(lines: list[str]) -> int:
     return fused
 
 
+def elide_intermediate_index_flag_publication(lines: list[str]) -> tuple[int, int]:
+    """Keep only the final Z/N publication in a consecutive INX/INY/DEX/DEY run.
+
+    Every one of these 6502 instructions overwrites both Z and N. When two or
+    more identical index steps are adjacent source instructions, the earlier
+    Z/N values are unobservable: there is no intervening source instruction,
+    control-flow edge, NMI poll, or status materialization that could consume
+    them. The resident B/C index update itself must remain for each source op,
+    but its temporary move through host A and the two HRAM shadow stores are
+    dead until the final step in the run.
+
+    Match the exact current superblock-emitter shape and leave source comments
+    in place so later generated-ASM analyses retain their instruction mapping.
+    """
+    runs = 0
+    dead_steps = 0
+    i = 0
+
+    while i + 9 < len(lines):
+        m = SOURCE_RE.search(lines[i])
+        if m is None or m.group(2) != "Implied":
+            i += 1
+            continue
+        mnemonic = m.group(1)
+        pattern = INDEX_STEP_PATTERNS.get(mnemonic)
+        if pattern is None:
+            i += 1
+            continue
+        step, move = pattern
+
+        def matches_step(start: int) -> bool:
+            if start + 4 >= len(lines):
+                return False
+            sm = SOURCE_RE.search(lines[start])
+            if sm is None or sm.group(1) != mnemonic or sm.group(2) != "Implied":
+                return False
+            return [code(lines[start + n]) for n in range(1, 5)] == [
+                step,
+                move,
+                "ldh [nes_z_shadow], a",
+                "ldh [nes_n_shadow], a",
+            ]
+
+        if not matches_step(i):
+            i += 1
+            continue
+
+        starts = [i]
+        j = i + 5
+        while matches_step(j):
+            starts.append(j)
+            j += 5
+
+        if len(starts) < 2:
+            i += 1
+            continue
+
+        # The final step still publishes the architecturally visible 6502 Z/N.
+        # Earlier steps need only mutate the resident X/Y byte in B/C.
+        for start in starts[:-1]:
+            ind = indent_of(lines[start + 2])
+            lines[start + 2] = f"{ind}; dead intermediate index value move removed\n"
+            lines[start + 3] = f"{ind}; dead intermediate index Z publication removed\n"
+            lines[start + 4] = f"{ind}; dead intermediate index N publication removed\n"
+            dead_steps += 1
+
+        runs += 1
+        i = j
+
+    return runs, dead_steps
+
+
 def fuse_recent_index_reload(lines: list[str]) -> int:
     """Drop an X/Y reload when A still equals the just-published X/Y value."""
     fused = 0
@@ -194,6 +272,7 @@ def main() -> int:
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
 
     rmw = fuse_absolute_indexed_rmw_recalc(lines)
+    step_runs, dead_steps = elide_intermediate_index_flag_publication(lines)
     reloads = fuse_recent_index_reload(lines)
     pages = trim_page_aligned_absolute_index(lines)
     zp0 = trim_zero_page_zero_base(lines)
@@ -201,6 +280,7 @@ def main() -> int:
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(
         f"index-math: fused {reloads} immediate X/Y reloads, "
+        f"elided {dead_steps} intermediate index flag update(s) across {step_runs} run(s), "
         f"reused {rmw} absolute-indexed RMW address(es), "
         f"trimmed {pages} page-aligned absolute indexes, {zp0} zero-page-$00 adds"
     )

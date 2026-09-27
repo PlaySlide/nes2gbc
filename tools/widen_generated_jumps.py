@@ -31,14 +31,15 @@ import re
 from pathlib import Path
 
 
+NES_TARGET = r"nes_[0-9A-Fa-f]{4}(?:_fast_a|_branch_fast_a)?"
 STATIC_JR_RE = re.compile(
-    r"^(?P<indent>\s*)jr (?:(?P<cond>z|nz|c|nc), )?(?P<target>nes_[0-9A-Fa-f]{4})(?P<tail>\s*(?:;.*)?)$"
+    rf"^(?P<indent>\s*)jr (?:(?P<cond>z|nz|c|nc), )?(?P<target>{NES_TARGET})(?P<tail>\s*(?:;.*)?)$"
 )
 STATIC_JP_RE = re.compile(
-    r"^(?P<indent>\s*)jp (?:(?P<cond>z|nz|c|nc), )?(?P<target>nes_[0-9A-Fa-f]{4})(?P<tail>\s*(?:;.*)?)$"
+    rf"^(?P<indent>\s*)jp (?:(?P<cond>z|nz|c|nc), )?(?P<target>{NES_TARGET})(?P<tail>\s*(?:;.*)?)$"
 )
 NES_LABEL_RE = re.compile(
-    r"^\s*(?P<label>nes_[0-9A-Fa-f]{4}):\s*(?:;.*)?$"
+    rf"^\s*(?P<label>{NES_TARGET}):\s*(?:;.*)?$"
 )
 LABEL_RE = re.compile(r"^[A-Za-z_.$@][A-Za-z0-9_.$@]*:$")
 

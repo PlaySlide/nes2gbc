@@ -85,7 +85,8 @@ def helper() -> str:
         "    ; MBC5 bank bit 8 is already zero from the initial dispatcher.\n"
         "    ld [nes_current_code_bank], a\n"
         "    ld [$2000], a\n"
-        "    xor a ; preserve host-flag normalization of the original helper\n"
+        # Block entries never assume A/flags (nes_dispatch_hl enters them
+        # with arbitrary values), so no A=0 normalization is needed.
         "    jp hl\n"
     )
 

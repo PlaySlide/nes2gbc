@@ -199,13 +199,68 @@ nes_gbc_oam_shadow: ds $00A0
 SECTION "NES VRAM unlock", WRAM0[$CBA0]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBA1]
+; Direct-mapped translated-PC dispatch cache, indexed by NES PC & $7F.
+; $CC00-$CC7F tag (NES PC high byte, 0 = empty), $CC80-$CCFF code bank,
+; $CD00-$CD7F linked ROMX address low, $CD80-$CDFF linked address high.
+SECTION "NES dispatch direct cache", WRAM0[$CC00]
+nes_dispatch_dm_tag:    ds $80
+nes_dispatch_dm_bank:   ds $80
+nes_dispatch_dm_lo:     ds $80
+nes_dispatch_dm_hi:     ds $80
+
+; Frame pacing (NES2GBC_PACING). When a translated NMI finishes after it has
+; already missed a host VBlank, the next NMI starts immediately instead of
+; idling for the next VBlank. The just-completed frame's publishable state is
+; snapshotted at that handoff and the VBlank ISR publishes the snapshot while
+; the next NMI keeps running. See nes_pace_* in cpu.asm and main.asm.
+SECTION "NES pacing state", WRAM0[$CBA1]
+nes_pace_credit:        ds 1 ; a host VBlank elapsed while an NMI was active
+nes_pace_unpublished:   ds 1 ; last completed NMI frame not yet published
+nes_pace_snap_valid:    ds 1 ; nes_pace_snap holds an unpublished frame
+nes_pace_snap_palette:  ds 1 ; snapshot includes the palette shadow
+nes_pace_isr_active:    ds 1 ; current ISR is publishing the snapshot
+nes_pace_committed:     ds 1 ; current ISR reached the commit path
+nes_oam_dma_page:       ds 1 ; source page for hardware OAM DMA
+nes_pace_q_end_lo:      ds 1 ; snapshot's nametable queue end
+nes_pace_q_end_hi:      ds 1
+nes_pace_early:         ds 1 ; NMI started mid-scanout (no VBlank since)
+nes_pace_mask_deferred: ds 1 ; live PPUMASK publish waiting for VBlank
+nes_pace_armed:         ds 1 ; early (credit) NMI start: only at the idle PC
+nes_pace_idle_lo:       ds 1 ; learned idle-loop resume PC (0 = unknown)
+nes_pace_idle_hi:       ds 1
+nes_pace_cand_lo:       ds 1 ; resume PC of the previous VBlank NMI start
+nes_pace_cand_hi:       ds 1
+nes_pace_snap:          ds $30
+
+IF !DEF(NES2GBC_NO_PACING)
+; Projected-OAM ping-pong between nes_gbc_oam_shadow ($CB00) and nes_pace_oam
+; ($CE00). Projectors write the live page; a pacing snapshot takes ownership
+; of the live page instead of copying it and the live side moves to the other
+; buffer, marked stale ("true contents are the pace page") until the next
+; projection. Consumers resolve staleness first (see nes_oam_resolve_stale).
+SECTION "NES OAM ping-pong state", WRAM0
+nes_oam_live_page:      ds 1
+nes_oam_pace_page:      ds 1
+nes_oam_live_stale:     ds 1
+ENDC
+
+; Snapshot of the completed frame's projected OAM and palette shadow.
+SECTION "NES pacing OAM snapshot", WRAM0[$CE00]
+nes_pace_oam:           ds $A0
+nes_pace_palette:       ds $40
+
+SECTION "Host native stack reserve", WRAM0[$CF00]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA1-$CFFF leaves 1119 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $045F
+; 256 bytes; measured SMB peak depth is 28 bytes.
+nes_host_stack_reserve: ds $0100
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
+
+; NES internal RAM mirror used directly by translated code. Reserve it so the
+; linker never places a floating WRAM0 section on top of NES zero page.
+SECTION "NES internal RAM", WRAM0[$C000]
+    ds $0800
 
 SECTION "NES virtual OAM", WRAM0[$C900]
 nes_oam_ram: ds 256

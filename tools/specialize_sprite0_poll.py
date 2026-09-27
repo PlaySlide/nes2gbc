@@ -7,7 +7,12 @@ that byte with $40, so bits 0-5 and 7 are never observable by translated code.
 For those exact adjacent instruction pairs we synthesize only the sprite-0 bit
 while preserving every $2002 side effect: vblank never reports sprite-0, the
 virtual status bit 6 is updated, bit 7 is cleared, and the $2005/$2006 latch is
-reset.  The following generated AND/flag/branch sequence is left untouched.
+reset.
+
+B/C are deliberately never used as scratch here.  The stateful superblock
+emitter may carry NES X/Y resident in those registers across generated code, and
+this post-pass runs after that ownership decision has already been made.  D/E
+remain ordinary scratch at this stage and are visible to later cache passes.
 """
 
 from __future__ import annotations
@@ -71,19 +76,22 @@ def specialize(lines: list[str]) -> int:
         # virtual status byte is persistent state even though the returned A is
         # immediately masked. Bit 6 is replaced by the synthesized hit result;
         # bit 7 is always cleared by the read side effect.
+        #
+        # D holds the split line and E holds the persistent low status bits.
+        # B/C must remain untouched because the stateful emitter may own them as
+        # resident NES X/Y across this exact generated sequence.
         replacement = [
             f"{ind}; specialized $2002 -> AND #$40 sprite-0 poll\n",
+            f"{ind}; D/E scratch only; preserve resident X/Y in B/C\n",
             f"{ind}ld a, [nes_ppu_status]\n",
             f"{ind}and $3F\n",
             f"{ind}ld e, a\n",
+            f"{ind}ldh a, [nes_split_line]\n",
+            f"{ind}ld d, a\n",
             f"{ind}ldh a, [rLY]\n",
             f"{ind}cp 144\n",
             f"{ind}jr nc, {no_hit}\n",
-            f"{ind}ld b, a\n",
-            f"{ind}ldh a, [nes_split_line]\n",
-            f"{ind}ld c, a\n",
-            f"{ind}ld a, b\n",
-            f"{ind}cp c\n",
+            f"{ind}cp d\n",
             f"{ind}jr c, {no_hit}\n",
             f"{ind}ld a, [nes_ppumask]\n",
             f"{ind}and $18\n",
@@ -105,11 +113,21 @@ def specialize(lines: list[str]) -> int:
             f"{ind}xor a\n",
             f"{ind}ld [nes_ppu_latch], a\n",
             f"{done}:\n",
+            # The replacement spans the complete generated LDA $2002 body,
+            # including any canonical A/N/Z publication that was originally
+            # emitted after the helper call.  Publish the specialized result
+            # explicitly before the following AND.  Without this, a later
+            # resident-A split can reload stale nes_a and spin forever even
+            # though this block correctly synthesized $40 in host A.
+            f"{ind}ldh [nes_a], a ; publish specialized LDA $2002 result\n",
+            f"{ind}ldh [nes_z_shadow], a\n",
+            f"{ind}ldh [nes_n_shadow], a\n",
         ]
 
-        # Replace only the previously inlined status-handler body. Any stores
-        # generated for the LDA itself remain in place, followed by the original
-        # AND #$40 and its canonical 6502 flag publication.
+        # Replace the complete previously inlined LDA $2002 body.  Because the
+        # slice runs up to the next 6502 instruction comment, it also consumes
+        # that LDA's original canonical A/N/Z stores; the replacement above
+        # therefore republishes them explicitly before the original AND #$40.
         lines[i:next_insn] = replacement
         changed += 1
         i += len(replacement)

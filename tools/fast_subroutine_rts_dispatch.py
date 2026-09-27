@@ -44,7 +44,8 @@ from pathlib import Path
 
 
 SECTION_BANK_RE = re.compile(r"^SECTION .*BANK\[(\d+)\]")
-BLOCK_LABEL_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
+BLOCK_LABEL_RE = re.compile(r"^nes_([0-9A-Fa-f]{4})(?:_trace)?:$")
+CANON_LABEL_RE = re.compile(r"^nes_([0-9A-Fa-f]{4}):$")
 INSN_RE = re.compile(
     r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
 )
@@ -68,6 +69,10 @@ class Block:
 
 
 def parse_blocks(lines: list[str]) -> tuple[dict[int, Block], dict[int, int]]:
+    # Physical translated bodies may begin at either nes_XXXX: or
+    # nes_XXXX_trace:.  A later canonical nes_XXXX: adapter can share the same
+    # NES address but contains no source instruction comments.  Segment on every
+    # physical entry label, then retain the code-bearing segment for each address.
     labels: list[tuple[int, int, int]] = []
     label_bank: dict[int, int] = {}
     bank: int | None = None
@@ -76,11 +81,14 @@ def parse_blocks(lines: list[str]) -> tuple[dict[int, Block], dict[int, int]]:
         sm = SECTION_BANK_RE.match(code(line))
         if sm:
             bank = int(sm.group(1))
-        lm = BLOCK_LABEL_RE.match(code(line))
+        c = code(line)
+        lm = BLOCK_LABEL_RE.fullmatch(c)
         if lm and bank is not None:
             addr = int(lm.group(1), 16)
             labels.append((i, addr, bank))
-            label_bank[addr] = bank
+        cm = CANON_LABEL_RE.fullmatch(c)
+        if cm and bank is not None:
+            label_bank[int(cm.group(1), 16)] = bank
 
     blocks: dict[int, Block] = {}
     for n, (label_i, addr, block_bank) in enumerate(labels):
@@ -95,7 +103,12 @@ def parse_blocks(lines: list[str]) -> tuple[dict[int, Block], dict[int, int]]:
             m = INSN_RE.search(lines[j])
             if m:
                 insns.append((j, int(m.group(1), 16), m.group(3), m.group(4)))
-        blocks[addr] = Block(addr, block_bank, label_i, end_i, insns)
+        if insns:
+            # Exactly one physical segment should carry translated source for a
+            # given NES address.  Canonical adapters are intentionally ignored.
+            prev = blocks.get(addr)
+            assert prev is None, f"multiple code-bearing segments for NES ${addr:04X}"
+            blocks[addr] = Block(addr, block_bank, label_i, end_i, insns)
 
     return blocks, label_bank
 
@@ -262,6 +275,18 @@ def pessimistic_bytes(text: str) -> int:
     return max(0, n - 3)  # replacing an existing three-byte JP
 
 
+def load_rts_profile(path: str) -> dict[int, float]:
+    """Parse "<entries per frame> <PC hex>" lines; missing file -> {}."""
+    out: dict[int, float] = {}
+    if not path or not Path(path).is_file():
+        return out
+    for line in Path(path).read_text().splitlines():
+        parts = line.split("#", 1)[0].split()
+        if len(parts) == 2:
+            out[int(parts[1], 16)] = float(parts[0])
+    return out
+
+
 def rank_returns(weighted: collections.Counter[int], limit: int) -> list[int]:
     """Choose the hottest exact return PCs, deterministic on equal weights."""
     return [
@@ -277,7 +302,10 @@ def main() -> int:
     p.add_argument("--bank-budget", type=int, default=640,
                    help="maximum pessimistic extra bytes added per ROMX bank")
     p.add_argument("--max-rts-per-bank", type=int, default=12)
+    p.add_argument("--rts-profile", default="",
+                   help="tools/bench/rts_profile.py block-entry counts; orders returns dynamically")
     args = p.parse_args()
+    dyn = load_rts_profile(args.rts_profile)
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     blocks, label_bank = parse_blocks(lines)
@@ -288,6 +316,11 @@ def main() -> int:
     for entry, weighted_returns in call_returns.items():
         for rts in reachable_rts(entry, lines, blocks, labels):
             rts_return_weight[rts].update(weighted_returns)
+    if dyn:
+        # Dynamic entry counts dominate; static JSR-site weight breaks ties.
+        for rts, weighted in rts_return_weight.items():
+            for ret in list(weighted):
+                weighted[ret] += int(dyn.get(ret, 0.0) * 1000) * 1000
 
     # -covered_weight, addr, extra, text, selected_count, was_wide
     candidates: list[tuple[int, int, int, str, int, bool]] = []
