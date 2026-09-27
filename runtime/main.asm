@@ -1024,14 +1024,27 @@ IF !DEF(NES2GBC_NO_PACING)
     xor a
     ld [nes_oam_live_stale], a
 ENDC
-    xor a
-    ; Empty direct-mapped dispatch cache (tag 0 never matches NES PC >= $8000).
+    ; Empty direct-mapped dispatch cache: tag 0, code bank 1, and a linked
+    ; address of nes_dispatch_dm_empty (a false tag-0 hit takes the miss path).
     ld hl, nes_dispatch_dm_tag
     ld b, $80
 .clear_dispatch_dm:
-    ld [hli], a
+    xor a
+    ld [hl], a
+    set 7, l
+    inc a
+    ld [hl], a
+    inc h
+    ld a, HIGH(nes_dispatch_dm_empty)
+    ld [hl], a
+    res 7, l
+    ld a, LOW(nes_dispatch_dm_empty)
+    ld [hl], a
+    dec h
+    inc l
     dec b
     jr nz, .clear_dispatch_dm
+    xor a
 
     ld hl, nes_gbc_palette_shadow
     ld b, $40

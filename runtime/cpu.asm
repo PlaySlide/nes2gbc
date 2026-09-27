@@ -181,18 +181,22 @@ ENDC
     cp $80
     jp c, nes_unimplemented
 
-    ; Direct-mapped cache of resolved translations (128 entries keyed by
-    ; PC & $7F, tagged by PC high byte). Hits avoid the dispatch-table bank
-    ; switch and lookup. Clobbers B/E like the miss path always did.
+    ; Direct-mapped cache of resolved translations: 128 entries indexed by
+    ; (lo - hi) & $7F (fewer hot collisions than lo & $7F), tagged by
+    ; hi ^ ((lo - hi) & $80) so the tag and index identify the PC exactly
+    ; (hi >= $80). Empty entries carry tag 0 and point at
+    ; nes_dispatch_dm_empty, which takes the miss path. Hits avoid the
+    ; dispatch-table bank switch and lookup. Clobbers B/E like the miss path.
     ld b, h
     ld e, l
     ld a, l
-    sub h ; index (lo - hi) & $7F (fewer hot collisions than lo & $7F)
-    and $7F
+    sub h
     ld l, a
+    and $80
+    xor b
+    res 7, l
     ld h, HIGH(nes_dispatch_dm_tag)
-    ld a, [hl]
-    cp b
+    cp [hl]
     jr nz, .dm_miss
     set 7, l
     ld a, [hl]
@@ -260,10 +264,12 @@ ENDC
     ld c, a
     ld a, [nes_dispatch_cache_pc_lo]
     sub c
-    and $7F
     ld l, a
+    and $80
+    xor c
+    res 7, l
     ld h, HIGH(nes_dispatch_dm_tag)
-    ld [hl], c
+    ld [hl], a
     set 7, l
     ld [hl], b
     inc h
@@ -280,6 +286,13 @@ ENDC
     ld h, d
     ld l, e
     jp hl
+
+; Target of empty direct-mapped dispatch entries (tag 0 is a valid tag, for
+; hi=$80 with (lo-hi)&$80 set): resolve through the full lookup instead.
+nes_dispatch_dm_empty::
+    ld h, b
+    ld l, e
+    jp nes_dispatch_hl.cache_miss
 
 ; Fast path for statically known cross-bank transfers.
 ; Input: A = translated code bank, HL = linked ROMX target address.
