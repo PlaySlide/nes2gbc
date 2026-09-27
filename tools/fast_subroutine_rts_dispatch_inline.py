@@ -93,7 +93,12 @@ def private_trace_fallthrough(
         return set()
 
     _line, _pc, mnemonic, _mode = block.insns[-1]
-    if mnemonic in {"Jmp", "Jsr", "Rts", "Rti", "Brk"}:
+    if mnemonic == "Jmp" and _mode == "Absolute":
+        # The superblock planner may elide a same-bank JMP and fall straight
+        # into the target's private trace entry; follow exactly that case.
+        if not any("JMP elided" in lines[j] for j in range(_line + 1, block.end_i)):
+            return set()
+    elif mnemonic in {"Jmp", "Jsr", "Rts", "Rti", "Brk"}:
         return set()
 
     m = TRACE_ENTRY_RE.fullmatch(base.code(lines[block.end_i]))
