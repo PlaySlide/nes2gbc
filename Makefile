@@ -4,6 +4,8 @@ TRACE ?= 0
 PROFILE ?= 0
 PROFILE_TRACE ?= 0
 PEEPHOLE ?= 1
+# Compiler register allocation level (src/state_superblock.rs); 0 = previous emission.
+REGALLOC ?= 0
 POSTPASS_THROUGH ?= all
 
 .PHONY: help generate gbc test clean
@@ -26,9 +28,9 @@ help:
 generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	else \
-		cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \

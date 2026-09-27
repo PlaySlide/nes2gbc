@@ -13,6 +13,19 @@ const CODE_BANK_START: u16 = 40;
 const ESTIMATED_BANK_BUDGET: usize = 0x3000;
 const NES_RAM_BASE: u16 = 0xC000;
 
+/// Compiler register-allocation level, from the NES2GBC_REGALLOC environment
+/// variable (Makefile `REGALLOC=`). 0 keeps the previous emission exactly.
+fn regalloc_level() -> u32 {
+    use std::sync::OnceLock;
+    static LEVEL: OnceLock<u32> = OnceLock::new();
+    *LEVEL.get_or_init(|| {
+        std::env::var("NES2GBC_REGALLOC")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0)
+    })
+}
+
 fn is_branch(m: crate::cpu6502::Mnemonic) -> bool {
     use crate::cpu6502::Mnemonic::*;
     matches!(m, Bcc | Bcs | Beq | Bmi | Bne | Bpl | Bvc | Bvs)
@@ -443,6 +456,9 @@ struct TraceState {
     x_dirty: bool,
     y_c: bool,
     y_dirty: bool,
+    /// REGALLOC: 6502 carry statically known within the current block
+    /// (after CLC/SEC). Never part of a trace entry contract.
+    carry: Option<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -767,7 +783,12 @@ fn write_reg_from_a(
     true
 }
 
-fn emit_fast_modify_value(out: &mut String, modify: ModifyOp, stats: &mut StateStats) {
+fn emit_fast_modify_value(
+    out: &mut String,
+    modify: ModifyOp,
+    known_carry: Option<bool>,
+    stats: &mut StateStats,
+) {
     match modify {
         ModifyOp::Inc => {
             writeln!(out, "    inc a").unwrap();
@@ -782,10 +803,20 @@ fn emit_fast_modify_value(out: &mut String, modify: ModifyOp, stats: &mut StateS
                 // nes_c_shadow is normalized to 0/1. RRA copies bit 0 into
                 // host carry without branches; LD below preserves that carry.
                 // B/C remain untouched because they belong to resident X/Y.
-                writeln!(out, "    ld d, a ; superblock rotate input").unwrap();
-                writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                writeln!(out, "    rra ; seed host carry from 6502 C").unwrap();
-                writeln!(out, "    ld a, d").unwrap();
+                match known_carry {
+                    Some(false) => {
+                        writeln!(out, "    and a ; known 6502 C=0").unwrap();
+                    }
+                    Some(true) => {
+                        writeln!(out, "    scf ; known 6502 C=1").unwrap();
+                    }
+                    None => {
+                        writeln!(out, "    ld d, a ; superblock rotate input").unwrap();
+                        writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
+                        writeln!(out, "    rra ; seed host carry from 6502 C").unwrap();
+                        writeln!(out, "    ld a, d").unwrap();
+                    }
+                }
             }
 
             let name = match modify {
@@ -835,13 +866,13 @@ fn emit_fast_modify_memory(
         Operand::ZeroPage(zp) => {
             let addr = NES_RAM_BASE + zp as u16;
             writeln!(out, "    ld a, [${addr:04X}]").unwrap();
-            emit_fast_modify_value(out, modify, stats);
+            emit_fast_modify_value(out, modify, state.carry, stats);
             writeln!(out, "    ld [${addr:04X}], a").unwrap();
         }
         Operand::Absolute(addr) => {
             let mapped = direct_ram_addr(addr).unwrap();
             writeln!(out, "    ld a, [${mapped:04X}]").unwrap();
-            emit_fast_modify_value(out, modify, stats);
+            emit_fast_modify_value(out, modify, state.carry, stats);
             writeln!(out, "    ld [${mapped:04X}], a").unwrap();
         }
         Operand::ZeroPageX(zp) => {
@@ -853,7 +884,7 @@ fn emit_fast_modify_memory(
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, stats);
+            emit_fast_modify_value(out, modify, state.carry, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -866,7 +897,7 @@ fn emit_fast_modify_memory(
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, stats);
+            emit_fast_modify_value(out, modify, state.carry, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -878,7 +909,7 @@ fn emit_fast_modify_memory(
             stats.x_index_uses += 1;
             emit_add_a_to_hl(out);
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, stats);
+            emit_fast_modify_value(out, modify, state.carry, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -890,7 +921,7 @@ fn emit_fast_modify_memory(
             stats.y_index_uses += 1;
             emit_add_a_to_hl(out);
             writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, stats);
+            emit_fast_modify_value(out, modify, state.carry, stats);
             writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -976,6 +1007,9 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             Flag::Carry => {
                 writeln!(out, "    ld a, ${:02X}", if value { 1 } else { 0 }).unwrap();
                 writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                if regalloc_level() >= 1 {
+                    state.carry = Some(value);
+                }
             }
             Flag::Zero => {
                 writeln!(out, "    ld a, ${:02X}", if value { 0 } else { 1 }).unwrap();
@@ -1076,15 +1110,25 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                 writeln!(out, "    ld e, a").unwrap();
             }
 
-            writeln!(out, "    ld a, d").unwrap();
-            writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-            writeln!(out, "    and a").unwrap();
-            writeln!(out, "    jr z, :+").unwrap();
-            writeln!(out, "    scf").unwrap();
-            writeln!(out, "    jr :++").unwrap();
-            writeln!(out, ":").unwrap();
-            writeln!(out, "    and a").unwrap();
-            writeln!(out, ":").unwrap();
+            match state.carry {
+                Some(false) => {
+                    writeln!(out, "    and a ; known 6502 C=0 (CLC)").unwrap();
+                }
+                Some(true) => {
+                    writeln!(out, "    scf ; known 6502 C=1 (SEC)").unwrap();
+                }
+                None => {
+                    writeln!(out, "    ld a, d").unwrap();
+                    writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
+                    writeln!(out, "    and a").unwrap();
+                    writeln!(out, "    jr z, :+").unwrap();
+                    writeln!(out, "    scf").unwrap();
+                    writeln!(out, "    jr :++").unwrap();
+                    writeln!(out, ":").unwrap();
+                    writeln!(out, "    and a").unwrap();
+                    writeln!(out, ":").unwrap();
+                }
+            }
             writeln!(out, "    ld a, d").unwrap();
             writeln!(
                 out,
@@ -1133,7 +1177,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
         IrOp::Modify { op: modify, target } => match target {
             ModifyTarget::Accumulator => {
                 ensure_a(out, state, stats);
-                emit_fast_modify_value(out, modify, stats);
+                emit_fast_modify_value(out, modify, state.carry, stats);
                 write_a_resident(state, stats);
             }
             ModifyTarget::Memory(mem) => {
@@ -1179,6 +1223,17 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
         IrOp::Nop => {}
         _ => unreachable!(),
     }
+    if matches!(
+        *op,
+        IrOp::Arithmetic { .. }
+            | IrOp::Compare { .. }
+            | IrOp::Modify {
+                op: ModifyOp::Asl | ModifyOp::Lsr | ModifyOp::Rol | ModifyOp::Ror,
+                ..
+            }
+    ) {
+        state.carry = None;
+    }
     stats.fast_ops += 1;
 }
 
@@ -1193,6 +1248,7 @@ fn emit_barrier_ops(
     }
     sync_state(out, state, stats);
     invalidate_state(state);
+    state.carry = None;
     out.push_str(&lr35902::emit_ops(ops));
     stats.barriers += 1;
 }
@@ -1278,6 +1334,9 @@ pub fn emit_cfg_with_interrupts(
             section_pc = 0;
         }
 
+        // Known-carry facts are block-local: other entries (canonical adapters,
+        // dispatch) cannot establish them.
+        state.carry = None;
         if continuing {
             entry_contracts.insert(addr, (bank, state));
             writeln!(out, "nes_{addr:04X}_trace:").unwrap();
