@@ -620,6 +620,11 @@ ENDC
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
 
+SECTION "NES stage bit masks", ROM0, ALIGN[3]
+nes_stage_bit_masks:
+    db $01, $02, $04, $08, $10, $20, $40, $80
+
+SECTION "NES stage first visit", ROM0
 ; Input HL = physical nametable address $D000-$D7FF.
 ; Return A=1 on first visit during this translated NMI, A=0 on repeats.
 ; HL is preserved and WRAM bank 1 is restored before returning.
@@ -628,9 +633,10 @@ nes_ppu_nametable_stage_first_visit:
     ld a, $01
     ld [nes_nametable_stage_used], a
 
-    ; E = bit number (low three address bits).
+    ; E = low byte of the bit-mask table entry (low three address bits).
     ld a, l
     and $07
+    add LOW(nes_stage_bit_masks)
     ld e, a
 
     ; D800 + (((H & 7) << 5) | (L >> 3)) selects the bitmap byte.
@@ -644,18 +650,12 @@ nes_ppu_nametable_stage_first_visit:
     swap a
     add a
     or c
-    ld l, a
+    ld c, a
+    ld h, HIGH(nes_stage_bit_masks)
+    ld l, e
+    ld b, [hl]
+    ld l, c
     ld h, HIGH(nes_nametable_stage_seen)
-
-    ld b, $01
-    ld a, e
-    and a
-    jr z, .stage_mask_ready
-.stage_mask_loop:
-    sla b
-    dec a
-    jr nz, .stage_mask_loop
-.stage_mask_ready:
 
     ld a, $06
     ldh [rSVBK], a

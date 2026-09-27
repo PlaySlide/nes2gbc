@@ -1131,9 +1131,11 @@ ENDC
     ldh [rSVBK], a
     xor a
     ld hl, nes_nametable_stage_seen
-    ld b, $00
+    ld b, $100 / 16
 .clear_nametable_stage_seen:
+REPT 16
     ld [hli], a
+ENDR
     dec b
     jr nz, .clear_nametable_stage_seen
     ld a, $01
