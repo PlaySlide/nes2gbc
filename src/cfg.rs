@@ -285,6 +285,40 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
  }
  out
 }
+// Recognize the classic 6502 computed-jump-via-RTS idiom:
+//
+//   LDA table+1,Y   ; or ,X
+//   PHA
+//   LDA table,Y
+//   PHA
+//   RTS
+//
+// RTS pulls the synthetic return address and increments it, so each table word
+// stores target-1. Bomberman's music/effect dispatchers use both indexed forms.
+fn rts_stack_table_targets(mapper:u16,prg:&[u8],rts_pc:u16)->Vec<u16>{
+ let Ok(rts_off)=off(mapper,prg.len(),rts_pc)else{return Vec::new()};
+ if rts_off<8{return Vec::new()}
+ let o=rts_off-8;
+ let index_op=prg[o];
+ if index_op!=0xB9&&index_op!=0xBD{return Vec::new()} // LDA abs,Y / LDA abs,X
+ if prg[o+3]!=0x48||prg[o+4]!=index_op||prg[o+7]!=0x48||prg[o+8]!=0x60{return Vec::new()}
+ let high_base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+ let low_base=u16::from_le_bytes([prg[o+5],prg[o+6]]);
+ if high_base!=low_base.wrapping_add(1){return Vec::new()}
+
+ let mut out=Vec::new();
+ for i in 0..MAX_WORD_TABLE_ENTRIES{
+  let a=low_base.wrapping_add(i*2);
+  let Ok(t)=off(mapper,prg.len(),a)else{break};
+  if t+1>=prg.len(){break}
+  let raw=u16::from_le_bytes([prg[t],prg[t+1]]);
+  let target=raw.wrapping_add(1);
+  if target<0x8000||!looks_like_code(mapper,prg,target){break}
+  if !out.contains(&target){out.push(target)}
+ }
+ out
+}
+
 pub fn discover_from_vectors(mapper:u16,prg:&[u8],v:Vectors)->Result<ControlFlowGraph,AnalysisError>{discover(mapper,prg,&[v.reset,v.nmi,v.irq_brk])}
 pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,AnalysisError>{
  if mapper!=0&&mapper!=3{return Err(AnalysisError::UnsupportedMapper(mapper))}if prg.len()!=0x4000&&prg.len()!=0x8000{return Err(AnalysisError::UnsupportedPrgSize(prg.len()))}
@@ -322,7 +356,18 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
      else{for t in targets{edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:Some(t)});q(&mut work,&mut seen,t);}}
      break
     }
-    Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk=>break,_=>pc=next
+    Mnemonic::Rts=>{
+     let targets=rts_stack_table_targets(mapper,prg,i.pc);
+     for t in targets{
+      // The stack, rather than a zero-page pointer, supplies the computed PC.
+      // Reuse IndirectJump for reachability; code generation still lowers the
+      // actual RTS instruction normally.
+      edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:0x0100},target:Some(t)});
+      q(&mut work,&mut seen,t);
+     }
+     break
+    }
+    Mnemonic::Rti|Mnemonic::Brk=>break,_=>pc=next
    }
   } blocks.insert(start,BasicBlock{start,instructions:ins,edges});
  }
@@ -346,6 +391,51 @@ mod tests {
 
         assert!(graph.blocks.contains_key(&0x8004));
         assert!(graph.blocks.contains_key(&0x8006));
+    }
+
+    #[test]
+    fn discovers_indexed_push_rts_jump_table_targets() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xB9, 0x01, 0xA0, // LDA $A001,Y (high byte)
+                0x48,             // PHA
+                0xB9, 0x00, 0xA0, // LDA $A000,Y (low byte)
+                0x48,             // PHA
+                0x60,             // RTS -> synthetic target + 1
+            ],
+        );
+        // Stored words are target-1, exactly like Bomberman's effect table.
+        put(&mut prg, 0xA000, &[0xFF, 0x91, 0x0F, 0x92, 0x00, 0x00]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        let dispatcher = graph.blocks.get(&0x9000).unwrap();
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0100 })
+                && edge.target == Some(0x9200)
+        }));
+
+        // Bomberman's other sound tables use the same trick indexed by X.
+        put(
+            &mut prg,
+            0x9010,
+            &[
+                0xBD, 0x01, 0xA0, // LDA $A001,X
+                0x48,
+                0xBD, 0x00, 0xA0, // LDA $A000,X
+                0x48,
+                0x60,
+            ],
+        );
+        assert_eq!(rts_stack_table_targets(0, &prg, 0x9018), vec![0x9200, 0x9210]);
     }
 
     #[test]
