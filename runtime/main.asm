@@ -104,6 +104,13 @@ nes_gbc_vblank_isr:
     push bc
     push de
     push hl
+    ; Translated code may be interrupted between selecting a WRAMX bank and
+    ; using it (mirrored-PRG reads select banks 2-5). This ISR assumes bank 1
+    ; and ends in bank 1, so save and restore the interrupted selection.
+    ldh a, [rSVBK]
+    push af
+    ld a, $01
+    ldh [rSVBK], a
 
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
@@ -545,6 +552,8 @@ IF !DEF(NES2GBC_NO_PACING)
     call nes_video_update_mask
 .pace_mask_done:
 ENDC
+    pop af
+    ldh [rSVBK], a
     pop hl
     pop de
     pop bc
