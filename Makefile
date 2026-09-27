@@ -5,7 +5,7 @@ PROFILE ?= 0
 PROFILE_TRACE ?= 0
 PEEPHOLE ?= 1
 # Compiler register allocation level (src/state_superblock.rs); 0 = previous emission.
-REGALLOC ?= 0
+REGALLOC ?= 3
 POSTPASS_THROUGH ?= all
 
 .PHONY: help generate gbc test clean
