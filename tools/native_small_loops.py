@@ -113,14 +113,14 @@ def emit(kind, pc, exit_pc, p, xs, ys):
     elif kind == "cmp_add_wrap":
         A, B, C = ram(p["a"]), ram(p["b"]), ram(p["c"])
         L += [ldy, "ld c, a", ldx, f"cp $80", f"jp nc, .{k}_slow", "ld b, a", f"ld a, [${ram(p['z']):04X}]", "ld e, a",
-              f".{k}_l:",
               "ld a, b", f"add ${A & 0xFF:02X}", "ld l, a", f"ld a, ${A >> 8:02X}", "adc $00", "ld h, a",
+              f".{k}_l:",
               "ld a, [hl]", "cp e", f"jr c, .{k}_skip",
               "ld d, a", f"ld a, [${B:04X}]", "ld c, a", "push hl",
               f"add ${C & 0xFF:02X}", "ld l, a", f"ld a, ${C >> 8:02X}", "adc $00", "ld h, a",
               "ld a, d", "add [hl]", "pop hl", f"jr nc, .{k}_st", "add e", f".{k}_st:", "ld [hl], a", f"jr .{k}_nx",
               f".{k}_skip:", "and a",  # 6502 C = 0 (A < z)
-              f".{k}_nx:", "dec b", "bit 7, b", f"jr z, .{k}_l",
+              f".{k}_nx:", "dec hl", "dec b", "bit 7, b", f"jr z, .{k}_l",
               "ldh [nes_a], a", "ld a, $00", "adc a", "ldh [nes_c_shadow], a",
               "ld a, c", "ldh [nes_y], a", "ld a, $FF", "ldh [nes_x], a", "ldh [nes_z_shadow], a", "ldh [nes_n_shadow], a"]
     L += tail(k, exit_pc)
