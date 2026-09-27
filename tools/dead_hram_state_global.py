@@ -30,7 +30,8 @@ STORE_RE = re.compile(r"^ldh \[(nes_(?:a|x|y|z_shadow|n_shadow|c_shadow))\], a$"
 MENTION_RE = re.compile(r"\b(nes_(?:a|x|y|z_shadow|n_shadow|c_shadow))\b")
 SAFE_CALLS = {
     "nes_cpu_read", "nes_cpu_write", "nes_ppu_write_data", "nes_ppu_read_data",
-    "nes_controller_write", "nes_profile_trace_pc",
+    "nes_controller_write", "nes_profile_trace_pc", "nes_cpu_read_joy_hl",
+    "nes_controller_read",
     "nes_ppu_cpu_write.addr", "nes_ppu_cpu_write.ctrl", "nes_ppu_cpu_write.scroll",
     "nes_ppu_cpu_write.mask", "nes_ppu_cpu_write.oamaddr",
 }

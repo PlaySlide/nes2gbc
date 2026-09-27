@@ -483,6 +483,7 @@ ENDC
     PROFILE_INC nes_profile_read_io
     jp nes_controller_read
 
+
 .read_4017:
     PROFILE_INC nes_profile_read_io
     ; No second controller is connected yet. During the first eight serial
@@ -494,6 +495,22 @@ ENDC
 
 .unsupported:
     PROFILE_INC nes_profile_read_other
+    xor a
+    ret
+
+; Emitted for LDA/LDX/LDY $4016,X / $4017,X (and ,Y): HL = base + index.
+; Resolves the controller ports without the generic address ladder; any
+; other effective address takes the full nes_cpu_read path. Results and
+; returned flags match nes_cpu_read for every HL.
+nes_cpu_read_joy_hl::
+    ld a, h
+    cp $40
+    jp nz, nes_cpu_read
+    ld a, l
+    cp $16
+    jp z, nes_controller_read
+    cp $17
+    jp nz, nes_cpu_read
     xor a
     ret
 

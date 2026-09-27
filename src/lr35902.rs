@@ -175,9 +175,31 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                 writeln!(out, "    ld a, [hl]").unwrap();
             } else {
                 match src {
+                    Operand::Absolute(0x4016) => {
+                        // Controller 1 serial port: skip the generic bus ladder.
+                        writeln!(out, "    ld hl, $4016").unwrap();
+                        writeln!(out, "    call nes_controller_read").unwrap();
+                    }
+                    Operand::Absolute(0x4017) => {
+                        // No controller 2: nes_cpu_read returns `xor a` here.
+                        writeln!(out, "    ld hl, $4017").unwrap();
+                        writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                    }
                     Operand::Absolute(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
                         writeln!(out, "    call nes_cpu_read").unwrap();
+                    }
+                    Operand::AbsoluteX(addr @ (0x4016 | 0x4017)) => {
+                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+                        writeln!(out, "    ldh a, [nes_x]").unwrap();
+                        emit_add_a_to_hl(out);
+                        writeln!(out, "    call nes_cpu_read_joy_hl").unwrap();
+                    }
+                    Operand::AbsoluteY(addr @ (0x4016 | 0x4017)) => {
+                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+                        writeln!(out, "    ldh a, [nes_y]").unwrap();
+                        emit_add_a_to_hl(out);
+                        writeln!(out, "    call nes_cpu_read_joy_hl").unwrap();
                     }
                     Operand::AbsoluteX(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
