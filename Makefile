@@ -102,6 +102,7 @@ generate:
 			python3 tools/chain_indexed_hl.py runtime/generated.asm; \
 			python3 tools/dead_overflow.py runtime/generated.asm; \
 			python3 tools/final_peephole.py runtime/generated.asm; \
+			python3 tools/cheap_carry_materialize.py runtime/generated.asm; \
 		fi; \
 	fi
 
