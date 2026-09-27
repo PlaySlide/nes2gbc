@@ -199,10 +199,19 @@ nes_gbc_oam_shadow: ds $00A0
 SECTION "NES VRAM unlock", WRAM0[$CBA0]
 nes_vram_unlocked:     ds 1
 
-SECTION "Host native stack reserve", WRAM0[$CBA1]
+; Direct-mapped translated-PC dispatch cache, indexed by NES PC & $7F.
+; $CC00-$CC7F tag (NES PC high byte, 0 = empty), $CC80-$CCFF code bank,
+; $CD00-$CD7F linked ROMX address low, $CD80-$CDFF linked address high.
+SECTION "NES dispatch direct cache", WRAM0[$CC00]
+nes_dispatch_dm_tag:    ds $80
+nes_dispatch_dm_bank:   ds $80
+nes_dispatch_dm_lo:     ds $80
+nes_dispatch_dm_hi:     ds $80
+
+SECTION "Host native stack reserve", WRAM0[$CE00]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
-; $CBA1-$CFFF leaves 1119 bytes of native stack below the OAM shadow.
-nes_host_stack_reserve: ds $045F
+; 512 bytes; measured SMB peak depth is 28 bytes.
+nes_host_stack_reserve: ds $0200
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32

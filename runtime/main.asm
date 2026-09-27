@@ -847,6 +847,14 @@ Start:
     ldh [nes_split_line], a
     xor a
 
+    ; Empty direct-mapped dispatch cache (tag 0 never matches NES PC >= $8000).
+    ld hl, nes_dispatch_dm_tag
+    ld b, $80
+.clear_dispatch_dm:
+    ld [hli], a
+    dec b
+    jr nz, .clear_dispatch_dm
+
     ld hl, nes_gbc_palette_shadow
     ld b, $40
 .clear_palette_shadow:

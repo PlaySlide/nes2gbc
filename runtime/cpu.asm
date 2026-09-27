@@ -181,35 +181,32 @@ ENDC
     cp $80
     jp c, nes_unimplemented
 
-    ; Tight NES loops repeatedly branch to the same translated PC. Avoid a full
-    ; dispatch-table bank switch/lookup when the requested PC matches the most
-    ; recently resolved target.
-    ld a, [nes_dispatch_cache_valid]
-    and a
-    jr z, .cache_miss
-    ld a, [nes_dispatch_cache_pc_hi]
-    cp h
-    jr nz, .cache_miss
-    ld a, [nes_dispatch_cache_pc_lo]
-    cp l
-    jr nz, .cache_miss
-
-    ld a, [nes_dispatch_cache_bank]
-    ld b, a
-    ld a, [nes_current_code_bank]
+    ; Direct-mapped cache of resolved translations (128 entries keyed by
+    ; PC & $7F, tagged by PC high byte). Hits avoid the dispatch-table bank
+    ; switch and lookup. Clobbers B/E like the miss path always did.
+    ld b, h
+    ld e, l
+    ld a, l
+    and $7F
+    ld l, a
+    ld h, HIGH(nes_dispatch_dm_tag)
+    ld a, [hl]
     cp b
-    jr z, .cache_bank_ready
-    ld a, b
+    jr nz, .dm_miss
+    set 7, l
+    ld a, [hl]
     ld [nes_current_code_bank], a
     ld [$2000], a
-    xor a
-    ld [$3000], a
-.cache_bank_ready:
-    ld a, [nes_dispatch_cache_addr_hi]
+    inc h
+    ld a, [hl]
+    res 7, l
+    ld l, [hl]
     ld h, a
-    ld a, [nes_dispatch_cache_addr_lo]
-    ld l, a
     jp hl
+
+.dm_miss:
+    ld h, b
+    ld l, e
 
 .cache_miss:
     ; Cache-key state is independent from optional debug breadcrumbs.
@@ -256,6 +253,20 @@ ENDC
     ld [nes_dispatch_cache_addr_hi], a
     ld a, e
     ld [nes_dispatch_cache_addr_lo], a
+
+    ; Fill the direct-mapped cache entry for this PC.
+    ld a, [nes_dispatch_cache_pc_lo]
+    and $7F
+    ld l, a
+    ld h, HIGH(nes_dispatch_dm_tag)
+    ld a, [nes_dispatch_cache_pc_hi]
+    ld [hl], a
+    set 7, l
+    ld [hl], b
+    inc h
+    ld [hl], d
+    res 7, l
+    ld [hl], e
 
     ld a, b
     ld [nes_current_code_bank], a
