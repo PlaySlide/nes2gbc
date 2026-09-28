@@ -7,8 +7,9 @@ This is a lightweight test list for commercial ROM bring-up. The current priorit
 
 | Game | Status | Known issue / next action |
 |---|---|---|
-| Bomberman | Title boots; gameplay transition currently faults | Computed sound dispatch uses stack-built RTS jump tables. CFG support in progress on `fix/nrom-inline-dispatch-x-temp`. |
+| Bomberman | Gets into stage, then fails/white-screens | Stack-built RTS dispatch CFG gaps fixed. Non-TRACE can still fall into data; TRACE currently stalls without a fault. Exact instruction breadcrumbs added to isolate it. |
 | Dig Dug | Boots and runs | Severe intermittent renderer/camera jump makes the screen move around. Defer until NROM boot coverage is broader. |
+| Lode Runner | Boots and runs | Sprite following does not acquire the player. PocketNES Menu Maker DB has no follow value for the US/JP Lode Runner entries, so this needs a derived hint or generic tracker improvement. |
 | Tennis | Boots and runs | NES 240-line scene is heavily cropped on the 144-line GBC viewport. Revisit with fit-screen work. |
 
 ## Bring-up policy
