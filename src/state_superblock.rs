@@ -1588,6 +1588,20 @@ pub fn emit_cfg_with_interrupts(
             };
 
         for instruction in &block.instructions {
+            if options.debug_trace {
+                // Debug builds need an exact source-PC breadcrumb, not merely
+                // the containing basic-block entry. Preserve host AF because A
+                // and flags may be resident architectural state between ops.
+                let before = out.len();
+                writeln!(out, "    push af ; preserve resident A/flags across instruction trace").unwrap();
+                writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
+                writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
+                writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
+                writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+                writeln!(out, "    pop af").unwrap();
+                section_pc += approx_code_bytes(&out[before..]);
+            }
+
             match ir::lower_instruction(*instruction) {
                 Ok(ops) => {
                     let in_trace_jump = matches!(
