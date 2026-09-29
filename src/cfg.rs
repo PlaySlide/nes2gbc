@@ -45,7 +45,28 @@ fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
 // Return (indirect JMP PC, pointer zp) when the entry has this shape.
 fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
  let start=off(mapper,prg.len(),entry).ok()?;
- let end=(start+48).min(prg.len());
+ let hard_end=(start+48).min(prg.len());
+
+ // Do not let byte-pattern recognition bleed into the next routine. Tennis
+ // places an ordinary returning subroutine at $C375 immediately before its
+ // real inline-table dispatcher at $C38B; scanning blindly across the RTS at
+ // $C38A misclassifies $C375 as non-returning and drops its real return PC.
+ let mut end=hard_end;
+ let mut scan_pc=entry;
+ while let Ok(ins)=dec(mapper,prg,scan_pc){
+  let o=match off(mapper,prg.len(),scan_pc){Ok(o)=>o,Err(_)=>break};
+  if o>=hard_end{break}
+  let next=scan_pc.wrapping_add(ins.def.len()as u16);
+  if matches!(ins.def.mnemonic,Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk){
+   end=(o+ins.def.len() as usize).min(hard_end);
+   break
+  }
+  if matches!(ins.def.mnemonic,Mnemonic::Jmp){
+   end=(o+ins.def.len() as usize).min(hard_end);
+   break
+  }
+  scan_pc=next;
+ }
  if end<=start+12{return None}
 
  let mut pop=None;
@@ -60,6 +81,41 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
   i+=1;
  }
  let (pop_i,base)=pop?;
+
+ // Some Nintendo dispatchers keep the low target byte in X while reusing
+ // the popped return-address zero-page pair as the final JMP pointer:
+ //
+ //   LDA (base),Y
+ //   TAX
+ //   INY
+ //   LDA (base),Y
+ //   STA base+1
+ //   STX base
+ //   JMP (base)
+ //
+ // Tennis and Dig Dug use this compact variant. Recognize it before the
+ // ordinary STA/STA form below, because its second LDA/STA pair otherwise
+ // looks like a candidate low-byte store.
+ let mut j=pop_i+6;
+ while j+2<end{
+  if prg[j]==0xB1&&prg[j+1]==base&&prg[j+2]==0xAA{
+   let mut k=j+3;
+   let k_end=(j+8).min(end.saturating_sub(9));
+   while k<=k_end{
+    if k+8<end
+     &&prg[k]==0xB1&&prg[k+1]==base
+     &&prg[k+2]==0x85&&prg[k+3]==base.wrapping_add(1)
+     &&prg[k+4]==0x86&&prg[k+5]==base
+     &&prg[k+6]==0x6C&&prg[k+7]==base&&prg[k+8]==0x00
+    {
+     let delta=(k+6-start)as u16;
+     return Some((entry.wrapping_add(delta),base as u16))
+    }
+    k+=1;
+   }
+  }
+  j+=1;
+ }
 
  let mut low=None;
  let mut j=pop_i+6;
@@ -139,6 +195,33 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   pc=pc.wrapping_add(1);
  }
 
+ // Form 1b: adjacent low/high table bytes without INY:
+ //   LDA table,Y   / STA ptr
+ //   LDA table+1,Y / STA ptr+1
+ //   ... optional selector/state work ...
+ //   JMP (ptr)
+ //
+ // Dig Dug uses this compact form. Y is already an even byte offset, so
+ // table/table+1 select the low and high bytes of the same little-endian
+ // target. Do not require the JMP to follow immediately: one Dig Dug
+ // dispatcher builds the pointer at $D3DC, performs another small state-table
+ // lookup, then finally JMPs through $EA at $D3EE.
+ let mut pc=start;
+ while pc.saturating_add(10)<=jmp_pc{
+  let o=match off(mapper,prg.len(),pc){Ok(o)=>o,Err(_)=>break};
+  if o+10<=prg.len()
+   &&prg[o]==0xB9
+   &&prg[o+3]==0x85&&prg[o+4]==pointer as u8
+   &&prg[o+5]==0xB9
+   &&prg[o+8]==0x85&&prg[o+9]==pointer.wrapping_add(1)as u8
+  {
+   let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+   let high_base=u16::from_le_bytes([prg[o+6],prg[o+7]]);
+   if high_base==base.wrapping_add(1)&&!tables.contains(&base){tables.push(base)}
+  }
+  pc=pc.wrapping_add(1);
+ }
+
  // Form 2: a tiny JMP (ptr) trampoline whose caller builds the pointer:
  //   LDA table,Y / STA ptr / LDA table+1,Y / STA ptr+1 / JSR trampoline
  //   trampoline: JMP (ptr)
@@ -202,6 +285,50 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
  }
  out
 }
+// Recognize the classic 6502 computed-jump-via-RTS idiom:
+//
+//   LDA table+1,Y   ; or ,X
+//   PHA
+//   LDA table,Y
+//   PHA
+//   RTS
+//
+// RTS pulls the synthetic return address and increments it, so each table word
+// stores target-1. Bomberman's music/effect dispatchers use both indexed forms.
+fn rts_stack_table_targets(mapper:u16,prg:&[u8],rts_pc:u16)->Vec<u16>{
+ let Ok(rts_off)=off(mapper,prg.len(),rts_pc)else{return Vec::new()};
+ if rts_off<8{return Vec::new()}
+ let o=rts_off-8;
+ let index_op=prg[o];
+ if index_op!=0xB9&&index_op!=0xBD{return Vec::new()} // LDA abs,Y / LDA abs,X
+ if prg[o+3]!=0x48||prg[o+4]!=index_op||prg[o+7]!=0x48||prg[o+8]!=0x60{return Vec::new()}
+ let high_base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+ let low_base=u16::from_le_bytes([prg[o+5],prg[o+6]]);
+ if high_base!=low_base.wrapping_add(1){return Vec::new()}
+
+ let mut out=Vec::new();
+ let mut found_any=false;
+ for i in 0..MAX_WORD_TABLE_ENTRIES{
+  let a=low_base.wrapping_add(i*2);
+  let Ok(t)=off(mapper,prg.len(),a)else{break};
+  if t+1>=prg.len(){break}
+  let raw=u16::from_le_bytes([prg[t],prg[t+1]]);
+  let target=raw.wrapping_add(1);
+  let valid=target>=0x8000&&looks_like_code(mapper,prg,target);
+  if !valid{
+   // Some dispatchers deliberately index from a couple of bytes before the
+   // first real word. Bomberman does this at $D244: Y starts at 2, so the
+   // nominal entry 0 is junk ($6005) and the first real stored target-1 is
+   // $D320 at +2 -> destination $D321.
+   if found_any{break}
+   continue
+  }
+  found_any=true;
+  if !out.contains(&target){out.push(target)}
+ }
+ out
+}
+
 pub fn discover_from_vectors(mapper:u16,prg:&[u8],v:Vectors)->Result<ControlFlowGraph,AnalysisError>{discover(mapper,prg,&[v.reset,v.nmi,v.irq_brk])}
 pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,AnalysisError>{
  if mapper!=0&&mapper!=3{return Err(AnalysisError::UnsupportedMapper(mapper))}if prg.len()!=0x4000&&prg.len()!=0x8000{return Err(AnalysisError::UnsupportedPrgSize(prg.len()))}
@@ -239,7 +366,18 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
      else{for t in targets{edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:Some(t)});q(&mut work,&mut seen,t);}}
      break
     }
-    Mnemonic::Rts|Mnemonic::Rti|Mnemonic::Brk=>break,_=>pc=next
+    Mnemonic::Rts=>{
+     let targets=rts_stack_table_targets(mapper,prg,i.pc);
+     for t in targets{
+      // The stack, rather than a zero-page pointer, supplies the computed PC.
+      // Reuse IndirectJump for reachability; code generation still lowers the
+      // actual RTS instruction normally.
+      edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:0x0100},target:Some(t)});
+      q(&mut work,&mut seen,t);
+     }
+     break
+    }
+    Mnemonic::Rti|Mnemonic::Brk=>break,_=>pc=next
    }
   } blocks.insert(start,BasicBlock{start,instructions:ins,edges});
  }
@@ -263,6 +401,91 @@ mod tests {
 
         assert!(graph.blocks.contains_key(&0x8004));
         assert!(graph.blocks.contains_key(&0x8006));
+    }
+
+    #[test]
+    fn discovers_indexed_push_rts_jump_table_targets() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xB9, 0x01, 0xA0, // LDA $A001,Y (high byte)
+                0x48,             // PHA
+                0xB9, 0x00, 0xA0, // LDA $A000,Y (low byte)
+                0x48,             // PHA
+                0x60,             // RTS -> synthetic target + 1
+            ],
+        );
+        // The nominal base can begin with a non-target word; Bomberman has one
+        // such leading slot because the runtime index starts at 2. Real stored
+        // words are target-1.
+        put(&mut prg, 0xA000, &[0x05, 0x60, 0xFF, 0x91, 0x0F, 0x92, 0x00, 0x00]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        let dispatcher = graph.blocks.get(&0x9000).unwrap();
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0100 })
+                && edge.target == Some(0x9200)
+        }));
+
+        // Bomberman's other sound tables use the same trick indexed by X.
+        put(
+            &mut prg,
+            0x9010,
+            &[
+                0xBD, 0x01, 0xA0, // LDA $A001,X
+                0x48,
+                0xBD, 0x00, 0xA0, // LDA $A000,X
+                0x48,
+                0x60,
+            ],
+        );
+        assert_eq!(rts_stack_table_targets(0, &prg, 0x9018), vec![0x9200, 0x9210]);
+    }
+
+    #[test]
+    fn discovers_adjacent_low_high_indexed_jump_table_targets() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xB9, 0x00, 0xA0, // LDA $A000,Y
+                0x85, 0xEA,       // STA $EA
+                0xB9, 0x01, 0xA0, // LDA $A001,Y
+                0x85, 0xEB,       // STA $EB
+                0xAD, 0x60, 0x04, // unrelated state read
+                0x4A,             // LSR
+                0x29, 0x01,       // AND #1
+                0xA8,             // TAY
+                0x6C, 0xEA, 0x00, // JMP ($00EA)
+            ],
+        );
+
+        // Y is an even byte offset into a little-endian word table.
+        put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92, 0x20, 0x92, 0x00, 0x00]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+        put(&mut prg, 0x9220, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        assert!(graph.blocks.contains_key(&0x9220));
+        let dispatcher = graph.blocks.get(&0x9000).unwrap();
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x00EA })
+                && edge.target == Some(0x9200)
+        }));
     }
 
     #[test]
@@ -324,6 +547,87 @@ mod tests {
         put(&mut prg, 0x8E04, &[0x60]);
 
         assert!(looks_like_code(0, &prg, 0x8231));
+    }
+
+    #[test]
+    fn x_temp_dispatcher_probe_does_not_cross_prior_rts() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        // Ordinary returning subroutine immediately followed by a genuine
+        // TAX/STX inline-table dispatcher, matching Tennis $C375/$C38B.
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xA2, 0x03,       // LDX #3
+                0xC6, 0x20,       // DEC $20
+                0x10, 0x02,       // BPL +2
+                0xEA, 0xEA,       // harmless body
+                0x60,             // RTS
+                0x0A,             // dispatcher begins here
+                0xA8,
+                0xC8,
+                0x68, 0x85, 0x14,
+                0x68, 0x85, 0x15,
+                0xB1, 0x14,
+                0xAA,
+                0xC8,
+                0xB1, 0x14,
+                0x85, 0x15,
+                0x86, 0x14,
+                0x6C, 0x14, 0x00,
+            ],
+        );
+
+        assert!(inline_jsr_dispatcher(0, &prg, 0x9000).is_none());
+        assert!(inline_jsr_dispatcher(0, &prg, 0x9009).is_some());
+    }
+
+    #[test]
+    fn discovers_inline_table_dispatcher_with_x_temp() {
+        let mut prg = vec![0xEA; 0x8000];
+
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0x20, 0x00, 0x91, // JSR $9100
+                0x00, 0x92,       // .word $9200
+                0x10, 0x92,       // .word $9210
+                0x00, 0x00,       // terminator / following non-code
+            ],
+        );
+        put(
+            &mut prg,
+            0x9100,
+            &[
+                0x0A,             // ASL
+                0xA8,             // TAY
+                0xC8,             // INY
+                0x68, 0x85, 0x14, // PLA / STA $14
+                0x68, 0x85, 0x15, // PLA / STA $15
+                0xB1, 0x14,       // LDA ($14),Y
+                0xAA,             // TAX (hold low target byte)
+                0xC8,             // INY
+                0xB1, 0x14,       // LDA ($14),Y
+                0x85, 0x15,       // STA $15 (high target byte)
+                0x86, 0x14,       // STX $14 (low target byte)
+                0x6C, 0x14, 0x00, // JMP ($0014)
+            ],
+        );
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+        assert!(!graph.blocks.contains_key(&0x9003));
+        let dispatcher = graph.blocks.get(&0x9100).unwrap();
+        assert!(dispatcher.edges.iter().any(|edge| {
+            matches!(edge.kind, EdgeKind::IndirectJump { pointer: 0x0014 })
+                && edge.target == Some(0x9200)
+        }));
     }
 
     #[test]
