@@ -183,6 +183,8 @@ def main(path):
             if t is None or t < i:
                 snaps.clear()
             continue
+        if c in ("and a", "or a"):
+            continue  # flags only: A keeps its value
         e = effect(c)
         if e is None:
             reset(); continue
