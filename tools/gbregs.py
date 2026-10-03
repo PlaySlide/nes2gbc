@@ -4,6 +4,7 @@ effect(code) -> (reads, writes) over {'a','b','c','d','e','h','l'} plus the
 individual flags 'zf','nf','hf','cf' (F = all four), or None for control
 transfers, directives and anything not understood.
 """
+import bisect
 import re
 
 R8 = {"a", "b", "c", "d", "e", "h", "l"}
@@ -132,3 +133,88 @@ def effect(c):
     if op == "pop" and len(a) == 1 and a[0] in PAIRS:
         return set(), set(PAIRS[a[0]])
     return None
+
+
+ANON_REF = re.compile(r"(?<![\w.]):(\++|-+)(?!\w)")
+
+
+def if_depth(codes):
+    depth = [0] * len(codes); d = 0
+    for i, c in enumerate(codes):
+        if re.match(r"^IF\b", c):
+            d += 1
+        depth[i] = d
+        if c.startswith("ENDC"):
+            d -= 1
+    return depth
+
+
+class Liveness:
+    """Forward straight-line deadness queries over generated asm lines.
+
+    Labels are transparent; `jp nes_XXXX` to a translated block head (SECTION
+    entry, entered by the dispatcher with no live registers) kills
+    everything; a conditional `jp cc, <block head>` continues on the
+    fall-through path; a forward branch to an anonymous label needs deadness
+    on both paths; the trace-only IF DEF(NES2GBC_PROFILE_TRACE) PC log is
+    skipped (reads nothing live, keeps AF/BC, only kills D/E/H/L); anything
+    else ends the scan as live.
+    """
+
+    def __init__(self, lines, codes):
+        self.lines, self.codes = lines, codes
+        self.heads = set()
+        for i in range(1, len(lines)):
+            m = re.match(r"^(nes_[0-9A-F]{4}):$", codes[i])
+            if m and lines[i - 1].startswith("SECTION"):
+                self.heads.add(m.group(1))
+        anon = [i for i, c in enumerate(codes) if c == ":"]
+        self.target = {}
+        for i, c in enumerate(codes):
+            if c == ":" or ":" not in c:
+                continue
+            for m in ANON_REF.finditer(c):
+                s_ = m.group(1); k = bisect.bisect_right(anon, i)
+                t = k + len(s_) - 1 if s_[0] == "+" else k - len(s_)
+                if 0 <= t < len(anon):
+                    self.target[i] = anon[t]
+
+    def dead_after(self, i, regs, budget=4):
+        return self.dead_from(i + 1, set(regs), budget)
+
+    def dead_from(self, k, need, budget):
+        lines, codes, target = self.lines, self.codes, self.target
+        while k < len(lines) and need:
+            c = codes[k]
+            if not c or is_label(c) or c.startswith("PROFILE_INC"):
+                k += 1; continue
+            if c == "IF DEF(NES2GBC_PROFILE_TRACE)":
+                while k < len(lines) and codes[k] != "ENDC":
+                    k += 1
+                k += 1; continue
+            m = re.match(r"^jp (?:(?:n?[zc]), )?(nes_[0-9A-F]{4})$", c)
+            if m and m.group(1) in self.heads:
+                if "," not in c:
+                    return True
+                if any(f in need for f in ("zf", "cf")):
+                    return False  # the condition reads a flag we need dead... conservatively live
+                k += 1; continue
+            mj = re.match(r"^(jr|jp) (?:(n?[zc]), )?:\+{1,2}$", c)
+            if mj and k in target and target[k] > k and budget > 0:
+                flag = {"z": "zf", "nz": "zf", "c": "cf", "nc": "cf"}.get(mj.group(2))
+                if flag and flag in need:
+                    return False
+                if not self.dead_from(target[k] + 1, set(need), budget - 1):
+                    return False
+                if not mj.group(2):
+                    return True
+                k += 1; continue
+            e = effect(c)
+            if e is None:
+                return False
+            r, w = e
+            if r & need:
+                return False
+            need -= w; k += 1
+        return not need
+
