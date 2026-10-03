@@ -707,6 +707,74 @@ ENDC
     jp nes_ppu_increment_addr
 
 IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
+; One byte of nes_ppu_write_run: HL = source (GB), DE = PPU address
+; ($2000-$3EFF), WRAM bank 1. \1 = 1 advances the source. Same effects as
+; the stitched nes_ppu_write_data fast path (queue room is pre-checked).
+; The stage mark and queue append run with interrupts off: the paced VBlank
+; ISR's queue retire (new generation + entry move) must not land between
+; them. Clobbers A/BC.
+MACRO RUN_ONE
+IF \1
+    ld a, [hli]
+ELSE
+    ld a, [hl]
+ENDC
+    push hl
+    ld c, a
+    ld a, d
+    and $07
+    or $D0
+    ld h, a
+    ld l, e
+    ld [hl], c ; authoritative WRAM (bank 1)
+    ld a, h
+    add HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld h, a
+    di
+    ld a, [nes_stage_gen]
+    ld b, a
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    cp b
+    jr z, .dup\@
+    ld [hl], b
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, h
+    sub HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld b, a
+    ld c, l
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld l, a
+    ld a, [nes_nametable_queue_ptr_hi]
+    ld h, a
+    ld [hl], c
+    inc l
+    ld [hl], b
+    inc hl
+    ld a, l
+    ld [nes_nametable_queue_ptr_lo], a
+    ld a, h
+    ld [nes_nametable_queue_ptr_hi], a
+    ei
+    jr .next\@
+.dup\@:
+    ld a, $01
+    ldh [rSVBK], a
+    ei
+.next\@:
+    pop hl
+    ld a, [nes_run_inc]
+    add e
+    ld e, a
+    jr nc, .nc\@
+    inc d
+.nc\@:
+ENDM
+ENDC
+
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
 SECTION "NES PPU write run temps", WRAM0
 nes_run_count: ds 1
 nes_run_inc:   ds 1
@@ -822,6 +890,29 @@ nes_ppu_write_run:
     cp $3F
     pop hl ; HL = source (NES address)
     jp nc, .no
+    ; Queue room for every byte (duplicates only need less): the VBlank
+    ; retire can only shrink the queue, so no byte of the run can overflow.
+    push hl
+    ld a, [nes_run_count]
+    ld l, a
+    ld h, $00
+    add hl, hl
+    ld a, [nes_nametable_queue_ptr_lo]
+    add l
+    ld l, a
+    ld a, [nes_nametable_queue_ptr_hi]
+    adc h
+    cp $E0
+    jr c, .room_ok
+    jr nz, .room_no
+    ld a, l
+    and a
+    jr z, .room_ok
+.room_no:
+    pop hl
+    jp .no
+.room_ok:
+    pop hl
     ; Committed. Source NES RAM address -> GB WRAM0.
     ld a, h
     or $C0
@@ -834,23 +925,22 @@ nes_ppu_write_run:
     jr nz, .loop_repeat
 
 .loop:
-    ld c, [hl]
-    inc hl
-    call .one
+    RUN_ONE 1
     ld a, [nes_run_count]
     dec a
     ld [nes_run_count], a
     jr nz, .loop
+    dec hl
+    ld c, [hl]
     jr .done
 
 .loop_repeat:
-    ld c, [hl]
-.loop_repeat_next:
-    call .one
+    RUN_ONE 0
     ld a, [nes_run_count]
     dec a
     ld [nes_run_count], a
-    jr nz, .loop_repeat_next
+    jr nz, .loop_repeat
+    ld c, [hl]
 
 .done:
     ld a, e
@@ -873,71 +963,8 @@ nes_ppu_write_run:
     pop bc
     xor a
     ret
-
-; One byte: C = value, DE = PPU address ($2000-$3EFF). Preserves C/HL.
-.one:
-    push hl
-    ld a, d
-    and $07
-    or $D0
-    ld h, a
-    ld l, e
-    ld [hl], c ; authoritative WRAM (bank 1)
-    ld a, [nes_nametable_queue_overflow]
-    and a
-    jr nz, .one_next
-    ld a, h
-    add HIGH(nes_nametable_stage_seen - nes_nametable_ram)
-    ld h, a
-    ld a, [nes_stage_gen]
-    ld b, a
-    ld a, $06
-    ldh [rSVBK], a
-    ld a, [hl]
-    cp b
-    jr z, .one_dup
-    ld [hl], b
-    ld a, $01
-    ldh [rSVBK], a
-    ld a, h
-    sub HIGH(nes_nametable_stage_seen - nes_nametable_ram)
-    ld h, a
-    push de
-    ld a, [nes_nametable_queue_ptr_hi]
-    cp $E0
-    jr nc, .one_overflow
-    ld d, a
-    ld a, [nes_nametable_queue_ptr_lo]
-    ld e, a
-    ld a, l
-    ld [de], a
-    inc e
-    ld a, h
-    ld [de], a
-    inc de
-    ld a, e
-    ld [nes_nametable_queue_ptr_lo], a
-    ld a, d
-    ld [nes_nametable_queue_ptr_hi], a
-    pop de
-    jr .one_next
-.one_overflow:
-    ld a, $01
-    ld [nes_nametable_queue_overflow], a
-    pop de
-    jr .one_next
-.one_dup:
-    ld a, $01
-    ldh [rSVBK], a
-.one_next:
-    pop hl
-    ld a, [nes_run_inc]
-    add e
-    ld e, a
-    ret nc
-    inc d
-    ret
 ENDC
+
 
 SECTION "NES stage first visit", ROM0
 ; Append physical virtual nametable address HL ($D000-$D7FF) to the
