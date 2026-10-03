@@ -14,7 +14,12 @@ NMI indices and framebuffer hashes after fixed NMIs verify output is unchanged. 
 check NMI N is the first emulator frame in which NMI N+1 starts; since 2026-10 it is
 also taken when NMIs N+1 and N+2 start in the same emulator frame (previously that
 screenshot was silently dropped, changing `check` without any output change).
-Reference: check=ed2ed09fc6b4 for SMB with both PACING=0 and PACING=1.
+`check` is exact but, with PACING=1, which NES frame is on screen at that moment
+depends on timing, so a faster build can legitimately change it.
+`gate` is the correctness gate: NES RAM at every check NMI plus "published frame"
+screenshots (the LCD frame right after the VBlank commit that publishes NES frame
+N), compared with ref_smb.json (written from fe9c3c3 PACING=0). Frames pacing
+never published are counted, not compared. PACING=0 and PACING=1 both pass.
 """
 import argparse, hashlib, json, os, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -64,7 +69,7 @@ def run(rom, sym, nmis, profile=None, shots=None):
     pb = PyBoy(rom, window="null", cgb=True, sound_emulated=False)
     pb.set_emulation_speed(0)
     st = {"nmi": 0, "pressed": set(), "nmi_cyc": [], "idle_cyc": [], "waiting": False,
-          "nmi_tick": [], "ram": {}, "latches": 0, "vmem": {}}
+          "nmi_tick": [], "ram": {}, "latches": 0, "vmem": {}, "rti": 0, "commits": []}
 
     def screen_mem():
         # GBC screen memory: VRAM banks 0+1 (tiles, maps, attributes) and OAM.
@@ -102,6 +107,20 @@ def run(rom, sym, nmis, profile=None, shots=None):
     b, a = syms["nes_8057"]; pb.hook_register(b, a, on_idle, None)
     b, a = syms["nes_controller_latch"]; pb.hook_register(b, a, on_latch, None)
 
+    # Published-frame screenshots: NES frame k is published by the VBlank commit
+    # that runs after the k-th RTI; the LCD frame rendered right after that
+    # commit shows it. Unlike the NMI-relative shot this does not depend on how
+    # far pacing lets the next NMI run ahead, so PACING=0 and PACING=1 agree.
+    def on_rti(_):
+        st["rti"] += 1
+    def on_commit(_):
+        st["commits"].append(st["rti"])
+    have_pub = "nes_rti_pop_hl" in syms and "nes_gbc_vblank_isr.commit_ready" in syms
+    if have_pub:
+        b, a = syms["nes_rti_pop_hl"]; pb.hook_register(b, a, on_rti, None)
+        b, a = syms["nes_gbc_vblank_isr.commit_ready"]; pb.hook_register(b, a, on_commit, None)
+    pubs, pub_next = {}, []
+
     prof = None
     screens = {}
     st["tick"] = 0
@@ -116,8 +135,14 @@ def run(rom, sym, nmis, profile=None, shots=None):
         if prof is not None and st["nmi"] >= WINDOWS[PROFWIN][1] and "prof_end" not in st:
             pb.prof_detach(); st["prof_end"] = 1
         before = st["nmi"]
+        st["commits"] = []
         pb.tick(1, True)
         st["tick"] += 1
+        if pub_next or st["commits"]:
+            h = hashlib.sha1(pb.screen.ndarray.tobytes()).hexdigest()[:12]
+            for k in pub_next:
+                pubs.setdefault(k, h)
+            pub_next = [k for k in st["commits"] if k in CHECK_NMIS and k not in pubs]
         # screenshot for check NMI N = first emulator frame in which NMI N+1 started
         # (also when NMIs N+1 and N+2 share that frame, which used to drop the shot)
         for n in range(before, st["nmi"]):
@@ -148,6 +173,7 @@ def run(rom, sym, nmis, profile=None, shots=None):
         }
     res["ram_hash"] = st["ram"]
     res["screen_hash"] = screens
+    res["pub_hash"] = pubs
     res["vmem_hash"] = st["vmem"]
     # smem: NES RAM + GBC VRAM/OAM sampled at NMI N+1 entry. Stricter than the LCD shot and
     # timing-independent with PACING=0; with PACING=1 OAM/attribute publish timing leaks in,
@@ -158,6 +184,23 @@ def run(rom, sym, nmis, profile=None, shots=None):
     pb.stop(save=False)
     return res
 
+def gate(r, ref):
+    """Compare against a reference run: RAM at every check NMI must match, and every
+    published-frame screenshot this run has must match (a frame that pacing never
+    published is skipped and counted; it has no image to compare)."""
+    bad = [f"ram@{n}" for n in CHECK_NMIS if str(n) in ref["ram"] and r["ram_hash"].get(n) != ref["ram"][str(n)]]
+    cmp = skip = 0
+    for n in CHECK_NMIS:
+        if str(n) not in ref["pub"]:
+            continue
+        if n not in r["pub_hash"]:
+            skip += 1
+        elif r["pub_hash"][n] != ref["pub"][str(n)]:
+            bad.append(f"pub@{n}")
+        else:
+            cmp += 1
+    return ("OK" if not bad else "FAIL " + ",".join(bad)) + f" ({cmp} frames matched, {skip} unpublished)"
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--rom", default=os.path.join(HERE, "..", "..", "runtime", "build", "runtime.gbc"))
@@ -167,10 +210,15 @@ if __name__ == "__main__":
     ap.add_argument("--profwin", default="play", choices=["title", "play"])
     ap.add_argument("--shots", default=None, help="dir for PNG screenshots at check NMIs")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--ref", default=os.path.join(HERE, "ref_smb.json"), help="gate reference (RAM + published frames)")
+    ap.add_argument("--write-ref", action="store_true", help="write this run as the gate reference")
     a = ap.parse_args()
     PROFWIN = a.profwin
     sym = a.sym or os.path.splitext(a.rom)[0] + ".sym"
     r = run(a.rom, sym, a.nmis, a.profile, a.shots)
+    if a.write_ref:
+        json.dump({"ram": r["ram_hash"], "pub": r["pub_hash"]}, open(a.ref, "w"), indent=1, sort_keys=True)
+    r["gate"] = gate(r, json.load(open(a.ref))) if os.path.exists(a.ref) else "no reference"
     if a.json:
         print(json.dumps(r, indent=1))
     else:
@@ -179,6 +227,7 @@ if __name__ == "__main__":
                 d = r[w]
                 print(f"{w:6s} {d['pct_native']:6.2f}% native  {d['host_frames_per_nes_frame']:.3f} hostfr/NESfr  "
                       f"work {d['work_cycles_per_nes_frame']:7d} cyc/NESfr ({d['work_pct_of_host_frame']}% of host frame, max {d['max_work_cycles']})")
+        print(f"gate={r['gate']}")
         print(f"check={r['check']}  smem={r['smem']}  nmis={r['nmis']} ticks={r['ticks']} wall={r['wall_s']}s")
         print("ram  ", r["ram_hash"])
         print("screen", r["screen_hash"])
