@@ -1,12 +1,15 @@
 """Register read/write model for generated LR35902 asm lines (late passes).
 
-effect(code) -> (reads, writes) over {'a','f','b','c','d','e','h','l'} or
-None for control transfers, directives and anything not understood.
+effect(code) -> (reads, writes) over {'a','b','c','d','e','h','l'} plus the
+individual flags 'zf','nf','hf','cf' (F = all four), or None for control
+transfers, directives and anything not understood.
 """
 import re
 
 R8 = {"a", "b", "c", "d", "e", "h", "l"}
-PAIRS = {"bc": {"b", "c"}, "de": {"d", "e"}, "hl": {"h", "l"}, "af": {"a", "f"}}
+F = {"zf", "nf", "hf", "cf"}
+ZNH = {"zf", "nf", "hf"}
+PAIRS = {"bc": {"b", "c"}, "de": {"d", "e"}, "hl": {"h", "l"}, "af": {"a"} | F}
 ALU = {"add", "adc", "sub", "sbc", "and", "or", "xor", "cp"}
 CB_ROT = {"rlc", "rrc", "sla", "sra", "srl", "swap", "rl", "rr"}
 
@@ -82,39 +85,47 @@ def effect(c):
             return None
         r, mem = operand(o)
         if mem:
-            return r | {"f"}, {"f"}
-        return r | {"f"}, r | {"f"}
+            return r, set(ZNH)
+        return r, r | ZNH
     if op in ALU:
         if len(a) == 2 and a[0] == "a":
             a = a[1:]
         if len(a) == 2 and a[0] == "hl":
-            return {"h", "l", "f"} | PAIRS.get(a[1], set()), {"h", "l", "f"}
+            if op != "add" or a[1] not in ("bc", "de", "hl"):
+                return None
+            return {"h", "l"} | PAIRS[a[1]], {"h", "l", "nf", "hf", "cf"}
         if len(a) != 1:
             return None
         if a[0] == "sp":
             return None
         s = a[0]
         if op in ("xor", "sub") and s == "a":
-            return set(), {"a", "f"}
+            return set(), {"a"} | F
         r, _ = operand(s)
         r = r | {"a"}
         if op in ("adc", "sbc"):
-            r.add("f")
-        return r, ({"f"} if op == "cp" else {"a", "f"})
+            r.add("cf")
+        return r, (set(F) if op == "cp" else {"a"} | F)
     if op in ("rlca", "rrca"):
-        return {"a"}, {"a", "f"}
-    if op in ("rla", "rra", "cpl", "daa"):
-        return {"a", "f"}, {"a", "f"}
-    if op in ("scf", "ccf"):
-        return {"f"}, {"f"}
+        return {"a"}, {"a"} | F
+    if op in ("rla", "rra"):
+        return {"a", "cf"}, {"a"} | F
+    if op == "cpl":
+        return {"a"}, {"a", "nf", "hf"}
+    if op == "daa":
+        return {"a"} | F, {"a"} | F
+    if op == "scf":
+        return set(), {"nf", "hf", "cf"}
+    if op == "ccf":
+        return {"cf"}, {"nf", "hf", "cf"}
     if op in CB_ROT and len(a) == 1:
         r, mem = operand(a[0])
-        rd = set(r) | ({"f"} if op in ("rl", "rr") else set())
-        return rd, ({"f"} if mem else r | {"f"})
+        rd = set(r) | ({"cf"} if op in ("rl", "rr") else set())
+        return rd, (set(F) if mem else r | F)
     if op in ("bit", "set", "res") and len(a) == 2:
         r, mem = operand(a[1])
         if op == "bit":
-            return r | {"f"}, {"f"}
+            return set(r), set(ZNH)
         return set(r), (set() if mem else set(r))
     if op == "push" and len(a) == 1 and a[0] in PAIRS:
         return set(PAIRS[a[0]]), set()

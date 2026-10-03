@@ -25,9 +25,8 @@ import bisect, re, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gbregs import code, effect, is_label  # noqa: E402
+from gbregs import F, code, effect, is_label  # noqa: E402
 
-ALL = {"a", "f", "b", "c", "d", "e", "h", "l"}
 ANON_REF = re.compile(r"(?<![\w.]):(\++|-+)(?!\w)")
 
 
@@ -67,6 +66,13 @@ def main(path):
             if not c or is_label(c) or c.startswith("PROFILE_INC"):
                 k += 1
                 continue
+            if c == "IF DEF(NES2GBC_PROFILE_TRACE)":
+                # trace-only PC log: writes D/E/H/L, preserves AF/BC, reads
+                # nothing live, so release-build deadness implies trace-build
+                while k < len(lines) and codes[k] != "ENDC":
+                    k += 1
+                k += 1
+                continue
             m = re.match(r"^jp (nes_[0-9A-F]{4})$", c)
             if m and m.group(1) in heads:
                 return True
@@ -99,7 +105,7 @@ def main(path):
                 ok = False; break
             mj = re.match(r"^jr (n?[cz]), (:\+)$", cj)
             if mj:
-                body.append(j); used.add("f"); j += 1; continue
+                body.append(j); used |= F; j += 1; continue
             e = effect(cj)
             if e is None or cj.startswith(("push", "pop")):
                 ok = False; break
@@ -119,7 +125,7 @@ def main(path):
         for t in ("e", "d"):
             if t in used:
                 continue
-            if dead_after(j, {t, "f"}):
+            if dead_after(j, {t} | F):
                 ind = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
                 lines[i] = f"{ind}ld {t}, a ; A parked in dead {t.upper()} (was push af)\n"
                 ind = lines[j][: len(lines[j]) - len(lines[j].lstrip())]
