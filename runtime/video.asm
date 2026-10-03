@@ -243,9 +243,12 @@ ENDC
     ldh [rSVBK], a
     ld de, nes_nametable_queue
 
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
     ; SMB stitched presentation (fixed for the whole flush): publish tile
     ; bytes with the effects of nes_video_sync_nametable_write_if_changed
     ; specialized for that state, without the per-byte calls and re-tests.
+    ; (Compiled out with the stitched $2007 fast path: it needs vertical
+    ; mirroring, which those ROMs never select.)
     ld a, [nes_hstitch_valid]
     and a
     jr z, .loop
@@ -255,6 +258,7 @@ ENDC
     ldh a, [nes_split_active]
     and a
     jp nz, .stitched
+ENDC
 
 .loop:
     ; DE == queue end?
@@ -409,6 +413,7 @@ ENDC
     ldh [rVBK], a
     ret
 
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
 .stitched:
 IF DEF(NES2GBC_DEBUG_TRACE)
     jp .loop ; keep the per-byte diagnostics in TRACE builds
@@ -584,6 +589,7 @@ ENDC
     ld a, $01
     ldh [rSVBK], a
     jp .s_loop
+ENDC
 
 ; Rebuild both physical GBC background maps from authoritative NES
 ; nametable WRAM.  This is a correctness checkpoint used when an ordinary game
