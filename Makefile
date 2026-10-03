@@ -10,6 +10,12 @@ REGALLOC ?= 3
 # no APU cost; 1 = APU register writes/$4015 reads drive CGB sound. Set it on
 # `make generate`/`make gbc`; it is recorded in runtime/generated_config.inc.
 APU ?= 0
+# Multi-frame catch-up (runtime pacing): 1 = bank up to CATCHUP_MAX host VBlanks
+# that elapsed while a translated NMI ran, so following short frames start
+# their NMI without waiting for the next VBlank. 0 (default) = previous
+# single-credit pacing, byte-identical builds. Recorded in generated_config.inc.
+CATCHUP ?= 0
+CATCHUP_MAX ?= 3
 POSTPASS_THROUGH ?= all
 # Profile-guided translated-code bank packing (tools/bench/bank_profile.py).
 # Defaults to profiles/<rom name>.bankprof when that file exists; BANK_PROFILE=
@@ -41,6 +47,7 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-a     # add A cache too'
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache       # add all cache passes'
 	@echo '  make gbc ROM="path/to/game.nes" APU=1         # enable NES sound (APU emulation)'
+	@echo '  make gbc ROM="path/to/game.nes" CATCHUP=1     # multi-frame pacing catch-up (CATCHUP_MAX=3)'
 	@echo '  make gbc ROM="path/to/game.nes" APU=1 APU_TEST_SPEED=2 # compensate audio for mGBA 2x fast-forward'
 	@echo '  make test'
 
@@ -48,6 +55,8 @@ generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
 	@if [ "$(APU)" = "1" ]; then echo 'DEF NES2GBC_APU EQU 1 ; make generate APU=1' > runtime/generated_config.inc; \
 	else echo '; make generate APU=0: NES APU emulation disabled' > runtime/generated_config.inc; fi
+	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
+		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
 		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	else \

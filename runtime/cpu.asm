@@ -1076,9 +1076,17 @@ IF !DEF(NES2GBC_NO_PACING)
     ld a, [nes_pace_idle_hi]
     and a
     jr z, .no_credit
+IF DEF(NES2GBC_CATCHUP)
+    ; Spend one banked VBlank (up to NES2GBC_CATCHUP_MAX accumulate).
+    ld a, [nes_pace_credit]
+    dec a
+    ld [nes_pace_credit], a
+    ld a, $01
+ELSE
     xor a
     ld [nes_pace_credit], a
     inc a
+ENDC
     ld [nes_pace_armed], a
     ldh [nes_host_vblank_pending], a
 .no_credit:
@@ -1338,6 +1346,9 @@ DEF PACE_IDX_MASK_DIRTY EQU 8
 DEF PACE_IDX_PALETTE_DIRTY EQU 16
 DEF PACE_IDX_SCROLL_DIRTY EQU 17
 DEF PACE_IDX_CTRL_DIRTY EQU 18
+DEF PACE_IDX_REBUILD_DIRTY EQU 11
+DEF PACE_IDX_OAM_EMIT EQU 14
+DEF PACE_IDX_OAM_READY EQU 15
 
 ; Only state the VBlank commit reads or writes is snapshotted/swapped.
 ; NMI-side bookkeeping that no ISR path touches (nes_nametable_stage_used,
@@ -1381,6 +1392,49 @@ ASSERT HIGH(nes_pace_snap) == HIGH(nes_pace_snap + 26) ; DE walk uses inc e
 ; Copy the just-completed frame's publishable state into the pacing snapshot.
 ; Clobbers AF/BC/DE/HL.
 nes_pace_take_snapshot:
+IF DEF(NES2GBC_CATCHUP)
+    ; Catch-up can complete a second frame before the VBlank that publishes
+    ; the first: the newer frame supersedes the snapshot (that older frame is
+    ; never shown on its own). Its queued entries stay in the queue; merge
+    ; its pending publications so nothing it changed is lost.
+    ld a, [nes_pace_snap_valid]
+    and a
+    jr z, .merge_done
+    ld hl, nes_pace_snap + PACE_IDX_MASK_DIRTY
+    ld a, [nes_mask_dirty]
+    or [hl]
+    ld [nes_mask_dirty], a
+    ld hl, nes_pace_snap + PACE_IDX_SCROLL_DIRTY
+    ldh a, [nes_scroll_dirty]
+    or [hl]
+    ldh [nes_scroll_dirty], a
+    ld hl, nes_pace_snap + PACE_IDX_CTRL_DIRTY
+    ldh a, [nes_ctrl_dirty]
+    or [hl]
+    ldh [nes_ctrl_dirty], a
+    ld hl, nes_pace_snap + PACE_IDX_REBUILD_DIRTY
+    ld a, [nes_generic_map_rebuild_dirty]
+    or [hl]
+    ld [nes_generic_map_rebuild_dirty], a
+    ; Palette: the snapshot copy equals the live shadow unless this frame
+    ; changed it (then palette_dirty is set and it is copied again).
+    ldh a, [nes_palette_dirty]
+    and a
+    jr nz, .merge_palette_done
+    ld a, [nes_pace_snap_palette]
+    ldh [nes_palette_dirty], a
+.merge_palette_done:
+    ; OAM: if this frame did no DMA, keep the older projected pace page.
+    ld a, [nes_oam_dirty]
+    and a
+    jr nz, .merge_done
+    ld a, [nes_pace_snap + PACE_IDX_OAM_DIRTY]
+    and a
+    jr z, .merge_done
+    call .merge_keep_oam
+    ret
+.merge_done:
+ENDC
     ; Project OAM now if needed, exactly as the commit would have.
     ld a, [nes_oam_dirty]
     and a
@@ -1440,6 +1494,24 @@ nes_pace_take_snapshot:
     ld [nes_pace_unpublished], a
     ldh [nes_scroll_pair_count], a
     ret
+
+IF DEF(NES2GBC_CATCHUP)
+; take_snapshot body for a superseding frame without its own OAM DMA: keep
+; the older snapshot's OAM page, emit count and ready flag.
+.merge_keep_oam:
+    ld a, [nes_pace_snap + PACE_IDX_OAM_EMIT]
+    push af
+    ld a, [nes_pace_snap + PACE_IDX_OAM_READY]
+    push af
+    call .oam_snap_done
+    pop af
+    ld [nes_pace_snap + PACE_IDX_OAM_READY], a
+    pop af
+    ld [nes_pace_snap + PACE_IDX_OAM_EMIT], a
+    ld a, $01
+    ld [nes_pace_snap + PACE_IDX_OAM_DIRTY], a
+    ret
+ENDC
 
 ; After a paced publication flushed the snapshot's queue prefix
 ; [$D800, nes_pace_q_end), drop that prefix from the live queue (the running

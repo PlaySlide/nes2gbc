@@ -550,7 +550,15 @@ IF !DEF(NES2GBC_NO_PACING)
     ; Never more than one NMI start per host VBlank (60 NES fps cap).
     xor a
     ldh [nes_host_vblank_pending], a
+IF DEF(NES2GBC_CATCHUP)
+    ; Bank this VBlank (bounded) for later short frames to catch up.
+    ld a, [nes_pace_credit]
+    cp NES2GBC_CATCHUP_MAX
+    jr nc, .pace_done
     inc a
+ELSE
+    inc a
+ENDC
     ld [nes_pace_credit], a
 .pace_done:
     ; VBlank has now passed for an early-started NMI: its PPUMASK writes may
