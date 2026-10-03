@@ -102,6 +102,7 @@ def helper() -> str:
         '    ld a, [hli] ; Y, HL -> tile\n',
         '    cp $EF\n',
         '    jr nc, .skip38\n',
+        '.vis8: ; A = Y, HL -> tile\n',
         '    inc a\n',
         '    sub c ; C = view Y\n',
         '    jr c, .skip38\n',
@@ -152,16 +153,25 @@ def helper() -> str:
         '    jr nz, .scan8\n',
         '    jp .clear_unused\n',
         '.skip38: ; HL -> tile; L wrapping to 0 ends the 64-entry scan\n',
-        '    ld a, l\n',
-        '    add 3\n',
-        '    ld l, a\n',
-        '    jr nz, .scan8\n',
+    ] + [
+        # Hidden sprites come in runs: unrolled skip without the loop jump.
+        line for _ in range(4) for line in (
+            '    inc l\n', '    inc l\n', '    inc l ; HL -> next Y, Z on wrap\n',
+            '    jr z, .skipend8\n',
+            '    ld a, [hli] ; Y, HL -> tile\n',
+            '    cp $EF\n',
+            '    jr c, .vis8\n',
+        )
+    ] + [
+        '    jr .skip38\n',
+        '.skipend8:\n',
         '    jp .clear_unused\n',
         '\n',
         '.scan16:\n',
         '    ld a, [hli] ; Y, HL -> tile\n',
         '    cp $EF\n',
         '    jr nc, .skip316\n',
+        '.vis16: ; A = Y, HL -> tile\n',
         '    inc a\n',
         '    sub c ; C = view Y\n',
         '    jr c, .skip316\n',
@@ -216,10 +226,18 @@ def helper() -> str:
         '    jr nz, .scan16\n',
         '    jr .clear_unused\n',
         '.skip316: ; HL -> tile; L wrapping to 0 ends the 64-entry scan\n',
-        '    ld a, l\n',
-        '    add 3\n',
-        '    ld l, a\n',
-        '    jr nz, .scan16\n',
+    ] + [
+        # Hidden sprites come in runs: unrolled skip without the loop jump.
+        line for _ in range(4) for line in (
+            '    inc l\n', '    inc l\n', '    inc l ; HL -> next Y, Z on wrap\n',
+            '    jr z, .skipend16\n',
+            '    ld a, [hli] ; Y, HL -> tile\n',
+            '    cp $EF\n',
+            '    jr c, .vis16\n',
+        )
+    ] + [
+        '    jr .skip316\n',
+        '.skipend16:\n',
         '    jr .clear_unused\n',
         '\n',
         ".clear_unused:\n",
