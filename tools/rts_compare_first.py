@@ -41,11 +41,95 @@ def load_prof(path):
     return d
 
 
+KEY = re.compile(r"\((?:tools/)?rts_chain_reorder\.py, (nes_[0-9A-F]{4}(?:_trace)?#\d+)\)")
+JPT = re.compile(r"jp nes_([0-9A-F]{4})$")
+
+
+def pair_site(lines, codes, pop0, k, edges, thr, pmin):
+    """Two dominant continuations by per-site return-edge profile: returns
+    ((lo, hi, jump lines, share) x2) or None. k = chain's first `ld a, h`."""
+    key = None
+    for x in range(pop0, k + 1):
+        m = KEY.search(lines[x])
+        if m:
+            key = m.group(1)
+    if key is None or key not in edges:
+        return None
+    # walk the chain: groups `ld a, h / cp HI / jr nz` then units
+    # `[ld a, l] / cp LO ; ...for nes_T / jr nz / <jump>`
+    units = {}
+    hi = None
+    x = k
+    while x < len(lines) and codes[x] != "jp nes_dispatch_hl" and not lines[x].startswith("SECTION"):
+        c = codes[x]
+        if c == "ld a, h":
+            y = x + 1
+            while not codes[y]:
+                y += 1
+            mh = re.fullmatch(r"cp \$([0-9A-F]{2})", codes[y])
+            if not mh:
+                return None
+            hi = int(mh.group(1), 16)
+            x = y + 1
+            continue
+        mc = CAND.search(lines[x])
+        if mc and hi is not None:
+            ml = re.fullmatch(r"cp \$([0-9A-F]{2})", c)
+            if not ml:
+                return None
+            t = mc.group(1)
+            y = x + 1
+            while not codes[y]:
+                y += 1
+            if not codes[y].startswith("jr nz,"):
+                return None
+            y += 1
+            while not codes[y]:
+                y += 1
+            if JPT.fullmatch(codes[y]) and JPT.fullmatch(codes[y]).group(1) == t:
+                jl = [lines[y]]
+            elif codes[y] == f"ld a, BANK(nes_{t})" and codes[y + 1] == f"ld hl, nes_{t}" and codes[y + 2] == "jp nes_jump_known_hl_a_8bit":
+                jl = lines[y:y + 3]
+            else:
+                return None
+            units.setdefault(t, (int(ml.group(1), 16), hi, jl))
+        x += 1
+    e = edges[key]
+    tot = sum(e.values())
+    if tot <= 0:
+        return None
+    top = sorted(((v, t) for t, v in e.items() if t in units), reverse=True)[:2]
+    if len(top) < 2:
+        return None
+    (v0, t0), (v1, t1) = top
+    if (v0 + v1) / tot < thr or v1 / tot < pmin:
+        return None
+    lo0, hi0, j0 = units[t0]
+    lo1, hi1, j1 = units[t1]
+    if lo0 == lo1:
+        return None
+    return (lo0, hi0, j0, v0 / tot), (lo1, hi1, j1, v1 / tot)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("asm"); ap.add_argument("--rts-profile", default="")
     ap.add_argument("--threshold", type=float, default=0.9)
+    ap.add_argument("--edge-profile", default="")
+    ap.add_argument("--pair-threshold", type=float, default=0.9)
+    ap.add_argument("--pair-min", type=float, default=0.15)
     a = ap.parse_args()
+    edges = {}
+    if a.edge_profile:
+        try:
+            for l in open(a.edge_profile):
+                if l.startswith("#") or not l.strip():
+                    continue
+                v, key, t = l.split()[:3]
+                edges.setdefault(key, {})[t.upper()] = float(v)
+        except OSError:
+            pass
+    n2 = 0
     prof = load_prof(a.rts_profile) if a.rts_profile else {}
     if not prof:
         print("rts-compare-first: no profile, skipped"); return
@@ -96,7 +180,26 @@ def main():
         seen += 1
         tot = sum(prof.get(t, 0.0) for t in cands)
         if tot <= 0 or prof.get(t0, 0.0) / tot < a.threshold:
-            out.append(lines[i]); i += 1; continue
+            pair = pair_site(lines, codes, idx[0], k, edges, a.pair_threshold, a.pair_min)
+            if pair is None:
+                out.append(lines[i]); i += 1; continue
+            (lo0, hi0, j0, s0), (lo1, hi1, j1, s1) = pair
+            ind = "    "
+            lbl = f"nes_rcf_miss_{n}"
+            l1 = f"nes_rcf_t1_{n}"
+            out.extend([f"{ind}; two-candidate compare-first RTS return (tools/rts_compare_first.py, edge shares {s0:.2f}/{s1:.2f})\n",
+                        f"{ind}ldh a, [nes_sp]\n", f"{ind}ld l, a\n", f"{ind}add 2\n", f"{ind}ldh [nes_sp], a\n",
+                        f"{ind}ld h, $C1\n", f"{ind}inc l\n", f"{ind}ld a, [hl]\n", f"{ind}inc l\n",
+                        f"{ind}cp ${lo0:02X}\n", f"{ind}jr nz, {l1}\n", f"{ind}ld a, [hl]\n",
+                        f"{ind}cp ${hi0:02X}\n", f"{ind}jr nz, {lbl}\n"] + j0 + [
+                        f"{l1}:\n", f"{ind}cp ${lo1:02X}\n", f"{ind}jr nz, {lbl}\n", f"{ind}ld a, [hl]\n",
+                        f"{ind}cp ${hi1:02X}\n", f"{ind}jr nz, {lbl}\n"] + j1 + [
+                        f"{lbl}:\n", f"{ind}ld a, [hl]\n", f"{ind}dec l\n", f"{ind}ld c, [hl]\n",
+                        f"{ind}ld l, c\n", f"{ind}ld h, a\n"])
+            i = k
+            n += 1
+            n2 += 1
+            continue
         ind = "    "
         lbl = f"nes_rcf_miss_{n}"
         new = [f"{ind}; compare-first RTS return (tools/rts_compare_first.py, T0 share {prof.get(t0,0)/tot:.2f})\n",
@@ -111,7 +214,7 @@ def main():
         i = k
         n += 1
     p.write_text("".join(out))
-    print(f"rts-compare-first: {n} of {seen} RTS sites rewritten")
+    print(f"rts-compare-first: {n} of {seen} RTS sites rewritten ({n2} two-candidate)")
 
 
 if __name__ == "__main__":

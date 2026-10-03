@@ -132,7 +132,7 @@ generate:
 			python3 tools/dead_reg_writes.py runtime/generated.asm; \
 			python3 tools/sec_sbc_to_sub.py runtime/generated.asm; \
 			python3 tools/rts_chain_reorder.py runtime/generated.asm --edge-profile "$(RTS_EDGE_PROFILE)"; \
-			python3 tools/rts_compare_first.py runtime/generated.asm --rts-profile "$(RTS_PROFILE)"; \
+			python3 tools/rts_compare_first.py runtime/generated.asm --rts-profile "$(RTS_PROFILE)" --edge-profile "$(RTS_EDGE_PROFILE)"; \
 		fi; \
 	fi
 
