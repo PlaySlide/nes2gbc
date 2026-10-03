@@ -501,12 +501,15 @@ nes_ppu_write_data:
     ; path below for that state: the hidden-change bookkeeping is skipped by
     ; the split/stitch test there too, the byte is stored to authoritative
     ; WRAM, staged once per NMI, and the address increments.
-    ld a, [nes_nmi_active]
-    and a
-    jp z, .generic
+    ; ROMs with fixed non-vertical mirroring never take it, so
+    ; tools/route_ppu_write_data.py compiles it out for them.
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
     ld a, [nes_mirroring]
     dec a
     jp nz, .generic
+    ld a, [nes_nmi_active]
+    and a
+    jp z, .generic
     ldh a, [nes_split_active]
     ld b, a
     ld a, [nes_hstitch_valid]
@@ -576,6 +579,7 @@ nes_ppu_write_data:
     ld a, $01
     ld [nes_nametable_queue_overflow], a
     jp nes_ppu_increment_addr
+ENDC
 
 .generic:
     call nes_ppu_get_addr_hl
