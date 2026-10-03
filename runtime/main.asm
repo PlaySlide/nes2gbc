@@ -117,7 +117,11 @@ nes_gbc_vblank_isr:
 
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
+IF DEF(NES2GBC_DEBUG_TRACE)
+    ; TRACE builds only: the 4-frame renderer diagnostic ring is debugger
+    ; telemetry and cost every host VBlank in release builds.
     call nes_diag_snapshot_frame
+ENDC
 IF DEF(NES2GBC_APU)
     call nes_apu_frame_tick
 ENDC
