@@ -1221,18 +1221,26 @@ ENDR
     ; games do not rewrite both scroll states on every NMI.
     PROFILE_INC nes_profile_nmi
 
-    ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
+    ; Hardware interrupt stack frame: PC high, PC low, P with B clear
+    ; (three nes_stack_push_a inlined; nes_materialize_p keeps HL, E ends
+    ; holding the pushed P as before).
     ld b, h
     ld c, l
-    ld a, b
-    call nes_stack_push_a
-    ld a, c
-    call nes_stack_push_a
-
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], b
+    dec l
+    ld [hl], c
+    dec l
     call nes_materialize_p
     and $EF
     or $20
-    call nes_stack_push_a
+    ld [hl], a
+    ld e, a
+    dec l
+    ld a, l
+    ldh [nes_sp], a
 
     ldh a, [nes_p]
     or $04
