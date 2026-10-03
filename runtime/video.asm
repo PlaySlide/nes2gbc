@@ -75,8 +75,10 @@ nes_video_init:
     ; The SMB-only staging bitmap is also zeroed once here. Ordinary games
     ; never touch it, so they no longer need a 256-byte clear on every NMI.
     ld hl, nes_nametable_stage_seen
-    ld bc, $0100
+    ld bc, $0800
     call nes_video_fill_zero
+    ld a, $01
+    ld [nes_stage_gen], a
 
     ld a, $01
     ldh [rSVBK], a

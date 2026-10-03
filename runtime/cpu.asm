@@ -1198,21 +1198,7 @@ ENDC
 
     xor a
     ld [nes_nametable_stage_used], a
-    push hl
-    ld a, $06
-    ldh [rSVBK], a
-    xor a
-    ld hl, nes_nametable_stage_seen
-    ld b, $100 / 16
-.clear_nametable_stage_seen:
-REPT 16
-    ld [hli], a
-ENDR
-    dec b
-    jr nz, .clear_nametable_stage_seen
-    ld a, $01
-    ldh [rSVBK], a
-    pop hl
+    call nes_stage_new_generation
 
 .stage_seen_clear_done:
     xor a
@@ -1253,6 +1239,33 @@ ENDR
 
 .no_nmi:
     xor a
+    ret
+
+; Start a new nametable staging transaction for the dedupe map: bump the
+; generation; on wrap clear the whole map. Clobbers AF/BC (HL preserved).
+; Leaves WRAM bank 1 selected.
+nes_stage_new_generation:
+    ld a, [nes_stage_gen]
+    inc a
+    ld [nes_stage_gen], a
+    ret nz
+    inc a
+    ld [nes_stage_gen], a
+    push hl
+    ld a, $06
+    ldh [rSVBK], a
+    xor a
+    ld hl, nes_nametable_stage_seen
+    ld b, $800 / 16
+.clear:
+REPT 16
+    ld [hli], a
+ENDR
+    dec b
+    jr nz, .clear
+    ld a, $01
+    ldh [rSVBK], a
+    pop hl
     ret
 
 nes_unimplemented_operand_read:
@@ -1430,9 +1443,9 @@ nes_pace_take_snapshot:
 
 ; After a paced publication flushed the snapshot's queue prefix
 ; [$D800, nes_pace_q_end), drop that prefix from the live queue (the running
-; NMI appended after it) and clear its dedupe-bitmap bytes so later writes to
-; those addresses are queued again. Clearing a whole bitmap byte can only
-; cause harmless duplicate entries. Runs in the ISR; WRAM bank 1 is current.
+; NMI appended after it) and start a new dedupe generation so later writes to
+; those addresses are queued again (can only cause harmless duplicate
+; entries). Runs in the ISR; WRAM bank 1 is current.
 nes_pace_retire_flushed_queue:
     ld a, [nes_pace_q_end_lo]
     ld e, a
@@ -1445,40 +1458,11 @@ nes_pace_retire_flushed_queue:
     and a
     ret z
 .clear_bits:
-    ; Walk prefix entries, clearing the stage-seen byte for each.
-    ld hl, nes_nametable_queue
-.bit_loop:
-    ld a, l
-    cp e
-    jr nz, .bit_entry
-    ld a, h
-    cp d
-    jr z, .bits_done
-.bit_entry:
-    ld a, [hli]
-    ld c, a
-    ld a, [hli]
-    ld b, a
-    ; index = ((B & 7) << 5) | (C >> 3)
-    ld a, c
-    srl a
-    srl a
-    srl a
-    ld c, a
-    ld a, b
-    and $07
-    swap a
-    add a
-    or c
-    ld c, a
-    ld b, HIGH(nes_nametable_stage_seen)
-    ld a, $06
-    ldh [rSVBK], a
-    xor a
-    ld [bc], a
-    ld a, $01
-    ldh [rSVBK], a
-    jr .bit_loop
+    ; Forget every staged mark (new generation). Live entries the running NMI
+    ; already queued may get a harmless duplicate entry if written again.
+    push de
+    call nes_stage_new_generation
+    pop de
 .bits_done:
     ; Move live entries [prefix_end, ptr) down to the queue start.
     ld hl, nes_nametable_queue

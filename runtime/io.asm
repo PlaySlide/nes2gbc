@@ -281,8 +281,14 @@ nes_nametable_queue: ds $800
 SECTION "NES published nametable shadow", WRAMX[$D000], BANK[6]
 nes_nametable_published_shadow: ds $800
 
-; One bit per physical nametable byte, cleared when a translated NES NMI starts.
-; If the same PPU address is written repeatedly during that NMI, enqueue it once.
-; The retained queue entry still publishes the final authoritative WRAM byte.
+; One generation byte per physical nametable byte (entry for $Dxxx at
+; $Dxxx + $800): an address is already staged in the current transaction iff
+; its byte equals nes_stage_gen. Starting a new transaction just bumps the
+; generation (a full clear only on wrap). If the same PPU address is written
+; repeatedly during that NMI, enqueue it once; the retained queue entry still
+; publishes the final authoritative WRAM byte.
 SECTION "NES nametable stage seen", WRAMX[$D800], BANK[6]
-nes_nametable_stage_seen: ds $100
+nes_nametable_stage_seen: ds $800
+
+SECTION "NES nametable stage generation", WRAM0
+nes_stage_gen: ds 1 ; never 0 once initialised

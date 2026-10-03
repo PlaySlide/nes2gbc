@@ -533,34 +533,18 @@ nes_ppu_write_data:
     jr nz, .fast_increment
     inc a
     ld [nes_nametable_stage_used], a
-    ld a, l
-    and $07
-    add LOW(nes_stage_bit_masks)
-    ld c, a
-    ld b, HIGH(nes_stage_bit_masks)
-    ld a, [bc]
-    ld b, a
-    ld a, l
-    rrca
-    rrca
-    rrca
-    and $1F
-    ld e, a
     ld a, h
-    and $07
-    swap a
-    add a
-    or e
-    ld e, a
-    ld d, HIGH(nes_nametable_stage_seen)
+    add HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld d, a
+    ld e, l
+    ld a, [nes_stage_gen]
+    ld b, a
     ld a, $06
     ldh [rSVBK], a
     ld a, [de]
-    ld c, a
-    and b
-    jr nz, .fast_duplicate
-    ld a, c
-    or b
+    cp b
+    jr z, .fast_duplicate
+    ld a, b
     ld [de], a
     ld a, $01
     ldh [rSVBK], a
@@ -718,16 +702,12 @@ ENDC
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
 
-SECTION "NES stage bit masks", ROM0, ALIGN[3]
-nes_stage_bit_masks:
-    db $01, $02, $04, $08, $10, $20, $40, $80
-
 SECTION "NES stage first visit", ROM0
 ; Append physical virtual nametable address HL ($D000-$D7FF) to the
 ; current translated-NMI transaction. The tile/attribute value itself is already
 ; stored in authoritative WRAM, so duplicate addresses are harmless; the queue
 ; reads the final byte after RTI, so repeats within one NMI are suppressed via
-; the WRAMX bank-6 staging bitmap (one bit per physical address).
+; the WRAMX bank-6 generation map (one byte per physical address).
 ; HL is preserved; BC/DE are clobbered; WRAM bank 1 is restored.
 nes_ppu_stage_nametable_hl:
     ld a, [nes_nametable_queue_overflow]
@@ -737,37 +717,20 @@ nes_ppu_stage_nametable_hl:
     ld a, $01
     ld [nes_nametable_stage_used], a
 
-    ; B = bit mask for the low three address bits.
-    ld a, l
-    and $07
-    add LOW(nes_stage_bit_masks)
-    ld c, a
-    ld b, HIGH(nes_stage_bit_masks)
-    ld a, [bc]
-    ld b, a
-
-    ; DE = D800 + (((H & 7) << 5) | (L >> 3)) selects the bitmap byte.
-    ld a, l
-    srl a
-    srl a
-    srl a
-    ld e, a
+    ; DE = generation byte for HL ($Dxxx + $800).
     ld a, h
-    and $07
-    swap a
-    add a
-    or e
-    ld e, a
-    ld d, HIGH(nes_nametable_stage_seen)
+    add HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld d, a
+    ld e, l
+    ld a, [nes_stage_gen]
+    ld b, a
 
     ld a, $06
     ldh [rSVBK], a
     ld a, [de]
-    ld c, a
-    and b
-    jr nz, .stage_duplicate
-    ld a, c
-    or b
+    cp b
+    jr z, .stage_duplicate
+    ld a, b
     ld [de], a
     ld a, $01
     ldh [rSVBK], a
