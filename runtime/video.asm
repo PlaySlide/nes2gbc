@@ -1,6 +1,38 @@
 ; GBC video bridge for the virtual NES PPU.
 ; Correctness-first: expensive operations may wait for VBlank or briefly disable LCD.
 
+; One stitched-column row: tile [HL] -> VBK0 [DE], palette C -> VBK1 [DE]
+; (one VRAM wait covers both writes), then advance HL/DE by one tile row.
+MACRO STITCH_COLUMN_ROW
+    ld a, [hl]
+    ld b, a
+    call nes_video_wait_vram
+    xor a
+    ldh [rVBK], a
+    ld a, b
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, l
+    add $20
+    ld l, a
+    jr nc, :+
+    inc h
+:
+    ld a, e
+    add $20
+    ld e, a
+    jr nc, :+
+    inc d
+:
+ENDM
+
+SECTION "NES stitch column temps", WRAM0
+nes_hs_attr_lo: ds 1
+nes_hs_pal_bot: ds 1
+
 SECTION "NES video bridge", ROM0
 
 nes_video_init:
@@ -1893,49 +1925,60 @@ nes_video_refresh_stitch_column:
     ld l, a
     ld d, $9C
     ld e, a
-    ld b, $1E                    ; 30 NES tile rows
+    ; The column's palettes come from one attribute byte per 4 tile rows
+    ; ($D3C0/$D7C0 + row/4*8 + column/4): read it once, pre-shift the
+    ; column's horizontal pair, then rows 0-1 take bits 0-1 and rows 2-3
+    ; bits 4-5 (same values nes_video_authoritative_tile_palette returns).
+    srl a
+    srl a
+    add $C0
+    ld [nes_hs_attr_lo], a
 
-.tile_loop:
-    ld a, [hl]
-    ld c, a
-    call nes_video_wait_vram
-    xor a
-    ldh [rVBK], a
-    ld a, c
-    ld [de], a
-
-    push bc
-    push de
+.attr_loop:
     push hl
-    call nes_video_authoritative_tile_palette
+    ld a, h
+    and $04
+    add $D3
+    ld h, a
+    ld a, [nes_hs_attr_lo]
+    ld l, a
+    ld a, [hl]
+    pop hl
+    ld c, a
+    ld a, [nes_hstitch_copy_start]
+    and $02
+    ld a, c
+    jr z, .attr_left
+    srl a
+    srl a
+.attr_left:
+    ld c, a
+    swap a
+    and $03
+    ld b, a
+    ld a, [nes_hstitch_copy_skip]
+    or b
+    ld [nes_hs_pal_bot], a
+    ld a, c
+    and $03
     ld c, a
     ld a, [nes_hstitch_copy_skip]
     or c
     ld c, a
-    pop hl
-    pop de
-
-    ; Same accessibility window as the tile-id write above.
-    ld a, $01
-    ldh [rVBK], a
-    ld a, c
-    ld [de], a
-    pop bc
-
-    ld a, l
-    add $20
-    ld l, a
-    jr nc, .tile_h_ok
-    inc h
-.tile_h_ok:
-    ld a, e
-    add $20
-    ld e, a
-    jr nc, .tile_d_ok
-    inc d
-.tile_d_ok:
-    dec b
-    jr nz, .tile_loop
+    STITCH_COLUMN_ROW
+    STITCH_COLUMN_ROW
+    ld a, [nes_hs_attr_lo]
+    cp $F8                       ; attribute row 7 covers only rows 28-29
+    jr nc, .attr_done
+    ld a, [nes_hs_pal_bot]
+    ld c, a
+    STITCH_COLUMN_ROW
+    STITCH_COLUMN_ROW
+    ld a, [nes_hs_attr_lo]
+    add $08
+    ld [nes_hs_attr_lo], a
+    jp .attr_loop
+.attr_done:
 
     xor a
     ld [nes_vram_unlocked], a
