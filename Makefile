@@ -118,6 +118,7 @@ generate:
 			python3 tools/cheap_carry_materialize.py runtime/generated.asm; \
 			python3 tools/sbc_carry_capture.py runtime/generated.asm; \
 			python3 tools/dead_a_reload.py runtime/generated.asm; \
+			python3 tools/dead_af_compute.py runtime/generated.asm; \
 		fi; \
 	fi
 
