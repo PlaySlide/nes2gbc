@@ -1412,6 +1412,18 @@ nes_video_sync_palette_shadow:
     ld [nes_diag_event_flags], a
 
     ld hl, nes_gbc_palette_shadow
+IF !DEF(NES2GBC_NO_PACING)
+    ; A paced publication commits the snapshot's palette from its own copy;
+    ; the live shadow keeps the running NMI's palette (no swap needed).
+    ld a, [nes_pace_isr_active]
+    and a
+    jr z, .source_ready
+    ld a, [nes_pace_snap_palette]
+    and a
+    jr z, .source_ready
+    ld hl, nes_pace_palette
+.source_ready:
+ENDC
 
     ld a, $80
     ldh [rBGPI], a

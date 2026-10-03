@@ -1510,21 +1510,8 @@ ASSERT LOW(nes_gbc_oam_shadow) == 0 && LOW(nes_pace_oam) == 0
 nes_pace_swap:
     ld de, nes_pace_snap
     PACE_FOR_VARS PACE_SWAP_DE
-    ld a, [nes_pace_snap_palette]
-    and a
-    ret z
-    ld hl, nes_gbc_palette_shadow
-    ld de, nes_pace_palette
-    ld b, $40
-.swap_palette:
-    ld c, [hl]
-    ld a, [de]
-    ld [hli], a
-    ld a, c
-    ld [de], a
-    inc e
-    dec b
-    jr nz, .swap_palette
+    ; The palette is not swapped: nes_video_sync_palette_shadow reads the
+    ; snapshot copy (nes_pace_palette) directly during a paced publication.
     ret
 
 ; Swap-back after a COMMITTED paced publication: the snapshot is retired
@@ -1533,18 +1520,6 @@ nes_pace_swap:
 nes_pace_restore_live:
     ld de, nes_pace_snap
     PACE_FOR_VARS PACE_LOAD_DE
-    ld a, [nes_pace_snap_palette]
-    and a
-    ret z
-    ld hl, nes_pace_palette
-    ld c, LOW(nes_gbc_palette_shadow)
-    ld b, $40
-.load_palette:
-    ld a, [hli]
-    ldh [c], a
-    inc c
-    dec b
-    jr nz, .load_palette
     ret
 ENDC
 
