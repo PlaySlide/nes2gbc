@@ -527,13 +527,16 @@ IF !DEF(NES2GBC_NO_PACING)
     ld a, $02
     ld [rIE], a
     ei
-    call nes_pace_swap
     ld a, [nes_pace_committed]
     and a
-    jr z, .pace_tail_done
+    jr z, .pace_swap_back
+    call nes_pace_restore_live
     xor a
     ld [nes_pace_snap_valid], a
     call nes_pace_retire_flushed_queue
+    jr .pace_tail_done
+.pace_swap_back:
+    call nes_pace_swap
 .pace_tail_done:
     di
     ld a, $03

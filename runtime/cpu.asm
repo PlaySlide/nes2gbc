@@ -1229,6 +1229,17 @@ ENDC
     inc e
 ENDM
 
+; Snapshot -> live only (DE walk); the post-publication snapshot is dead.
+MACRO PACE_LOAD_DE ; var, snapshot index, kind
+    ld a, [de]
+IF STRCMP("\3", "H") == 0
+    ldh [\1], a
+ELSE
+    ld [\1], a
+ENDC
+    inc e
+ENDM
+
 DEF PACE_IDX_OAM_DIRTY EQU 4
 DEF PACE_IDX_MASK_DIRTY EQU 8
 DEF PACE_IDX_PALETTE_DIRTY EQU 18
@@ -1450,5 +1461,25 @@ nes_pace_swap:
     inc e
     dec b
     jr nz, .swap_palette
+    ret
+
+; Swap-back after a COMMITTED paced publication: the snapshot is retired
+; (snap_valid cleared right after), so only the running NMI's live state needs
+; restoring; copy it back instead of exchanging. Clobbers AF/BC/DE/HL.
+nes_pace_restore_live:
+    ld de, nes_pace_snap
+    PACE_FOR_VARS PACE_LOAD_DE
+    ld a, [nes_pace_snap_palette]
+    and a
+    ret z
+    ld hl, nes_pace_palette
+    ld c, LOW(nes_gbc_palette_shadow)
+    ld b, $40
+.load_palette:
+    ld a, [hli]
+    ldh [c], a
+    inc c
+    dec b
+    jr nz, .load_palette
     ret
 ENDC
