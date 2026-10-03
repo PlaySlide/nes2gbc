@@ -18,6 +18,8 @@ BANK_PROFILE ?= profiles/$(basename $(notdir $(ROM))).bankprof
 # Block-entry profile (tools/bench/rts_profile.py) ordering guarded RTS returns;
 # RTS_PROFILE= (empty) or a missing file keeps static JSR-site ordering.
 RTS_PROFILE ?= profiles/$(basename $(notdir $(ROM))).rtsprof
+# Per-RTS-site return edges (tools/bench/rts_edge_profile.py) order the compare chains.
+RTS_EDGE_PROFILE ?= profiles/$(basename $(notdir $(ROM))).rtsedge
 # 1 = keep every emitter bank unmerged (layout used to record a bank profile).
 REPACK_IDENTITY ?= 0
 # APU=1 only: audio host-speed compensation for testing under 2x/4x fast-forward.
@@ -129,6 +131,7 @@ generate:
 			python3 tools/push_af_temp.py runtime/generated.asm; \
 			python3 tools/dead_reg_writes.py runtime/generated.asm; \
 			python3 tools/sec_sbc_to_sub.py runtime/generated.asm; \
+			python3 tools/rts_chain_reorder.py runtime/generated.asm --edge-profile "$(RTS_EDGE_PROFILE)"; \
 			python3 tools/rts_compare_first.py runtime/generated.asm --rts-profile "$(RTS_PROFILE)"; \
 		fi; \
 	fi
