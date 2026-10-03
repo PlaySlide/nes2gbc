@@ -128,6 +128,7 @@ generate:
 			python3 tools/reg_copy_prop.py runtime/generated.asm; \
 			python3 tools/push_af_temp.py runtime/generated.asm; \
 			python3 tools/dead_reg_writes.py runtime/generated.asm; \
+			python3 tools/sec_sbc_to_sub.py runtime/generated.asm; \
 			python3 tools/rts_compare_first.py runtime/generated.asm --rts-profile "$(RTS_PROFILE)"; \
 		fi; \
 	fi
