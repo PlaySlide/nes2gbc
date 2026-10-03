@@ -107,6 +107,7 @@ generate:
 			python3 tools/native_draw_sprite_object.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_multibyte_compare_copy.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_small_loops.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_enemy_parser.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_bounding_box.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)" --identity "$(REPACK_IDENTITY)" --bank-profile "$(BANK_PROFILE)"; \
 			python3 tools/dead_hram_state_global.py runtime/generated.asm; \
