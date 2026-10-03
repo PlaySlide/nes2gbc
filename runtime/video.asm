@@ -378,17 +378,93 @@ nes_video_rebuild_generic_maps_atomic:
 .rebuild_lcd_off:
     ld a, $01
     ldh [rSVBK], a
+    ; Same per-byte effects, in the same order, as calling
+    ; nes_video_sync_nametable_write for $D000..$D7FF with the LCD off and no
+    ; split/stitch (the only state this checkpoint runs in): tile bytes store
+    ; the tile, keep the CGB palette bits and set PPUCTRL.4's bank bit, and
+    ; rows 0-1 feed the vertical-seam padding rows; attribute bytes take the
+    ; normal physical expansion. Every skipped nes_video_wait_vram would only
+    ; have cleared nes_vram_unlocked (LY reads 0 while the LCD is off).
+    xor a
+    ld [nes_vram_unlocked], a
     ld hl, $D000
 
-.rebuild_loop:
+.rebuild_page:
+    ld a, [nes_ppuctrl]
+    and $10
+    srl a
+    ld b, a
+.rebuild_tile:
+    ld a, h
+    sub $D0 - $98
+    ld d, a
+    ld e, l
+    xor a
+    ldh [rVBK], a
+    ld a, [hli]
+    ld [de], a
+    ld c, a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [de]
+    and $07
+    or b
+    ld [de], a
+    ld a, e
+    cp $40
+    jr nc, .rebuild_tile_next
+    ld a, d
+    and $03
+    jr nz, .rebuild_tile_next
+    ; Source rows 0-1: padding rows 30-31 of the vertically adjacent map.
+    ld a, [de]
+    push af
+    ld a, e
+    add $C0
+    ld e, a
+    ld a, [nes_mirroring]
+    cp $01
+    ld a, d
+    jr z, .rebuild_seam_same
+    xor $04
+.rebuild_seam_same:
+    add $03
+    ld d, a
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    pop af
+    ld [de], a
+.rebuild_tile_next:
+    ld a, l
+    cp $C0
+    jr nz, .rebuild_tile
+    ld a, h
+    and $03
+    cp $03
+    jr nz, .rebuild_tile
+    xor a
+    ldh [rVBK], a
+
+.rebuild_attr:
     ld a, [hl]
+    ld b, a
     push hl
-    call nes_video_sync_nametable_write
+    call nes_video_sync_attribute_write_physical
     pop hl
     inc hl
+    ld a, l
+    and a
+    jr nz, .rebuild_attr
+    ld a, h
+    and $03
+    jr nz, .rebuild_attr
     ld a, h
     cp $D8
-    jr nz, .rebuild_loop
+    jr nz, .rebuild_page
 
     ; The rebuilt attributes used the current global PPUCTRL.4, so make that
     ; state the committed baseline and avoid an immediate redundant full-bank
