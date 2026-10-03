@@ -115,12 +115,8 @@ push hl
 ldh a, [nes_y]
 ld c, a
 ld [$C004], a
-ld hl, {t1}
-add l
+ld h, HIGH({t1})
 ld l, a
-adc h
-sub l
-ld h, a
 ld e, [hl]
 ld a, b
 add ${m['zA']:02X}
@@ -167,13 +163,8 @@ add d
 ld [$C006], a
 ld l, a
 push hl
-ld hl, {t2}
-ld a, c
-add l
-ld l, a
-adc h
-sub l
-ld h, a
+ld h, HIGH({t2})
+ld l, c
 ld e, [hl]
 ld a, b
 add ${m['zC']:02X}
@@ -186,9 +177,8 @@ ld e, a
 sub $20
 ld [$C002], a
 ld d, a
-ccf
-ld a, $00
-rla
+sbc a
+inc a ; 6502 C = !borrow as 1/0
 ldh [nes_c_shadow], a
 {vblock}pop hl
 ld a, l
@@ -219,7 +209,6 @@ ldh [nes_a], a
 ld a, BANK(nes_{m['k']:04X})
 ld hl, nes_{m['k']:04X}
 jp nes_jump_known_hl_a_8bit ; 8-bit translated-code bank switch
-{t1}:
 """.splitlines()
     out = []
     for x in body:
@@ -229,10 +218,10 @@ jp nes_jump_known_hl_a_8bit ; 8-bit translated-code bank switch
             out.append(ind + x + "\n")
     def db(bs):
         return [ind + "db " + ", ".join(f"${v:02X}" for v in bs[i:i + 16]) + "\n" for i in range(0, 256, 16)]
-    out += db(m["T1"])
-    out.append(f"{t2}:\n")
-    out += db(m["T2"])
-    return out
+    # 256-byte-aligned ROM0 copies: the index is the low byte (any code bank).
+    tables = [f"\nSECTION \"Native bbc tables {pc:04X}\", ROM0, ALIGN[8]\n", f"{t1}:\n"] + db(m["T1"])
+    tables += [f"{t2}:\n"] + db(m["T2"])
+    return out, tables
 
 
 def main(asm, rom_path):
@@ -245,6 +234,7 @@ def main(asm, rom_path):
     keep_v = v_observable(text)
     lines = text.splitlines(keepends=True)
     done = 0
+    extra = []
     i = 0
     while i < len(lines):
         mm = LABEL_RE.match(code(lines[i]))
@@ -271,9 +261,12 @@ def main(asm, rom_path):
         if max(pcs) != pc + 24:
             i += 1
             continue
-        lines[first:e] = emit(pc, m, keep_v)
+        body, tables = emit(pc, m, keep_v)
+        lines[first:e] = body
+        extra.extend(tables)
         done += 1
         i = first + 1
+    lines.extend(extra)
     p.write_text("".join(lines))
     print(f"native-blockbuf-collision: {done} routine(s) replaced")
 
