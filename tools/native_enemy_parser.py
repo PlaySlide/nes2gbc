@@ -41,14 +41,17 @@ def emit(pc):
     exit_pc = EXIT_PC
     c1ab, c1cb = pc + 0x67, pc + 0x87
 
-    def rd(dst):
-        return ["ld a, h", "and $30", "swap a", "add $02", "ldh [rSVBK], a",
-                "ld a, h", "and $0F", "or $D0", "ld h, a", "ld a, [hl]", f"ld {dst}, a"]
     L = [f"; native SMB enemy-data parser ${pc:04X} (tools/native_enemy_parser.py)",
          "ld a, [$C739]", "ld c, a", "inc a", f"jp z, .{k}_slow",  # INY must not wrap
          "ld a, [$C0E9]", "add c", "ld l, a", "ld a, [$C0EA]", "adc $00", "ld h, a",
          "sub $80", "cp $3F", f"jp nc, .{k}_slow",  # q in $8000-$BEFF
-         "push hl", "inc hl"] + rd("d") + ["pop hl"] + rd("e") + [  # d=[q+1], e=[q] (SVBK left for q)
+         # one SVBK window for both bytes: e=[q], d=[q+1]; a 4K-window crossing
+         # (q+1 = $x000) takes the translated path
+         "ld a, h", "and $30", "swap a", "add $02", "ldh [rSVBK], a",
+         "ld a, h", "and $0F", "or $D0", "ld h, a", "ld a, [hl]", "ld e, a",
+         "inc l", f"jr nz, .{k}_rd1",
+         "inc h", "ld a, h", "cp $E0", f"jp z, .{k}_slow",
+         f".{k}_rd1:", "ld a, [hl]", "ld d, a"] + [
          "ld a, e", "cp $FF", f"jp z, .{k}_slow",
          "and $0F", "cp $0E", f"jr z, .{k}_hot",
          "ldh a, [nes_x]", "cp $05", f"jr c, .{k}_hot",
