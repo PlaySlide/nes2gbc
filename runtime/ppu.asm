@@ -496,6 +496,104 @@ nes_ppu_read_data:
 
 ; Write $2007.
 nes_ppu_write_data:
+    ; Fast path: SMB-style stitched nametable write inside a translated NMI
+    ; (vertical mirroring, split or stitch live). Same effects as the generic
+    ; path below for that state: the hidden-change bookkeeping is skipped by
+    ; the split/stitch test there too, the byte is stored to authoritative
+    ; WRAM, staged once per NMI, and the address increments.
+    ld a, [nes_nmi_active]
+    and a
+    jp z, .generic
+    ld a, [nes_mirroring]
+    dec a
+    jp nz, .generic
+    ldh a, [nes_split_active]
+    ld b, a
+    ld a, [nes_hstitch_valid]
+    or b
+    jr z, .generic
+    ld a, [nes_ppu_addr_hi]
+    cp $20
+    jr c, .generic
+    cp $3F
+    jr nc, .generic
+    ; Vertical mirroring: physical = $D0 | (A10, A9, A8); $3xxx mirrors too.
+    and $07
+    or $D0
+    ld h, a
+    ld a, [nes_ppu_addr_lo]
+    ld l, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld [hl], e
+
+    ; nes_ppu_stage_nametable_hl, inline.
+    ld a, [nes_nametable_queue_overflow]
+    and a
+    jr nz, .fast_increment
+    inc a
+    ld [nes_nametable_stage_used], a
+    ld a, l
+    and $07
+    add LOW(nes_stage_bit_masks)
+    ld c, a
+    ld b, HIGH(nes_stage_bit_masks)
+    ld a, [bc]
+    ld b, a
+    ld a, l
+    rrca
+    rrca
+    rrca
+    and $1F
+    ld e, a
+    ld a, h
+    and $07
+    swap a
+    add a
+    or e
+    ld e, a
+    ld d, HIGH(nes_nametable_stage_seen)
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [de]
+    ld c, a
+    and b
+    jr nz, .fast_duplicate
+    ld a, c
+    or b
+    ld [de], a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $E0
+    jr nc, .fast_overflow
+    ld d, a
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld e, a
+    ld a, l
+    ld [de], a
+    inc e
+    ld a, h
+    ld [de], a
+    inc de
+    ld a, e
+    ld [nes_nametable_queue_ptr_lo], a
+    ld a, d
+    ld [nes_nametable_queue_ptr_hi], a
+    jp nes_ppu_increment_addr
+
+.fast_duplicate:
+    ld a, $01
+    ldh [rSVBK], a
+.fast_increment:
+    jp nes_ppu_increment_addr
+
+.fast_overflow:
+    ld a, $01
+    ld [nes_nametable_queue_overflow], a
+    jp nes_ppu_increment_addr
+
+.generic:
     call nes_ppu_get_addr_hl
     ld a, h
     cp $20
