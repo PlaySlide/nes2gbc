@@ -46,7 +46,7 @@ def prg_reader(rom):
     return lambda pc, k: bytes(prg[(pc - 0x8000 + i) % n] for i in range(k))
 
 
-def emit(read, entry=BASE):
+def emit(read, entry=BASE, tail=False):
     """entry=$F1C0: TYA/PHA/JSR F1D7 from nes_F1C0_trace, ends in nes_F1C5.
     entry=$F1D7: canonical nes_F1D7 (all state in HRAM); ends in the translated
     RTS block nes_F26C_trace with SP at F1D7's frame and exact A/X/Y/Z/N/C."""
@@ -182,7 +182,44 @@ def emit(read, entry=BASE):
     A("ld e, [hl]")
     loop("y")
     A("ldh [nes_a], a")
-    if entry == BASE:
+    if entry == BASE and tail:
+        # F1C5-F1D6: ASL x4 / ORA $00 / STA $00 / PLA / TAY / LDA $00 /
+        # STA $03D0,Y / LDX $08, then F1D6's RTS (translated block tail).
+        # PHA's net SP change and PLA cancel; the PLA reads the Y byte pushed
+        # at entry, at [nes_sp].
+        A("; $F1C5-$F1D5 tail run natively; RTS stays in nes_F1C5")
+        A("add a")
+        A("add a")
+        A("add a")
+        A("add a")
+        A("ld e, a")
+        A("sbc a")
+        A("ldh [nes_c_shadow], a")
+        A("ld a, [$C000]")
+        A("or e")
+        A("ld [$C000], a")
+        A("ld d, a")
+        A("ldh a, [nes_sp]")
+        A("ld l, a")
+        A("ld h, $C1")
+        A("ld a, [hl]")
+        A("ldh [nes_y], a")
+        A("add $D0")
+        A("ld l, a")
+        A("ld a, $C3")
+        A("adc $00")
+        A("ld h, a")
+        A("ld [hl], d")
+        A("ld a, [$C008]")
+        A("ldh [nes_x], a")
+        A("ldh [nes_z_shadow], a")
+        A("ldh [nes_n_shadow], a")
+        A("ld a, d")
+        A("ldh [nes_a], a")
+        A("ld a, BANK(nes_F1C5_rts)")
+        A("ld hl, nes_F1C5_rts")
+        A("jp nes_jump_known_hl_a_8bit ; 8-bit translated-code bank switch")
+    elif entry == BASE:
         A("ld a, c")
         A("ldh [nes_y], a")
         A("ldh a, [nes_sp]")
@@ -249,7 +286,34 @@ def main(asm, rom_path):
                 or not re.search(r"ld a, c ; superblock cached Y", body) or "ld a, b ; superblock materialize X" not in body:
             print("native-offscreen-bits: unexpected block shape; skipped")
             return
-        lines[first:e] = emit(read)
+        # Label F1C5's RTS (after its exact materialization) so the F1C0 entry
+        # can run the F1C5-F1D5 tail natively and share the return chain.
+        tail = False
+        for j, l in enumerate(lines):
+            if code(l) == "nes_F1C5:":
+                q = j + 1
+                while q < len(lines) and not code(lines[q]).startswith("SECTION") and not ANY_LABEL.match(code(lines[q])):
+                    if code(lines[q]) == "PROFILE_INC nes_profile_rts_pop":
+                        prev = [code(x) for x in lines[j:q] if code(x)]
+                        if prev[-3:] == ["ldh [nes_x], a", "ld a, c", "ldh [nes_y], a"] and \
+                                [int(PC_COMMENT.match(x).group(1), 16) for x in lines[j:q] if PC_COMMENT.match(x)] == \
+                                [0xF1C5, 0xF1C6, 0xF1C7, 0xF1C8, 0xF1C9, 0xF1CB, 0xF1CD, 0xF1CE, 0xF1CF, 0xF1D1, 0xF1D4, 0xF1D6]:
+                            lines.insert(q, "nes_F1C5_rts:\n")
+                            tail = True
+                        break
+                    q += 1
+                break
+        if not tail:
+            print("native-offscreen-bits: nes_F1C5 RTS not matched; F1C5 tail stays translated")
+        for i2, l in enumerate(lines):
+            if code(l) == f"nes_{BASE:04X}_trace:":
+                i = i2
+                break
+        e = i + 1
+        while e < len(lines) and not code(lines[e]).startswith("SECTION") and not ANY_LABEL.match(code(lines[e])):
+            e += 1
+        first = next((q for q in range(i + 1, e) if PC_COMMENT.match(lines[q])), None)
+        lines[first:e] = emit(read, BASE, tail)
         n = 1
         labels = {code(l) for l in lines}
         for j, l in enumerate(lines):
