@@ -45,11 +45,10 @@ def helper() -> str:
         "    and $07\n",
         "    or $C0\n",
         "    ld h, a\n",
-        "    ld b, $10\n",
-        ".copy16:\n",
+        "    ; fully unrolled 256-byte copy (no loop counter)\n",
     ]
 
-    for _ in range(16):
+    for _ in range(256):
         out.extend([
             "    ld a, [hli]\n",
             "    ld [de], a\n",
@@ -57,8 +56,6 @@ def helper() -> str:
         ])
 
     out.extend([
-        "    dec b\n",
-        "    jr nz, .copy16\n",
         "\n",
         "    ; Canonical OAM is now complete. Keep camera semantics identical:\n",
         "    ; follow first, then project the finished 64-entry NES OAM image.\n",
