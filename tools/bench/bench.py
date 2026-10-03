@@ -10,7 +10,11 @@ Metric definitions
                   (nes_8057) is next reached (includes VBlank/STAT ISR time).
 Input is scheduled per NES NMI index (applied exactly at the $4016 latch), so
 game logic is deterministic across builds; NES RAM ($C000-$C7FF) hashes at fixed
-NMI indices and framebuffer hashes after fixed NMIs verify output is unchanged.
+NMI indices and framebuffer hashes after fixed NMIs verify output is unchanged. The framebuffer for
+check NMI N is the first emulator frame in which NMI N+1 starts; since 2026-10 it is
+also taken when NMIs N+1 and N+2 start in the same emulator frame (previously that
+screenshot was silently dropped, changing `check` without any output change).
+Reference: check=ed2ed09fc6b4 for SMB with both PACING=0 and PACING=1.
 """
 import argparse, hashlib, json, os, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +64,12 @@ def run(rom, sym, nmis, profile=None, shots=None):
     pb = PyBoy(rom, window="null", cgb=True, sound_emulated=False)
     pb.set_emulation_speed(0)
     st = {"nmi": 0, "pressed": set(), "nmi_cyc": [], "idle_cyc": [], "waiting": False,
-          "nmi_tick": [], "ram": {}, "latches": 0}
+          "nmi_tick": [], "ram": {}, "latches": 0, "vmem": {}}
+
+    def screen_mem():
+        # GBC screen memory: VRAM banks 0+1 (tiles, maps, attributes) and OAM.
+        v = b"".join(bytes(pb.memory[k, 0x8000:0x9FFF]) + bytes([pb.memory[k, 0x9FFF]]) for k in (0, 1))
+        return hashlib.sha1(v + bytes(pb.memory[0xFE00:0xFEA0])).hexdigest()[:12]
 
     def on_nmi(_):
         c = pb._cycles()
@@ -68,6 +77,10 @@ def run(rom, sym, nmis, profile=None, shots=None):
         st["nmi_cyc"].append(c)
         st["nmi_tick"].append(st["tick"])
         st["waiting"] = True
+        if (st["nmi"] - 1) in CHECK_NMIS:
+            # state produced by NES frame N, sampled when NMI N+1 starts; independent of
+            # how many NMIs fall in one emulator frame (unlike the LCD screenshot)
+            st["vmem"][st["nmi"] - 1] = screen_mem()
         if st["nmi"] in CHECK_NMIS:
             st["ram"][st["nmi"]] = hashlib.sha1(bytes(pb.memory[0xC000:0xC800])).hexdigest()[:12]
 
@@ -105,12 +118,15 @@ def run(rom, sym, nmis, profile=None, shots=None):
         before = st["nmi"]
         pb.tick(1, True)
         st["tick"] += 1
-        if st["nmi"] != before and (st["nmi"] - 1) in CHECK_NMIS and (st["nmi"] - 1) not in screens:
-            arr = pb.screen.ndarray
-            screens[st["nmi"] - 1] = hashlib.sha1(arr.tobytes()).hexdigest()[:12]
-            if shots:
-                os.makedirs(shots, exist_ok=True)
-                pb.screen.image.save(os.path.join(shots, "nmi%04d.png" % (st["nmi"] - 1)))
+        # screenshot for check NMI N = first emulator frame in which NMI N+1 started
+        # (also when NMIs N+1 and N+2 share that frame, which used to drop the shot)
+        for n in range(before, st["nmi"]):
+            if n in CHECK_NMIS and n not in screens:
+                arr = pb.screen.ndarray
+                screens[n] = hashlib.sha1(arr.tobytes()).hexdigest()[:12]
+                if shots:
+                    os.makedirs(shots, exist_ok=True)
+                    pb.screen.image.save(os.path.join(shots, "nmi%04d.png" % n))
     wall = time.time() - t0
     if prof is not None:
         pb.prof_detach()
@@ -132,6 +148,12 @@ def run(rom, sym, nmis, profile=None, shots=None):
         }
     res["ram_hash"] = st["ram"]
     res["screen_hash"] = screens
+    res["vmem_hash"] = st["vmem"]
+    # smem: NES RAM + GBC VRAM/OAM sampled at NMI N+1 entry. Stricter than the LCD shot and
+    # timing-independent with PACING=0; with PACING=1 OAM/attribute publish timing leaks in,
+    # so it is a diagnostic there, not a gate.
+    res["smem"] = hashlib.sha1(json.dumps([st["ram"], st["vmem"]], sort_keys=True).encode()).hexdigest()[:12]
+    # check (the gate): NES RAM + LCD screenshot hashes at CHECK_NMIS
     res["check"] = hashlib.sha1(json.dumps([st["ram"], screens], sort_keys=True).encode()).hexdigest()[:12]
     pb.stop(save=False)
     return res
@@ -157,6 +179,7 @@ if __name__ == "__main__":
                 d = r[w]
                 print(f"{w:6s} {d['pct_native']:6.2f}% native  {d['host_frames_per_nes_frame']:.3f} hostfr/NESfr  "
                       f"work {d['work_cycles_per_nes_frame']:7d} cyc/NESfr ({d['work_pct_of_host_frame']}% of host frame, max {d['max_work_cycles']})")
-        print(f"check={r['check']}  nmis={r['nmis']} ticks={r['ticks']} wall={r['wall_s']}s")
+        print(f"check={r['check']}  smem={r['smem']}  nmis={r['nmis']} ticks={r['ticks']} wall={r['wall_s']}s")
         print("ram  ", r["ram_hash"])
         print("screen", r["screen_hash"])
+        print("vmem ", r["vmem_hash"])
