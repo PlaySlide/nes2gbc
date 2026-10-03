@@ -244,6 +244,13 @@ nes_oam_pace_page:      ds 1
 nes_oam_live_stale:     ds 1
 ENDC
 
+; Per projected-OAM page ($CB00 / $CE00, indexed by page bit 0): number of
+; leading CGB entries that may hold a nonzero Y. Entries at or above it are
+; already hidden (Y=0), so a projector only clears [new count, high-water).
+SECTION "NES OAM page high-water", WRAM0, ALIGN[1]
+nes_oam_page_hw: ds 2
+ASSERT (HIGH(nes_gbc_oam_shadow) & 1) != (HIGH(nes_pace_oam) & 1)
+
 ; Snapshot of the completed frame's projected OAM and palette shadow.
 SECTION "NES pacing OAM snapshot", WRAM0[$CE00]
 nes_pace_oam:           ds $A0

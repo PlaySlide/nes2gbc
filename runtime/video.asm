@@ -1624,6 +1624,14 @@ ENDC
     jr nz, .clear_loop
 
 .ready:
+    ; Every entry from the emit count up is hidden now (D = page).
+    ld a, d
+    and $01
+    add LOW(nes_oam_page_hw)
+    ld l, a
+    ld h, HIGH(nes_oam_page_hw)
+    ldh a, [nes_oam_emit_count]
+    ld [hl], a
     ld a, $01
     ldh [nes_oam_shadow_ready], a
     ret

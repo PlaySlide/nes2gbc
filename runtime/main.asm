@@ -1028,6 +1028,10 @@ Start:
     ld [nes_pace_idle_hi], a
     ld [nes_pace_cand_lo], a
     ld [nes_pace_cand_hi], a
+    ; Unknown page contents: the first projection clears all 40 entries.
+    ld a, 40
+    ld [nes_oam_page_hw], a
+    ld [nes_oam_page_hw + 1], a
     ld a, HIGH(nes_gbc_oam_shadow)
     ld [nes_oam_dma_page], a
 IF !DEF(NES2GBC_NO_PACING)
