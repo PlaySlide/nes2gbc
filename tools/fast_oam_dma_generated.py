@@ -133,15 +133,12 @@ def helper() -> str:
             '    ld [de], a\n',
             '    inc e\n',
         ) + ((
-            '    ; Forty emitted CGB sprites is the hardware limit.\n',
+            # Forty emitted CGB sprites is the hardware limit; entry i can
+            # only be the 40th emission when i >= 39.
             '    ld a, e\n',
             '    cp $A0\n',
             '    jp z, .full_ready\n',
-        ) if i < 63 else (
-            '    ld a, e\n',
-            '    cp $A0\n',
-            '    jp z, .full_ready\n',
-        )) + (f'.n8_{i}:\n',)
+        ) if i >= 39 else ()) + (f'.n8_{i}:\n',)
     ] + [
         '    jp .clear_unused\n',
         '\n',
