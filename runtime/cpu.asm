@@ -1335,10 +1335,16 @@ ENDM
 
 DEF PACE_IDX_OAM_DIRTY EQU 4
 DEF PACE_IDX_MASK_DIRTY EQU 8
-DEF PACE_IDX_PALETTE_DIRTY EQU 18
-DEF PACE_IDX_SCROLL_DIRTY EQU 19
-DEF PACE_IDX_CTRL_DIRTY EQU 20
+DEF PACE_IDX_PALETTE_DIRTY EQU 16
+DEF PACE_IDX_SCROLL_DIRTY EQU 17
+DEF PACE_IDX_CTRL_DIRTY EQU 18
 
+; Only state the VBlank commit reads or writes is snapshotted/swapped.
+; NMI-side bookkeeping that no ISR path touches (nes_nametable_stage_used,
+; nes_generic_hidden_change_count, nes_scroll_pair_count and
+; nes_split_pending_x/y/ctrl, used only by the $2005/$2006/$2007/PPUCTRL
+; handlers and NMI start) stays live: exchanging it twice per paced
+; publication was a no-op.
 MACRO PACE_FOR_VARS ; op macro
     \1 nes_ppuctrl, 0, W
     \1 nes_ppumask, 1, W
@@ -1349,34 +1355,28 @@ MACRO PACE_FOR_VARS ; op macro
     \1 nes_nametable_queue_ptr_hi, 6, W
     \1 nes_nametable_queue_overflow, 7, W
     \1 nes_mask_dirty, 8, W
-    \1 nes_nametable_stage_used, 9, W
-    \1 nes_split_duplicate_streak, 10, W
-    \1 nes_split_retire_grace_used, 11, W
-    \1 nes_generic_map_rebuild_dirty, 12, W
-    \1 nes_generic_hidden_change_count, 13, W
-    \1 nes_view_x, 14, H
-    \1 nes_view_y, 15, H
-    \1 nes_oam_emit_count, 16, H
-    \1 nes_oam_shadow_ready, 17, H
-    \1 nes_palette_dirty, 18, H
-    \1 nes_scroll_dirty, 19, H
-    \1 nes_ctrl_dirty, 20, H
-    \1 nes_scroll_pair_count, 21, H
-    \1 nes_split_active, 22, H
-    \1 nes_split_top_x, 23, H
-    \1 nes_split_top_y, 24, H
-    \1 nes_split_bottom_x, 25, H
-    \1 nes_split_bottom_y, 26, H
-    \1 nes_split_line, 27, H
-    \1 nes_split_top_ctrl, 28, H
-    \1 nes_split_bottom_ctrl, 29, H
-    \1 nes_split_pending_x, 30, H
-    \1 nes_split_pending_y, 31, H
-    \1 nes_split_pending_ctrl, 32, H
+    \1 nes_split_duplicate_streak, 9, W
+    \1 nes_split_retire_grace_used, 10, W
+    \1 nes_generic_map_rebuild_dirty, 11, W
+    \1 nes_view_x, 12, H
+    \1 nes_view_y, 13, H
+    \1 nes_oam_emit_count, 14, H
+    \1 nes_oam_shadow_ready, 15, H
+    \1 nes_palette_dirty, 16, H
+    \1 nes_scroll_dirty, 17, H
+    \1 nes_ctrl_dirty, 18, H
+    \1 nes_split_active, 19, H
+    \1 nes_split_top_x, 20, H
+    \1 nes_split_top_y, 21, H
+    \1 nes_split_bottom_x, 22, H
+    \1 nes_split_bottom_y, 23, H
+    \1 nes_split_line, 24, H
+    \1 nes_split_top_ctrl, 25, H
+    \1 nes_split_bottom_ctrl, 26, H
 ENDM
 
-ASSERT 33 <= $30 ; PACE_FOR_VARS entries fit nes_pace_snap
-ASSERT HIGH(nes_pace_snap) == HIGH(nes_pace_snap + 32) ; DE walk uses inc e
+ASSERT 27 <= $30 ; PACE_FOR_VARS entries fit nes_pace_snap
+ASSERT HIGH(nes_pace_snap) == HIGH(nes_pace_snap + 26) ; DE walk uses inc e
 
 ; Copy the just-completed frame's publishable state into the pacing snapshot.
 ; Clobbers AF/BC/DE/HL.
