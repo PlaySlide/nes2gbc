@@ -55,7 +55,7 @@ def emit(pc):
          "ld a, e", "cp $FF", f"jp z, .{k}_slow",
          "and $0F", "cp $0E", f"jr z, .{k}_hot",
          "ldh a, [nes_x]", "cp $05", f"jr c, .{k}_hot",
-         "ld a, d", "and $3F", "cp $2E", f"jp nz, .{k}_slow",
+         "ld a, d", "and $3F", "cp $2E", f"jp nz, .{k}_early",
          f".{k}_hot:",
          "ld a, e", "and $0F", "cp $0F", f"jr nz, .{k}_np",
          "ld a, [$C73B]", "and a", f"jr nz, .{k}_np",
@@ -84,6 +84,11 @@ def emit(pc):
          "xor a", "ldh [nes_c_shadow], a", "ld a, [$C739]", "ldh [nes_y], a"] + jump(exit_pc) + [
          f".{k}_b1ab:", "ld a, [$C739]", "ldh [nes_y], a"] + jump(c1ab) + [
          f".{k}_b1cb:", "ld a, [$C739]", "ldh [nes_y], a"] + jump(c1cb) + [
+         # $C15A..$C163: INY / LDA ($E9),Y / AND #$3F / CMP #$2E / BEQ (not taken) / RTS
+         f".{k}_early:", "ldh [nes_a], a", "sub $2E", "ldh [nes_z_shadow], a", "ldh [nes_n_shadow], a",
+         "sbc a", "inc a", "ldh [nes_c_shadow], a", "ld a, c", "inc a", "ldh [nes_y], a",
+         f"ld a, BANK(nes_{pc + 0x1F:04X}_trace)", f"ld hl, nes_{pc + 0x1F:04X}_trace",
+         "jp nes_jump_known_hl_a_8bit ; translated RTS block (all state in HRAM)",
          f".{k}_slow:"]
     return [(x if (x.endswith(":") and not x.startswith(";")) else "    " + x) + "\n" for x in L]
 
@@ -108,7 +113,7 @@ def main(asm, rom_path):
         return
     lines = text.splitlines(keepends=True)
     labels = {m.group(1): i for i, l in enumerate(lines) if (m := LABEL.match(l))}
-    need = [f"nes_{a:04X}" for a in (pc, EXIT_PC, pc + 0x67, pc + 0x87)]
+    need = [f"nes_{a:04X}" for a in (pc, EXIT_PC, pc + 0x67, pc + 0x87)] + [f"nes_{pc + 0x1F:04X}_trace"]
     if any(n not in labels for n in need):
         print("native-enemy-parser: canonical labels missing, skipped")
         return
