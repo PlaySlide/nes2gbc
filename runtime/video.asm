@@ -462,7 +462,7 @@ ENDC
     ldh [rSVBK], a
     ld a, [hl]
     cp c
-    jr z, .s_same
+    jp z, .s_same
     ld [hl], c
     ld a, $01
     ldh [rSVBK], a
@@ -482,14 +482,44 @@ ENDC
     bit 2, h
     jr z, .s_page_ok
     and a
-    jr z, .s_loop                 ; NT1 write into an NT0-owned column
+    jp z, .s_loop                 ; NT1 write into an NT0-owned column
 .s_page_ok:
     push de
-    push bc
-    push hl
-    call nes_video_authoritative_tile_palette
-    pop hl
-    pop bc
+    ; nes_video_authoritative_tile_palette, inline: attribute byte at
+    ; $D3/$D7:C0 + (row/4)*8 + col/4, quadrant from L bits 6 and 1.
+    ld a, h
+    and $03
+    add a
+    bit 7, l
+    jr z, .s_attr_row
+    inc a
+.s_attr_row:
+    add a
+    add a
+    add a
+    ld e, a
+    ld a, l
+    and $1C
+    rrca
+    rrca
+    add e
+    add $C0
+    ld e, a
+    ld a, h
+    and $04
+    add $D3
+    ld d, a
+    ld a, [de]
+    bit 6, l
+    jr z, .s_attr_top
+    swap a
+.s_attr_top:
+    bit 1, l
+    jr z, .s_attr_left
+    rrca
+    rrca
+.s_attr_left:
+    and $03
     ld e, a
     ld a, [nes_flush_bank_bit]
     or e
