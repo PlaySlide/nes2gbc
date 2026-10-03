@@ -30,6 +30,9 @@ MACRO STITCH_COLUMN_ROW
 ENDM
 
 SECTION "NES stitch column temps", WRAM0
+nes_flush_seam_q:    ds 1
+nes_flush_seam_base: ds 1
+nes_flush_bank_bit:  ds 1
 nes_hs_attr_lo: ds 1
 nes_hs_pal_bot: ds 1
 
@@ -240,6 +243,19 @@ ENDC
     ldh [rSVBK], a
     ld de, nes_nametable_queue
 
+    ; SMB stitched presentation (fixed for the whole flush): publish tile
+    ; bytes with the effects of nes_video_sync_nametable_write_if_changed
+    ; specialized for that state, without the per-byte calls and re-tests.
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .loop
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .loop
+    ldh a, [nes_split_active]
+    and a
+    jp nz, .stitched
+
 .loop:
     ; DE == queue end?
     ld a, [nes_nametable_queue_ptr_hi]
@@ -392,6 +408,152 @@ ENDC
     xor a
     ldh [rVBK], a
     ret
+
+.stitched:
+IF DEF(NES2GBC_DEBUG_TRACE)
+    jp .loop ; keep the per-byte diagnostics in TRACE builds
+ENDC
+    ld a, [nes_hstitch_key]
+    and $1F
+    ld [nes_flush_seam_q], a
+    ld a, [nes_hstitch_key]
+    and $20
+    swap a
+    rrca
+    ld [nes_flush_seam_base], a  ; 0/1 page for columns >= q
+    ldh a, [nes_split_bottom_ctrl]
+    and $10
+    srl a
+    ld [nes_flush_bank_bit], a
+
+.s_loop:
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp d
+    jr nz, .s_entry
+    ld a, [nes_nametable_queue_ptr_lo]
+    cp e
+    jp z, .done
+.s_entry:
+    ld a, [de]
+    inc de
+    ld l, a
+    ld a, [de]
+    inc de
+    ld h, a
+    ld a, h
+    and $03
+    cp $03
+    jr c, .s_tile
+    ld a, l
+    cp $C0
+    jr c, .s_tile
+    ; Attribute byte: unchanged generic publication.
+    push de
+    ld a, [hl]
+    call nes_video_sync_nametable_write_if_changed
+    pop de
+    jr .s_loop
+
+.s_tile:
+    PROFILE_INC nes_profile_nametable_sync
+    ld c, [hl]
+    ; Published-value shadow (bank 6): skip unchanged bytes.
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    cp c
+    jr z, .s_same
+    ld [hl], c
+    ld a, $01
+    ldh [rSVBK], a
+    ; Column source (nes_video_hstitch_source_for_column, which also leaves
+    ; the column in nes_hstitch_copy_start).
+    ld a, [nes_flush_seam_q]
+    ld b, a
+    ld a, l
+    and $1F
+    ld [nes_hstitch_copy_start], a
+    cp b                          ; carry iff col < q
+    ld a, [nes_flush_seam_base]
+    jr nc, .s_src_ready
+    xor $01
+.s_src_ready:
+    ld b, a                       ; B = source page for this column
+    bit 2, h
+    jr z, .s_page_ok
+    and a
+    jr z, .s_loop                 ; NT1 write into an NT0-owned column
+.s_page_ok:
+    push de
+    push bc
+    push hl
+    call nes_video_authoritative_tile_palette
+    pop hl
+    pop bc
+    ld e, a
+    ld a, [nes_flush_bank_bit]
+    or e
+    ld e, a                       ; E = CGB attribute
+    ld a, h
+    and $07
+    add $98
+    ld d, a
+    ld a, l
+    ld l, e
+    ld e, a                       ; DE = map cell, L = attribute (H kept)
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, .s_wait1
+    ldh a, [rLY]
+    cp 144
+    jr nc, .s_ready1
+.s_wait1:
+    call nes_video_wait_vram
+.s_ready1:
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, l
+    ld [de], a
+    ; Stitch repair: page-0 cell whose column is NT0-owned mirrors to map 1.
+    bit 2, h
+    jr nz, .s_written
+    ld a, b
+    and a
+    jr nz, .s_written
+    ld a, d
+    add $04
+    ld d, a
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, .s_wait2
+    ldh a, [rLY]
+    cp 144
+    jr nc, .s_ready2
+.s_wait2:
+    call nes_video_wait_vram
+.s_ready2:
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, l
+    ld [de], a
+.s_written:
+    xor a
+    ldh [rVBK], a
+    pop de
+    jp .s_loop
+
+.s_same:
+    ld a, $01
+    ldh [rSVBK], a
+    jp .s_loop
 
 ; Rebuild both physical GBC background maps from authoritative NES
 ; nametable WRAM.  This is a correctness checkpoint used when an ordinary game
