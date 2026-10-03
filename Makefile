@@ -121,6 +121,7 @@ generate:
 			python3 tools/store_reload.py runtime/generated.asm; \
 			python3 tools/dead_af_compute.py runtime/generated.asm; \
 			python3 tools/push_af_temp.py runtime/generated.asm; \
+			python3 tools/dead_reg_writes.py runtime/generated.asm; \
 		fi; \
 	fi
 
