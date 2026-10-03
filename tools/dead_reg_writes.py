@@ -8,16 +8,19 @@ write, no HL post-increment, no stack); it is removed when every register and
 flag it writes is dead. Liveness is a forward straight-line scan: labels are
 transparent, `jp nes_XXXX` to a translated block head (SECTION entry, entered
 by the dispatcher with no live registers) kills everything, a conditional
-`jp cc, <block head>` continues on the fall-through path, the trace-only
+`jp cc, <block head>` continues on the fall-through path, a forward branch
+to an anonymous label needs deadness on both paths, the trace-only
 IF DEF(NES2GBC_PROFILE_TRACE) PC log is skipped (it reads nothing live, keeps
 AF/BC and only kills D/E/H/L), and anything else ends the scan as live.
 Iterates to a fixpoint. Code inside IF/ENDC is never touched.
 """
-import re, sys
+import bisect, re, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gbregs import code, effect, is_label, split  # noqa: E402
+
+ANON_REF = re.compile(r"(?<![\w.]):(\++|-+)(?!\w)")
 
 
 def candidate(c):
@@ -55,8 +58,21 @@ def main(path):
         if c.startswith("ENDC"):
             d -= 1
 
-    def dead_after(i, regs):
-        need = set(regs); k = i + 1
+    anon = [i for i, c in enumerate(codes) if c == ":"]
+    target = {}
+    for i, c in enumerate(codes):
+        if c == ":" or ":" not in c:
+            continue
+        for m in ANON_REF.finditer(c):
+            s_ = m.group(1); k = bisect.bisect_right(anon, i)
+            t = k + len(s_) - 1 if s_[0] == "+" else k - len(s_)
+            if 0 <= t < len(anon):
+                target[i] = anon[t]
+
+    def dead_after(i, regs, budget=4):
+        return dead_from(i + 1, set(regs), budget)
+
+    def dead_from(k, need, budget):
         while k < len(lines) and need:
             c = codes[k]
             if not c or is_label(c) or c.startswith("PROFILE_INC"):
@@ -71,6 +87,16 @@ def main(path):
                     return True
                 if any(f in need for f in ("zf", "cf")):
                     return False  # the condition reads a flag we need dead... conservatively live
+                k += 1; continue
+            mj = re.match(r"^(jr|jp) (?:(n?[zc]), )?:\+{1,2}$", c)
+            if mj and k in target and target[k] > k and budget > 0:
+                flag = {"z": "zf", "nz": "zf", "c": "cf", "nc": "cf"}.get(mj.group(2))
+                if flag and flag in need:
+                    return False
+                if not dead_from(target[k] + 1, set(need), budget - 1):
+                    return False
+                if not mj.group(2):
+                    return True
                 k += 1; continue
             e = effect(c)
             if e is None:

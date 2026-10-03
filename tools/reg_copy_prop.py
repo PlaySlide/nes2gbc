@@ -16,9 +16,11 @@ turns reloads of a tracked memory cell into register moves:
 Tracked cells: 6502-state HRAM shadows (only ever written by direct ldh
 stores; no ISR writes them) and NES internal RAM $C000-$C7FF by literal
 address (any store through a register pointer forgets all of NES RAM).
-Knowledge is dropped at every referenced label, call, directive, and any line
-the gbregs model does not understand; conditional branches keep it on the
-fall-through path. Nothing inside IF/ENDC is rewritten.
+Knowledge is dropped at every named label, call, directive, and any line the
+gbregs model does not understand; conditional branches keep it on the
+fall-through path. An anonymous label whose references are all forward jumps
+seen in the current straight-line region gets the intersection of the states
+at those jumps (and the fall-through, if reachable). Nothing inside IF/ENDC is rewritten.
 """
 import bisect, itertools, re, sys
 from pathlib import Path
@@ -59,6 +61,8 @@ def main(path):
     codes = [code(l) for l in lines]
     anon = [i for i, c in enumerate(codes) if c == ":"]
     refd = set()
+    refs = {}      # anon label line -> referencing lines
+    target = {}    # referencing line -> anon label line
     for i, c in enumerate(codes):
         if c == ":" or ":" not in c:
             continue
@@ -66,14 +70,22 @@ def main(path):
             s = m.group(1); k = bisect.bisect_right(anon, i)
             t = k + len(s) - 1 if s[0] == "+" else k - len(s)
             if 0 <= t < len(anon):
-                refd.add(anon[t])
+                refd.add(anon[t]); refs.setdefault(anon[t], []).append(i); target[i] = anon[t]
             else:
                 print("reg-copy-prop: unresolved anonymous ref, skipped"); return
     fresh = itertools.count()
     reg = {}; mem = {}
+    snaps = {}     # anon label line -> [(reg, mem)] recorded at forward jumps
+    live = [True]  # fall-through into the current line is possible
 
     def reset():
-        reg.clear(); mem.clear()
+        reg.clear(); mem.clear(); snaps.clear()
+
+    def merge(states):
+        r0, m0 = states[0]
+        r = {k: v for k, v in r0.items() if all(st[0].get(k) == v for st in states[1:])}
+        m = {k: v for k, v in m0.items() if all(st[1].get(k) == v for st in states[1:])}
+        return r, m
 
     def new():
         return ("v", next(fresh))
@@ -100,7 +112,17 @@ def main(path):
         if is_label(c):
             if c == ":" and i not in refd:
                 continue
-            reset(); continue
+            if c == ":" and all(r < i for r in refs.get(i, [])) and len(snaps.get(i, [])) == len(refs[i]):
+                states = list(snaps.pop(i)) + ([(dict(reg), dict(mem))] if live[0] else [])
+                r, m = merge(states)
+                keep = dict(snaps)
+                reg.clear(); mem.clear(); reg.update(r); mem.update(m)
+                snaps.clear(); snaps.update(keep)
+                live[0] = True
+                continue
+            reset(); live[0] = True; continue
+        if not live[0]:
+            reset(); live[0] = True
         op, a = split(c)
         ind = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
         if op == "ld" and len(a) == 2 and a[0] in R8 and a[1] in R8:
@@ -152,9 +174,15 @@ def main(path):
             elif inner.startswith(("$C", "$c", "$D", "$d")):
                 forget_ram()
         if op in ("jr", "jp"):
+            t = target.get(i)
+            if t is not None and t > i:
+                snaps.setdefault(t, []).append((dict(reg), dict(mem)))
             if len(a) == 2:
                 continue  # conditional: fall-through keeps all knowledge
-            reset(); continue
+            reg.clear(); mem.clear(); live[0] = False
+            if t is None or t < i:
+                snaps.clear()
+            continue
         e = effect(c)
         if e is None:
             reset(); continue
