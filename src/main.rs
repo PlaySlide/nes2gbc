@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, env, fs, path::PathBuf, process::ExitCode};
 
-use nes2gbc::{assets, cfg, cpu6502, ines, recompile, superblock};
+use nes2gbc::{assets, banked, cfg, cpu6502, ines, recompile, superblock};
 
 fn print_hot_profile(graph: &cfg::ControlFlowGraph) {
     let mut mnemonics: BTreeMap<String, usize> = BTreeMap::new();
@@ -206,11 +206,42 @@ fn main() -> ExitCode {
     println!("RESET vector: ${:04X}", vectors.reset);
     println!("IRQ vector:   ${:04X}", vectors.irq_brk);
 
-    let graph = match cfg::discover_from_vectors(cart.mapper, cart.prg_rom, vectors) {
-        Ok(graph) => graph,
-        Err(err) => {
-            eprintln!("CFG discovery stopped: {err}");
+    let mut mapper2_views: Vec<(u8, cfg::ControlFlowGraph)> = Vec::new();
+    let graph = if cart.mapper == 2 {
+        if cart.prg_rom.len() < 0x8000 || cart.prg_rom.len() % 0x4000 != 0 {
+            eprintln!(
+                "CFG discovery stopped: mapper 2 expects a whole number of 16 KiB PRG banks (at least two)"
+            );
             return ExitCode::FAILURE;
+        }
+        let bank_count = cart.prg_rom.len() / 0x4000;
+        if bank_count > 0x100 {
+            eprintln!("CFG discovery stopped: mapper 2 has too many PRG banks ({bank_count})");
+            return ExitCode::FAILURE;
+        }
+        let fixed = &cart.prg_rom[(bank_count - 1) * 0x4000..bank_count * 0x4000];
+        for bank in 0..bank_count {
+            let mut view = Vec::with_capacity(0x8000);
+            view.extend_from_slice(&cart.prg_rom[bank * 0x4000..(bank + 1) * 0x4000]);
+            view.extend_from_slice(fixed);
+            let g = match cfg::discover_from_vectors(0, &view, vectors) {
+                Ok(graph) => graph,
+                Err(err) => {
+                    eprintln!("CFG discovery stopped in mapper-2 PRG bank {bank}: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            mapper2_views.push((bank as u8, g));
+        }
+        println!("Mapper 2 PRG views analyzed: {bank_count}");
+        mapper2_views[0].1.clone()
+    } else {
+        match cfg::discover_from_vectors(cart.mapper, cart.prg_rom, vectors) {
+            Ok(graph) => graph,
+            Err(err) => {
+                eprintln!("CFG discovery stopped: {err}");
+                return ExitCode::FAILURE;
+            }
         }
     };
 
@@ -241,12 +272,21 @@ fn main() -> ExitCode {
         let chr_path = parent.join(&chr_name);
         let chr_gbc_path = parent.join(&chr_gbc_name);
 
-        let mut asm = superblock::emit_cfg_with_interrupts(
-            &graph,
-            recompile::EmitOptions { reset: vectors.reset, max_blocks, debug_trace },
-            vectors.nmi,
-            vectors.irq_brk,
-        );
+        let emit_options = recompile::EmitOptions {
+            reset: vectors.reset,
+            max_blocks,
+            debug_trace,
+        };
+        let mut asm = if cart.mapper == 2 {
+            banked::emit_mapper2_cfgs(&mapper2_views, emit_options)
+        } else {
+            superblock::emit_cfg_with_interrupts(
+                &graph,
+                emit_options,
+                vectors.nmi,
+                vectors.irq_brk,
+            )
+        };
         asm.push_str("\n");
         asm.push_str(&recompile::emit_runtime_config(&recompile::RuntimeConfig {
             mapper: cart.mapper,
