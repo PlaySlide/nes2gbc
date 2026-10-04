@@ -857,6 +857,7 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     let prg_banks_16k = ((config.prg_len + 0x3FFF) / 0x4000).max(1);
     let prg_bank_mask = prg_banks_16k.next_power_of_two() - 1;
     let prg_fixed_bank = prg_banks_16k - 1;
+    let chr_is_ram = config.chr_len == 0;
     let chr_banks_8k = ((config.chr_len + 0x1FFF) / 0x2000).max(1);
     let chr_mask = chr_banks_8k.next_power_of_two() - 1;
     let chr_bank_base = if matches!(config.mapper, 1 | 2) {
@@ -887,11 +888,16 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "    ld [nes_chr_bank_mask], a").unwrap();
     writeln!(out, "    ld a, ${:02X}", chr_bank_base as u8).unwrap();
     writeln!(out, "    ld [nes_chr_rom_bank_base], a").unwrap();
+    writeln!(out, "    ld a, ${:02X}", if chr_is_ram { 1 } else { 0 }).unwrap();
+    writeln!(out, "    ld [nes_chr_is_ram], a").unwrap();
     writeln!(out, "    ld a, ${:02X}", chr_gbc_bank_base as u8).unwrap();
     writeln!(out, "    ld [nes_chr_gbc_bank_base], a").unwrap();
     writeln!(out, "    xor a").unwrap();
     writeln!(out, "    ld [nes_prg_bank], a").unwrap();
     writeln!(out, "    ld [nes_chr_bank], a").unwrap();
+    if chr_is_ram {
+        writeln!(out, "    call nes_clear_chr_ram").unwrap();
+    }
     if prg_16k_mirror != 0 {
         writeln!(out, "    call nes_cache_prg16_to_wram").unwrap();
     }
