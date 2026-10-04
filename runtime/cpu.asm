@@ -486,6 +486,8 @@ ENDC
     ; $C000-$FFFF is permanently the last 16 KiB PRG bank. Raw NES PRG
     ; banks are embedded one-for-one in GBC ROM banks starting at bank 1.
     ld a, [nes_mapper]
+    cp $01
+    jr z, .prg_mapper1
     cp $02
     jr z, .prg_mapper2
 
@@ -508,15 +510,25 @@ ENDC
     ld a, [hl]
     ret
 
+.prg_mapper1:
+    ld a, h
+    cp $C0
+    jr c, .prg_mapper1_low
+    ld a, [nes_prg_hi_bank]
+    jr .prg_mapper_have_bank
+.prg_mapper1_low:
+    ld a, [nes_prg_bank]
+    jr .prg_mapper_have_bank
+
 .prg_mapper2:
     ld a, h
     cp $C0
     jr c, .prg_mapper2_switchable
     ld a, [nes_prg_fixed_bank]
-    jr .prg_mapper2_have_bank
+    jr .prg_mapper_have_bank
 .prg_mapper2_switchable:
     ld a, [nes_prg_bank]
-.prg_mapper2_have_bank:
+.prg_mapper_have_bank:
     ; Physical PRG bank N is stored in GBC ROM bank N+1.
     inc a
     ld [$2000], a
@@ -922,8 +934,10 @@ ENDC
 .mapper:
     PROFILE_INC nes_profile_write_mapper
     ld a, [nes_mapper]
+    cp $01
+    jp z, .mapper1
     cp $02
-    jr z, .mapper2
+    jp z, .mapper2
     ; CNROM writes anywhere in $8000-$FFFF select the 8 KiB CHR bank.
     cp $03
     ret nz
@@ -947,6 +961,78 @@ ENDC
 .mapper2_valid:
     ld a, b
     ld [nes_prg_bank], a
+    ret
+
+.mapper1:
+    ; MMC1 accepts one data bit per CPU write. A write with bit 7 set resets
+    ; the serial register and forces 16 KiB PRG mode with the last bank fixed
+    ; at $C000, exactly like the hardware.
+    ld a, e
+    bit 7, a
+    jr z, .mmc1_serial
+    ld a, $10
+    ld [nes_mmc1_shift], a
+    ld a, [nes_mmc1_control]
+    or $0C
+    ld [nes_mmc1_control], a
+    call nes_mmc1_apply
+    ret
+
+.mmc1_serial:
+    ld a, [nes_mmc1_shift]
+    ld b, a
+    srl a
+    ld c, a
+    ld a, e
+    and $01
+    jr z, .mmc1_shifted
+    ld a, c
+    or $10
+    ld c, a
+.mmc1_shifted:
+    ld a, b
+    and $01
+    jr nz, .mmc1_commit
+    ld a, c
+    ld [nes_mmc1_shift], a
+    ret
+
+.mmc1_commit:
+    ld a, $10
+    ld [nes_mmc1_shift], a
+    ld a, h
+    cp $A0
+    jr c, .mmc1_control
+    cp $C0
+    jr c, .mmc1_chr0
+    cp $E0
+    jr c, .mmc1_chr1
+
+    ld a, c
+    and $1F
+    ld [nes_mmc1_prg], a
+    call nes_mmc1_apply
+    ret
+
+.mmc1_control:
+    ld a, c
+    and $1F
+    ld [nes_mmc1_control], a
+    call nes_mmc1_apply
+    ret
+
+.mmc1_chr0:
+    ld a, c
+    and $1F
+    ld [nes_mmc1_chr0], a
+    call nes_mmc1_apply
+    ret
+
+.mmc1_chr1:
+    ld a, c
+    and $1F
+    ld [nes_mmc1_chr1], a
+    call nes_mmc1_apply
     ret
 
 .write_4011:
@@ -974,6 +1060,95 @@ ENDC
 
 .unsupported:
     PROFILE_INC nes_profile_write_other
+    ret
+
+
+; Recompute MMC1's CPU-bank mapping and mirroring from committed registers.
+; The compiler's first MMC1 CFG emitter targets mode 3 (switch low/fix last),
+; but keeping the runtime derivation complete makes PRG data reads correct for
+; all four hardware modes and prepares the later wider banked-code emitter.
+nes_mmc1_apply:
+    ; Mirroring encoding used by nes_ppu_map_nametable_hl:
+    ; 0=horizontal, 1=vertical, 3=one-screen low, 4=one-screen high.
+    ld a, [nes_mmc1_control]
+    and $03
+    jr z, .mirror_low
+    cp $01
+    jr z, .mirror_high
+    cp $02
+    jr z, .mirror_vertical
+    xor a
+    jr .mirror_store
+.mirror_low:
+    ld a, $03
+    jr .mirror_store
+.mirror_high:
+    ld a, $04
+    jr .mirror_store
+.mirror_vertical:
+    ld a, $01
+.mirror_store:
+    ld [nes_mirroring], a
+
+    ; C = selected 16 KiB PRG bank, B = implemented-bank mask.
+    ld a, [nes_prg_bank_mask]
+    ld b, a
+    ld a, [nes_mmc1_prg]
+    and b
+    ld c, a
+
+    ld a, [nes_mmc1_control]
+    and $0C
+    cp $08
+    jr z, .prg_mode2
+    cp $0C
+    jr z, .prg_mode3
+
+    ; Modes 0/1: switch a 32 KiB pair, ignoring PRG register bit 0.
+    ld a, c
+    res 0, a
+    and b
+    ld [nes_prg_bank], a
+    inc a
+    and b
+    ld [nes_prg_hi_bank], a
+    jr .chr
+
+.prg_mode2:
+    xor a
+    ld [nes_prg_bank], a
+    ld a, c
+    ld [nes_prg_hi_bank], a
+    jr .chr
+
+.prg_mode3:
+    ld a, c
+    ld [nes_prg_bank], a
+    ld a, [nes_prg_fixed_bank]
+    ld [nes_prg_hi_bank], a
+
+.chr:
+    ; CHR RAM needs no bank upload. For CHR ROM, support MMC1's 8 KiB mode
+    ; immediately; split 4 KiB CHR-ROM banking is a separate renderer step.
+    ld a, [nes_chr_is_ram]
+    and a
+    ret nz
+    ld a, [nes_mmc1_control]
+    bit 4, a
+    ret nz
+
+    ld a, [nes_mmc1_chr0]
+    srl a
+    ld b, a
+    ld a, [nes_chr_bank_mask]
+    and b
+    ld b, a
+    ld a, [nes_chr_bank]
+    cp b
+    ret z
+    ld a, b
+    ld [nes_chr_bank], a
+    call nes_upload_chr_bank
     ret
 
 
