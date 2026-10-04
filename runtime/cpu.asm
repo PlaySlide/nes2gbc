@@ -393,6 +393,8 @@ IF DEF(NES2GBC_PROFILE)
     jp c, .ppu
     cp $80
     jp nc, .prg
+    cp $60
+    jp nc, .prg_ram
 
     ; APU / controller register reads.
     cp $40
@@ -416,6 +418,8 @@ ELSE
     jr c, .ppu
     cp $80
     jr nc, .prg
+    cp $60
+    jr nc, .prg_ram
 
     ; APU / controller register reads.
     cp $40
@@ -451,6 +455,29 @@ ENDC
     and $07
     ld l, a
     jp nes_ppu_cpu_read
+
+.prg_ram:
+    PROFILE_INC nes_profile_read_other
+    push bc
+    ldh a, [rSVBK]
+    push af
+    ld a, h
+    bit 4, a
+    ld a, $04
+    jr z, .prg_ram_read_bank
+    inc a
+.prg_ram_read_bank:
+    ldh [rSVBK], a
+    ld a, h
+    and $0F
+    or $D0
+    ld h, a
+    ld b, [hl]
+    pop af
+    ldh [rSVBK], a
+    ld a, b
+    pop bc
+    ret
 
 .prg:
     PROFILE_INC nes_profile_read_prg
@@ -811,6 +838,8 @@ IF DEF(NES2GBC_PROFILE)
     jp c, .ppu
     cp $80
     jp nc, .mapper
+    cp $60
+    jp nc, .prg_ram
 
     cp $40
     jp nz, .unsupported
@@ -833,6 +862,8 @@ ELSE
     jr c, .ppu
     cp $80
     jr nc, .mapper
+    cp $60
+    jr nc, .prg_ram
 
     cp $40
     jp nz, .unsupported
@@ -866,6 +897,27 @@ ENDC
     and $07
     ld l, a
     jp nes_ppu_cpu_write
+
+.prg_ram:
+    PROFILE_INC nes_profile_write_other
+    ldh a, [rSVBK]
+    push af
+    ld a, h
+    bit 4, a
+    ld a, $04
+    jr z, .prg_ram_write_bank
+    inc a
+.prg_ram_write_bank:
+    ldh [rSVBK], a
+    ld a, h
+    and $0F
+    or $D0
+    ld h, a
+    ld a, e
+    ld [hl], a
+    pop af
+    ldh [rSVBK], a
+    ret
 
 .mapper:
     PROFILE_INC nes_profile_write_mapper
