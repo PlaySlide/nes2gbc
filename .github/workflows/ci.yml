@@ -36,3 +36,11 @@ jobs:
         run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean all
       - name: Verify UxROM ROM exists
         run: test -s runtime/build/runtime.gbc
+      - name: Generate synthetic MMC1 NES ROM
+        run: python3 tools/make_mapper1_smoke_rom.py /tmp/nes2gbc-mapper1-smoke.nes
+      - name: Recompile MMC1 and run generated-ASM optimization pipeline
+        run: make generate ROM=/tmp/nes2gbc-mapper1-smoke.nes
+      - name: Assemble generated MMC1 GBC ROM with RGBDS
+        run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean all
+      - name: Verify MMC1 ROM exists
+        run: test -s runtime/build/runtime.gbc
