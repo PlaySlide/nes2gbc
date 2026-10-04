@@ -285,6 +285,48 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   }
  }
 
+ // Form 5: a shared dispatcher that dereferences a table pointer itself:
+ //   disp: ... LDA (B),Y / ... / LDA (B),Y / ... / JMP (ptr)
+ // with callers that point B at a word table and JSR/JMP into disp:
+ //   LDA #<table / STA B / LDA #>table / STA B+1 / ... / JSR disp
+ // or select the table from a table of tables:
+ //   LDA tables,X / STA B / LDA tables+1,X / STA B+1 / ... / JMP disp
+ // Ice Hockey dispatches its game modes this way ($80D6/$837D -> $8359).
+ if let Ok(jmp_off)=off(mapper,prg.len(),jmp_pc){
+  let lo=jmp_off.saturating_sub(40);
+  let mut bases=Vec::new();
+  for o in lo..jmp_off{if prg[o]==0xB1&&!bases.contains(&prg[o+1]){bases.push(prg[o+1])}}
+  for b in bases{
+   if b==0xFF{continue}
+   let mut o=0usize;
+   while o+8<=prg.len(){
+    let imm=prg[o]==0xA9&&prg[o+2]==0x85&&prg[o+3]==b&&prg[o+4]==0xA9&&prg[o+6]==0x85&&prg[o+7]==b+1;
+    let imm_rev=prg[o]==0xA9&&prg[o+2]==0x85&&prg[o+3]==b+1&&prg[o+4]==0xA9&&prg[o+6]==0x85&&prg[o+7]==b;
+    let idx=o+10<=prg.len()&&(prg[o]==0xBD||prg[o]==0xB9)&&prg[o+3]==0x85&&prg[o+4]==b&&prg[o+5]==prg[o]&&prg[o+8]==0x85&&prg[o+9]==b+1
+     &&u16::from_le_bytes([prg[o+6],prg[o+7]])==u16::from_le_bytes([prg[o+1],prg[o+2]]).wrapping_add(1);
+    if imm||imm_rev||idx{
+     let site_end=o+if idx{10}else{8};
+     if reaches_dispatcher(mapper,prg,site_end,b,lo,jmp_off){
+      if imm||imm_rev{
+       let t=if imm{u16::from_le_bytes([prg[o+1],prg[o+5]])}else{u16::from_le_bytes([prg[o+5],prg[o+1]])};
+       if !tables.contains(&t){tables.push(t)}
+      }else{
+       let tt=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+       for i in 0..MAX_WORD_TABLE_ENTRIES{
+        let Ok(x)=off(mapper,prg.len(),tt.wrapping_add(i*2))else{break};
+        if x+1>=prg.len(){break}
+        let sub=u16::from_le_bytes([prg[x],prg[x+1]]);
+        if sub<0x8000{break}
+        if !tables.contains(&sub){tables.push(sub)}
+       }
+      }
+     }
+    }
+    o+=1;
+   }
+  }
+ }
+
  let mut out=Vec::new();
  for base in tables{
   let mut found_any=false;
@@ -303,6 +345,27 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   }
  }
  out
+}
+// Helper for indirect_table_targets Form 5: from PRG offset `o` (just after
+// the B/B+1 pointer setup), straight-line code must JSR/JMP into the
+// dispatcher window [lo, jmp_off] without touching B/B+1.
+fn reaches_dispatcher(mapper:u16,prg:&[u8],o:usize,b:u8,lo:usize,jmp_off:usize)->bool{
+ let mut pc=0x8000u16.wrapping_add(o as u16);
+ for _ in 0..6{
+  let Ok(i)=dec(mapper,prg,pc)else{return false};
+  use Mnemonic::*;
+  match i.def.mnemonic{
+   Jsr|Jmp if i.def.mode==AddressingMode::Absolute=>{
+    let Ok(t)=off(mapper,prg.len(),i.operand)else{return false};
+    return t>=lo&&t<=jmp_off;
+   }
+   Sta|Stx|Sty|Inc|Dec|Asl|Lsr|Rol|Ror if i.def.mode==AddressingMode::ZeroPage&&(i.operand==b as u16||i.operand==b as u16+1)=>return false,
+   Lda|Ldx|Ldy|Tax|Tay|Txa|Tya|Asl|Lsr|Clc|Sec|Adc|Sbc|And|Ora|Eor|Sta|Stx|Sty|Cmp|Nop=>{}
+   _=>return false,
+  }
+  pc=pc.wrapping_add(i.def.len()as u16);
+ }
+ false
 }
 // Helper for indirect_table_targets Form 4. `o` is the PRG offset of
 // `LDA base,R / STA ptr`. Returns the table base when straight-line code from
@@ -634,6 +697,31 @@ mod tests {
         assert!(graph.blocks.contains_key(&0x9103));
         assert!(graph.blocks.contains_key(&0x9113));
         assert!(graph.entry_points.contains(&0x9103));
+    }
+
+    #[test]
+    fn discovers_tables_passed_to_dereferencing_dispatcher() {
+        // Ice Hockey: callers point $0A at a word table, then JSR a shared
+        // dispatcher that loads the target through ($0A),Y.
+        let mut prg = vec![0x00; 0x8000];
+        put(&mut prg, 0x9000, &[0xA9, 0x00, 0x85, 0x0A, 0xA9, 0xA0, 0x85, 0x0B, 0xA5, 0x08, 0x20, 0x00, 0x91, 0x60]);
+        put(
+            &mut prg,
+            0x9100,
+            &[
+                0x0A, 0xA8,       // ASL / TAY
+                0xB1, 0x0A, 0x48, // LDA ($0A),Y / PHA
+                0xC8, 0xB1, 0x0A, // INY / LDA ($0A),Y
+                0x85, 0x0B, 0x68, 0x85, 0x0A, // STA $0B / PLA / STA $0A
+                0x6C, 0x0A, 0x00, // JMP ($000A)
+            ],
+        );
+        put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
     }
 
     #[test]
