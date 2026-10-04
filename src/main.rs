@@ -206,8 +206,8 @@ fn main() -> ExitCode {
     println!("RESET vector: ${:04X}", vectors.reset);
     println!("IRQ vector:   ${:04X}", vectors.irq_brk);
 
-    let mut mapper2_views: Vec<(u8, cfg::ControlFlowGraph)> = Vec::new();
-    let graph = if cart.mapper == 2 {
+    let mut switch_lo_views: Vec<(u8, cfg::ControlFlowGraph)> = Vec::new();
+    let graph = if cart.mapper == 1 || cart.mapper == 2 {
         if cart.prg_rom.len() < 0x8000 || cart.prg_rom.len() % 0x4000 != 0 {
             eprintln!(
                 "CFG discovery stopped: mapper 2 expects a whole number of 16 KiB PRG banks (at least two)"
@@ -231,10 +231,10 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            mapper2_views.push((bank as u8, g));
+            switch_lo_views.push((bank as u8, g));
         }
-        println!("Mapper 2 PRG views analyzed: {bank_count}");
-        mapper2_views[0].1.clone()
+        println!("Mapper {} mode-3 PRG views analyzed: {bank_count}", cart.mapper);
+        switch_lo_views[0].1.clone()
     } else {
         match cfg::discover_from_vectors(cart.mapper, cart.prg_rom, vectors) {
             Ok(graph) => graph,
@@ -277,8 +277,8 @@ fn main() -> ExitCode {
             max_blocks,
             debug_trace,
         };
-        let mut asm = if cart.mapper == 2 {
-            banked::emit_mapper2_cfgs(&mapper2_views, emit_options)
+        let mut asm = if cart.mapper == 1 || cart.mapper == 2 {
+            banked::emit_mapper2_cfgs(&switch_lo_views, emit_options)
         } else {
             superblock::emit_cfg_with_interrupts(
                 &graph,
