@@ -854,8 +854,21 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
         crate::ines::Mirroring::FourScreen => 2,
     };
     let prg_16k_mirror = if config.prg_len == 0x4000 { 1usize } else { 0usize };
+    let prg_banks_16k = ((config.prg_len + 0x3FFF) / 0x4000).max(1);
+    let prg_bank_mask = prg_banks_16k.next_power_of_two() - 1;
+    let prg_fixed_bank = prg_banks_16k - 1;
     let chr_banks_8k = ((config.chr_len + 0x1FFF) / 0x2000).max(1);
     let chr_mask = chr_banks_8k.next_power_of_two() - 1;
+    let chr_bank_base = if matches!(config.mapper, 1 | 2) {
+        1 + prg_banks_16k
+    } else {
+        3
+    };
+    let chr_gbc_bank_base = chr_bank_base + chr_banks_8k;
+    assert!(
+        chr_gbc_bank_base + chr_banks_8k <= 32,
+        "cartridge PRG/CHR data overlaps translated dispatch banks"
+    );
 
     writeln!(out, "; Cartridge/runtime metadata").unwrap();
     writeln!(out, "SECTION \"Generated runtime metadata\", ROM0").unwrap();
@@ -866,11 +879,18 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "    ld [nes_mirroring], a").unwrap();
     writeln!(out, "    ld a, ${prg_16k_mirror:02X}").unwrap();
     writeln!(out, "    ld [nes_prg_16k_mirror], a").unwrap();
+    writeln!(out, "    ld a, ${:02X}", prg_bank_mask as u8).unwrap();
+    writeln!(out, "    ld [nes_prg_bank_mask], a").unwrap();
+    writeln!(out, "    ld a, ${:02X}", prg_fixed_bank as u8).unwrap();
+    writeln!(out, "    ld [nes_prg_fixed_bank], a").unwrap();
     writeln!(out, "    ld a, ${:02X}", chr_mask as u8).unwrap();
     writeln!(out, "    ld [nes_chr_bank_mask], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", (3 + chr_banks_8k) as u8).unwrap();
+    writeln!(out, "    ld a, ${:02X}", chr_bank_base as u8).unwrap();
+    writeln!(out, "    ld [nes_chr_rom_bank_base], a").unwrap();
+    writeln!(out, "    ld a, ${:02X}", chr_gbc_bank_base as u8).unwrap();
     writeln!(out, "    ld [nes_chr_gbc_bank_base], a").unwrap();
     writeln!(out, "    xor a").unwrap();
+    writeln!(out, "    ld [nes_prg_bank], a").unwrap();
     writeln!(out, "    ld [nes_chr_bank], a").unwrap();
     if prg_16k_mirror != 0 {
         writeln!(out, "    call nes_cache_prg16_to_wram").unwrap();
@@ -899,7 +919,6 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     }
     writeln!(out).unwrap();
 
-    let chr_bank_base = 3usize;
     for bank in 0..chr_banks_8k {
         let start = bank * 0x2000;
         let len = if config.chr_len == 0 { 0 } else { (config.chr_len - start).min(0x2000) };
@@ -911,7 +930,6 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
         }
     }
     writeln!(out).unwrap();
-    let chr_gbc_bank_base = chr_bank_base + chr_banks_8k;
     for bank in 0..chr_banks_8k {
         let start = bank * 0x2000;
         let len = if config.chr_len == 0 { 0 } else { (config.chr_len - start).min(0x2000) };
