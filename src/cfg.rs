@@ -348,6 +348,17 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   }
  }
 
+ // Form 6: the pointer may be set up in a separate routine. If every
+ // store to ptr/ptr+1 anywhere in PRG is part of an LDA table,R pair
+ // (table/table+1, or table twice around INY/INX), those tables are the
+ // complete target set. Kung Fu: $860E sets $5A/$5B from $80F8 for the
+ // JMP ($005A) at $A93B.
+ if pointer<0x00FF{
+  if let Some(found)=exclusive_pointer_tables(prg,pointer as u8){
+   for t in found{if !tables.contains(&t){tables.push(t)}}
+  }
+ }
+
  let mut out=Vec::new();
  for base in tables{
   let mut found_any=false;
@@ -388,6 +399,43 @@ fn reaches_dispatcher(mapper:u16,prg:&[u8],o:usize,b:u8,lo:usize,jmp_off:usize)-
   pc=pc.wrapping_add(i.def.len()as u16);
  }
  false
+}
+// Helper for indirect_table_targets Form 6.
+fn exclusive_pointer_tables(prg:&[u8],p:u8)->Option<Vec<u16>>{
+ let n=prg.len();
+ let is_store=|o:usize,z:u8|->bool{
+  (matches!(prg[o],0x85|0x86|0x84)&&o+1<n&&prg[o+1]==z)
+  ||(matches!(prg[o],0x8D|0x8E|0x8C)&&o+2<n&&prg[o+1]==z&&prg[o+2]==0)
+ };
+ let lda_abs=|o:usize|->Option<(u8,u16)>{
+  if o<3{return None}
+  let s=o-3;
+  if prg[s]==0xB9||prg[s]==0xBD{Some((prg[s],u16::from_le_bytes([prg[s+1],prg[s+2]])))}else{None}
+ };
+ let mut lows=Vec::new();let mut highs=Vec::new();
+ for o in 0..n.saturating_sub(1){
+  if is_store(o,p){lows.push(o)}
+  if is_store(o,p.wrapping_add(1)){highs.push(o)}
+ }
+ if lows.is_empty()||highs.is_empty(){return None}
+ let mut used_high=vec![false;highs.len()];
+ let mut out=Vec::new();
+ for &lo in &lows{
+  if prg[lo]!=0x85{return None}
+  let (op,l)=lda_abs(lo)?;
+  let mut matched=false;
+  for (k,&hi) in highs.iter().enumerate(){
+   if hi<=lo||hi>lo+12||prg[hi]!=0x85{continue}
+   let Some((op2,h))=lda_abs(hi)else{continue};
+   if op2!=op{continue}
+   let inc=hi>=4&&matches!(prg[hi-4],0xC8|0xE8);
+   if h==l.wrapping_add(1)||(h==l&&inc){used_high[k]=true;matched=true;break}
+  }
+  if !matched{return None}
+  if !out.contains(&l){out.push(l)}
+ }
+ if used_high.iter().any(|u|!u){return None}
+ Some(out)
 }
 // Helper for indirect_table_targets Form 4. `o` is the PRG offset of
 // `LDA base,R / STA ptr`. Returns the table base when straight-line code from
@@ -611,7 +659,10 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
     Mnemonic::Jmp if i.def.mode==AddressingMode::Absolute=>{let t=i.operand;edges.push(Edge{kind:EdgeKind::Jump,target:Some(t)});q(&mut work,&mut seen,t);break}
     Mnemonic::Jmp if i.def.mode==AddressingMode::Indirect=>{
      let targets=indirect_table_targets(mapper,prg,i.pc,i.operand);
-     if targets.is_empty(){edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:None});}
+     if targets.is_empty(){
+      if cfg_debug{eprintln!("cfg: unresolved JMP (${:04X}) at ${:04X}",i.operand,i.pc)}
+      edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:None});
+     }
      else{for t in targets{edges.push(Edge{kind:EdgeKind::IndirectJump{pointer:i.operand},target:Some(t)});q(&mut work,&mut seen,t);}}
      break
     }
@@ -757,6 +808,20 @@ mod tests {
         let graph = discover(0, &prg, &[0x9000]).unwrap();
         assert!(graph.blocks.contains_key(&0x9200));
         assert!(graph.blocks.contains_key(&0x9210));
+    }
+
+    #[test]
+    fn resolves_pointer_set_only_from_table_elsewhere() {
+        // Kung Fu: a separate routine sets $5A/$5B from a table; the JMP ($005A)
+        // site has no visible pointer construction.
+        let mut prg = vec![0x00; 0x8000];
+        put(&mut prg, 0x9000, &[0x20, 0x00, 0x91, 0x6C, 0x5A, 0x00]);
+        put(&mut prg, 0x9100, &[0xA0, 0x00, 0xB9, 0x00, 0xA0, 0x85, 0x5A, 0xC8, 0xB9, 0x00, 0xA0, 0x85, 0x5B, 0x60]);
+        put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9200));
     }
 
     #[test]
