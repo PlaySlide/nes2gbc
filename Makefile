@@ -159,6 +159,10 @@ generate:
 	fi
 
 gbc: generate
+	# Runtime sources and generated.asm change frequently across mapper/perf branches.
+	# Reassemble from scratch so a stale runtime.o can never be linked against a
+	# newly-generated cartridge image after a branch switch/reset.
+	$(MAKE) -C runtime clean
 	$(MAKE) -C runtime TRACE="$(TRACE)" PROFILE="$(PROFILE)" PROFILE_TRACE="$(PROFILE_TRACE)" APU_TEST_SPEED="$(APU_TEST_SPEED)"
 
 test:
