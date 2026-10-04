@@ -27,7 +27,10 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--nmis", type=int, default=1000)
     ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--scenario", default="std", help="bench.py input scenario (merge several with merge_profiles.py)")
     a = ap.parse_args()
+    import bench as _bench
+    _bench.SCHEDULE[:] = _bench.SCENARIOS[a.scenario]["schedule"]
     out = a.out or os.path.join(ROOT, "profiles", os.path.splitext(os.path.basename(a.rom))[0] + ".rtsedge")
     if not a.skip_build:
         subprocess.run(["make", "generate", f"ROM={a.rom}"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
