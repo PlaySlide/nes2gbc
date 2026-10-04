@@ -382,7 +382,7 @@ fn reaches_dispatcher(mapper:u16,prg:&[u8],o:usize,b:u8,lo:usize,jmp_off:usize)-
     return t>=lo&&t<=jmp_off;
    }
    Sta|Stx|Sty|Inc|Dec|Asl|Lsr|Rol|Ror if i.def.mode==AddressingMode::ZeroPage&&(i.operand==b as u16||i.operand==b as u16+1)=>return false,
-   Lda|Ldx|Ldy|Tax|Tay|Txa|Tya|Asl|Lsr|Clc|Sec|Adc|Sbc|And|Ora|Eor|Sta|Stx|Sty|Cmp|Nop=>{}
+   Lda|Ldx|Ldy|Tax|Tay|Txa|Tya|Asl|Lsr|Clc|Sec|Adc|Sbc|And|Ora|Eor|Sta|Stx|Sty|Cmp|Cpx|Cpy|Bit|Nop|Pha|Pla|Php|Plp|Inx|Iny|Dex|Dey|Bcc|Bcs|Beq|Bne|Bmi|Bpl|Bvc|Bvs=>{} // branches: follow the not-taken path
    _=>return false,
   }
   pc=pc.wrapping_add(i.def.len()as u16);
