@@ -884,6 +884,7 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "    ld [nes_prg_bank_mask], a").unwrap();
     writeln!(out, "    ld a, ${:02X}", prg_fixed_bank as u8).unwrap();
     writeln!(out, "    ld [nes_prg_fixed_bank], a").unwrap();
+    writeln!(out, "    ld [nes_prg_hi_bank], a").unwrap();
     writeln!(out, "    ld a, ${:02X}", chr_mask as u8).unwrap();
     writeln!(out, "    ld [nes_chr_bank_mask], a").unwrap();
     writeln!(out, "    ld a, ${:02X}", chr_bank_base as u8).unwrap();
@@ -895,6 +896,16 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "    xor a").unwrap();
     writeln!(out, "    ld [nes_prg_bank], a").unwrap();
     writeln!(out, "    ld [nes_chr_bank], a").unwrap();
+    writeln!(out, "    ld [nes_mmc1_chr0], a").unwrap();
+    writeln!(out, "    ld [nes_mmc1_chr1], a").unwrap();
+    writeln!(out, "    ld [nes_mmc1_prg], a").unwrap();
+    writeln!(out, "    ld a, $10").unwrap();
+    writeln!(out, "    ld [nes_mmc1_shift], a").unwrap();
+    writeln!(out, "    ld a, $0C").unwrap();
+    writeln!(out, "    ld [nes_mmc1_control], a").unwrap();
+    if config.mapper == 1 {
+        writeln!(out, "    call nes_mmc1_apply").unwrap();
+    }
     if chr_is_ram {
         writeln!(out, "    call nes_clear_chr_ram").unwrap();
     }
