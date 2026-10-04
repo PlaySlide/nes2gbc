@@ -426,15 +426,15 @@ ELSE
     jp nz, .unsupported
     ld a, l
     cp $11
-    jr z, .read_4011
+    jp z, .read_4011
 IF DEF(NES2GBC_APU)
     cp $15
-    jr z, .read_4015
+    jp z, .read_4015
 ENDC
     cp $16
-    jr z, .read_4016
+    jp z, .read_4016
     cp $17
-    jr z, .read_4017
+    jp z, .read_4017
     jp .unsupported
 ENDC
 
@@ -881,14 +881,14 @@ ELSE
     jp nz, .unsupported
     ld a, l
     cp $11
-    jr z, .write_4011
+    jp z, .write_4011
     cp $14
-    jr z, .write_4014
+    jp z, .write_4014
     cp $16
-    jr z, .write_4016
+    jp z, .write_4016
 IF DEF(NES2GBC_APU)
     cp $18
-    jr c, .write_apu
+    jp c, .write_apu
 ENDC
     jp .unsupported
 ENDC
