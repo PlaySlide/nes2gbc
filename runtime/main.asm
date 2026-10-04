@@ -117,7 +117,11 @@ nes_gbc_vblank_isr:
 
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
+IF DEF(NES2GBC_DEBUG_TRACE)
+    ; TRACE builds only: the 4-frame renderer diagnostic ring is debugger
+    ; telemetry and cost every host VBlank in release builds.
     call nes_diag_snapshot_frame
+ENDC
 IF DEF(NES2GBC_APU)
     call nes_apu_frame_tick
 ENDC
@@ -523,13 +527,16 @@ IF !DEF(NES2GBC_NO_PACING)
     ld a, $02
     ld [rIE], a
     ei
-    call nes_pace_swap
     ld a, [nes_pace_committed]
     and a
-    jr z, .pace_tail_done
+    jr z, .pace_swap_back
+    call nes_pace_restore_live
     xor a
     ld [nes_pace_snap_valid], a
     call nes_pace_retire_flushed_queue
+    jr .pace_tail_done
+.pace_swap_back:
+    call nes_pace_swap
 .pace_tail_done:
     di
     ld a, $03
@@ -543,7 +550,15 @@ IF !DEF(NES2GBC_NO_PACING)
     ; Never more than one NMI start per host VBlank (60 NES fps cap).
     xor a
     ldh [nes_host_vblank_pending], a
+IF DEF(NES2GBC_CATCHUP)
+    ; Bank this VBlank (bounded) for later short frames to catch up.
+    ld a, [nes_pace_credit]
+    cp NES2GBC_CATCHUP_MAX
+    jr nc, .pace_done
     inc a
+ELSE
+    inc a
+ENDC
     ld [nes_pace_credit], a
 .pace_done:
     ; VBlank has now passed for an early-started NMI: its PPUMASK writes may
@@ -1021,6 +1036,10 @@ Start:
     ld [nes_pace_idle_hi], a
     ld [nes_pace_cand_lo], a
     ld [nes_pace_cand_hi], a
+    ; Unknown page contents: the first projection clears all 40 entries.
+    ld a, 40
+    ld [nes_oam_page_hw], a
+    ld [nes_oam_page_hw + 1], a
     ld a, HIGH(nes_gbc_oam_shadow)
     ld [nes_oam_dma_page], a
 IF !DEF(NES2GBC_NO_PACING)

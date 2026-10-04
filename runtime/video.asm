@@ -1,6 +1,41 @@
 ; GBC video bridge for the virtual NES PPU.
 ; Correctness-first: expensive operations may wait for VBlank or briefly disable LCD.
 
+; One stitched-column row: tile [HL] -> VBK0 [DE], palette C -> VBK1 [DE]
+; (one VRAM wait covers both writes), then advance HL/DE by one tile row.
+MACRO STITCH_COLUMN_ROW
+    ld a, [hl]
+    ld b, a
+    call nes_video_wait_vram
+    xor a
+    ldh [rVBK], a
+    ld a, b
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, l
+    add $20
+    ld l, a
+    jr nc, :+
+    inc h
+:
+    ld a, e
+    add $20
+    ld e, a
+    jr nc, :+
+    inc d
+:
+ENDM
+
+SECTION "NES stitch column temps", WRAM0
+nes_flush_seam_q:    ds 1
+nes_flush_seam_base: ds 1
+nes_flush_bank_bit:  ds 1
+nes_hs_attr_lo: ds 1
+nes_hs_pal_bot: ds 1
+
 SECTION "NES video bridge", ROM0
 
 nes_video_init:
@@ -43,8 +78,10 @@ nes_video_init:
     ; The SMB-only staging bitmap is also zeroed once here. Ordinary games
     ; never touch it, so they no longer need a 256-byte clear on every NMI.
     ld hl, nes_nametable_stage_seen
-    ld bc, $0100
+    ld bc, $0800
     call nes_video_fill_zero
+    ld a, $01
+    ld [nes_stage_gen], a
 
     ld a, $01
     ldh [rSVBK], a
@@ -206,6 +243,23 @@ ENDC
     ldh [rSVBK], a
     ld de, nes_nametable_queue
 
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
+    ; SMB stitched presentation (fixed for the whole flush): publish tile
+    ; bytes with the effects of nes_video_sync_nametable_write_if_changed
+    ; specialized for that state, without the per-byte calls and re-tests.
+    ; (Compiled out with the stitched $2007 fast path: it needs vertical
+    ; mirroring, which those ROMs never select.)
+    ld a, [nes_hstitch_valid]
+    and a
+    jr z, .loop
+    ld a, [nes_mirroring]
+    cp $01
+    jr nz, .loop
+    ldh a, [nes_split_active]
+    and a
+    jp nz, .stitched
+ENDC
+
 .loop:
     ; DE == queue end?
     ld a, [nes_nametable_queue_ptr_hi]
@@ -359,6 +413,184 @@ ENDC
     ldh [rVBK], a
     ret
 
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
+.stitched:
+IF DEF(NES2GBC_DEBUG_TRACE)
+    jp .loop ; keep the per-byte diagnostics in TRACE builds
+ENDC
+    ld a, [nes_hstitch_key]
+    and $1F
+    ld [nes_flush_seam_q], a
+    ld a, [nes_hstitch_key]
+    and $20
+    swap a
+    rrca
+    ld [nes_flush_seam_base], a  ; 0/1 page for columns >= q
+    ldh a, [nes_split_bottom_ctrl]
+    and $10
+    srl a
+    ld [nes_flush_bank_bit], a
+
+.s_loop:
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp d
+    jr nz, .s_entry
+    ld a, [nes_nametable_queue_ptr_lo]
+    cp e
+    jp z, .done
+.s_entry:
+    ld a, [de]
+    inc de
+    ld l, a
+    ld a, [de]
+    inc de
+    ld h, a
+    ld a, h
+    and $03
+    cp $03
+    jr c, .s_tile
+    ld a, l
+    cp $C0
+    jr c, .s_tile
+    ; Attribute byte: unchanged generic publication.
+    push de
+    ld a, [hl]
+    call nes_video_sync_nametable_write_if_changed
+    pop de
+    jr .s_loop
+
+.s_tile:
+    PROFILE_INC nes_profile_nametable_sync
+    ld c, [hl]
+    ; Published-value shadow (bank 6): skip unchanged bytes.
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    cp c
+    jp z, .s_same
+    ld [hl], c
+    ld a, $01
+    ldh [rSVBK], a
+    ; Column source (nes_video_hstitch_source_for_column, which also leaves
+    ; the column in nes_hstitch_copy_start).
+    ld a, [nes_flush_seam_q]
+    ld b, a
+    ld a, l
+    and $1F
+    ld [nes_hstitch_copy_start], a
+    cp b                          ; carry iff col < q
+    ld a, [nes_flush_seam_base]
+    jr nc, .s_src_ready
+    xor $01
+.s_src_ready:
+    ld b, a                       ; B = source page for this column
+    bit 2, h
+    jr z, .s_page_ok
+    and a
+    jp z, .s_loop                 ; NT1 write into an NT0-owned column
+.s_page_ok:
+    push de
+    ; nes_video_authoritative_tile_palette, inline: attribute byte at
+    ; $D3/$D7:C0 + (row/4)*8 + col/4, quadrant from L bits 6 and 1.
+    ld a, h
+    and $03
+    add a
+    bit 7, l
+    jr z, .s_attr_row
+    inc a
+.s_attr_row:
+    add a
+    add a
+    add a
+    ld e, a
+    ld a, l
+    and $1C
+    rrca
+    rrca
+    add e
+    add $C0
+    ld e, a
+    ld a, h
+    and $04
+    add $D3
+    ld d, a
+    ld a, [de]
+    bit 6, l
+    jr z, .s_attr_top
+    swap a
+.s_attr_top:
+    bit 1, l
+    jr z, .s_attr_left
+    rrca
+    rrca
+.s_attr_left:
+    and $03
+    ld e, a
+    ld a, [nes_flush_bank_bit]
+    or e
+    ld e, a                       ; E = CGB attribute
+    ld a, h
+    and $07
+    add $98
+    ld d, a
+    ld a, l
+    ld l, e
+    ld e, a                       ; DE = map cell, L = attribute (H kept)
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, .s_wait1
+    ldh a, [rLY]
+    cp 144
+    jr nc, .s_ready1
+.s_wait1:
+    call nes_video_wait_vram
+.s_ready1:
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, l
+    ld [de], a
+    ; Stitch repair: page-0 cell whose column is NT0-owned mirrors to map 1.
+    bit 2, h
+    jr nz, .s_written
+    ld a, b
+    and a
+    jr nz, .s_written
+    ld a, d
+    add $04
+    ld d, a
+    ld a, [nes_vram_unlocked]
+    and a
+    jr z, .s_wait2
+    ldh a, [rLY]
+    cp 144
+    jr nc, .s_ready2
+.s_wait2:
+    call nes_video_wait_vram
+.s_ready2:
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, l
+    ld [de], a
+.s_written:
+    xor a
+    ldh [rVBK], a
+    pop de
+    jp .s_loop
+
+.s_same:
+    ld a, $01
+    ldh [rSVBK], a
+    jp .s_loop
+ENDC
+
 ; Rebuild both physical GBC background maps from authoritative NES
 ; nametable WRAM.  This is a correctness checkpoint used when an ordinary game
 ; finishes a rendering-off screen construction and re-enables the background.
@@ -378,17 +610,93 @@ nes_video_rebuild_generic_maps_atomic:
 .rebuild_lcd_off:
     ld a, $01
     ldh [rSVBK], a
+    ; Same per-byte effects, in the same order, as calling
+    ; nes_video_sync_nametable_write for $D000..$D7FF with the LCD off and no
+    ; split/stitch (the only state this checkpoint runs in): tile bytes store
+    ; the tile, keep the CGB palette bits and set PPUCTRL.4's bank bit, and
+    ; rows 0-1 feed the vertical-seam padding rows; attribute bytes take the
+    ; normal physical expansion. Every skipped nes_video_wait_vram would only
+    ; have cleared nes_vram_unlocked (LY reads 0 while the LCD is off).
+    xor a
+    ld [nes_vram_unlocked], a
     ld hl, $D000
 
-.rebuild_loop:
+.rebuild_page:
+    ld a, [nes_ppuctrl]
+    and $10
+    srl a
+    ld b, a
+.rebuild_tile:
+    ld a, h
+    sub $D0 - $98
+    ld d, a
+    ld e, l
+    xor a
+    ldh [rVBK], a
+    ld a, [hli]
+    ld [de], a
+    ld c, a
+    ld a, $01
+    ldh [rVBK], a
+    ld a, [de]
+    and $07
+    or b
+    ld [de], a
+    ld a, e
+    cp $40
+    jr nc, .rebuild_tile_next
+    ld a, d
+    and $03
+    jr nz, .rebuild_tile_next
+    ; Source rows 0-1: padding rows 30-31 of the vertically adjacent map.
+    ld a, [de]
+    push af
+    ld a, e
+    add $C0
+    ld e, a
+    ld a, [nes_mirroring]
+    cp $01
+    ld a, d
+    jr z, .rebuild_seam_same
+    xor $04
+.rebuild_seam_same:
+    add $03
+    ld d, a
+    xor a
+    ldh [rVBK], a
+    ld a, c
+    ld [de], a
+    ld a, $01
+    ldh [rVBK], a
+    pop af
+    ld [de], a
+.rebuild_tile_next:
+    ld a, l
+    cp $C0
+    jr nz, .rebuild_tile
+    ld a, h
+    and $03
+    cp $03
+    jr nz, .rebuild_tile
+    xor a
+    ldh [rVBK], a
+
+.rebuild_attr:
     ld a, [hl]
+    ld b, a
     push hl
-    call nes_video_sync_nametable_write
+    call nes_video_sync_attribute_write_physical
     pop hl
     inc hl
+    ld a, l
+    and a
+    jr nz, .rebuild_attr
+    ld a, h
+    and $03
+    jr nz, .rebuild_attr
     ld a, h
     cp $D8
-    jr nz, .rebuild_loop
+    jr nz, .rebuild_page
 
     ; The rebuilt attributes used the current global PPUCTRL.4, so make that
     ; state the committed baseline and avoid an immediate redundant full-bank
@@ -1302,6 +1610,18 @@ nes_video_sync_palette_shadow:
     ld [nes_diag_event_flags], a
 
     ld hl, nes_gbc_palette_shadow
+IF !DEF(NES2GBC_NO_PACING)
+    ; A paced publication commits the snapshot's palette from its own copy;
+    ; the live shadow keeps the running NMI's palette (no swap needed).
+    ld a, [nes_pace_isr_active]
+    and a
+    jr z, .source_ready
+    ld a, [nes_pace_snap_palette]
+    and a
+    jr z, .source_ready
+    ld hl, nes_pace_palette
+.source_ready:
+ENDC
 
     ld a, $80
     ldh [rBGPI], a
@@ -1502,6 +1822,14 @@ ENDC
     jr nz, .clear_loop
 
 .ready:
+    ; Every entry from the emit count up is hidden now (D = page).
+    ld a, d
+    and $01
+    add LOW(nes_oam_page_hw)
+    ld l, a
+    ld h, HIGH(nes_oam_page_hw)
+    ldh a, [nes_oam_emit_count]
+    ld [hl], a
     ld a, $01
     ldh [nes_oam_shadow_ready], a
     ret
@@ -1817,49 +2145,60 @@ nes_video_refresh_stitch_column:
     ld l, a
     ld d, $9C
     ld e, a
-    ld b, $1E                    ; 30 NES tile rows
+    ; The column's palettes come from one attribute byte per 4 tile rows
+    ; ($D3C0/$D7C0 + row/4*8 + column/4): read it once, pre-shift the
+    ; column's horizontal pair, then rows 0-1 take bits 0-1 and rows 2-3
+    ; bits 4-5 (same values nes_video_authoritative_tile_palette returns).
+    srl a
+    srl a
+    add $C0
+    ld [nes_hs_attr_lo], a
 
-.tile_loop:
-    ld a, [hl]
-    ld c, a
-    call nes_video_wait_vram
-    xor a
-    ldh [rVBK], a
-    ld a, c
-    ld [de], a
-
-    push bc
-    push de
+.attr_loop:
     push hl
-    call nes_video_authoritative_tile_palette
+    ld a, h
+    and $04
+    add $D3
+    ld h, a
+    ld a, [nes_hs_attr_lo]
+    ld l, a
+    ld a, [hl]
+    pop hl
+    ld c, a
+    ld a, [nes_hstitch_copy_start]
+    and $02
+    ld a, c
+    jr z, .attr_left
+    srl a
+    srl a
+.attr_left:
+    ld c, a
+    swap a
+    and $03
+    ld b, a
+    ld a, [nes_hstitch_copy_skip]
+    or b
+    ld [nes_hs_pal_bot], a
+    ld a, c
+    and $03
     ld c, a
     ld a, [nes_hstitch_copy_skip]
     or c
     ld c, a
-    pop hl
-    pop de
-
-    ; Same accessibility window as the tile-id write above.
-    ld a, $01
-    ldh [rVBK], a
-    ld a, c
-    ld [de], a
-    pop bc
-
-    ld a, l
-    add $20
-    ld l, a
-    jr nc, .tile_h_ok
-    inc h
-.tile_h_ok:
-    ld a, e
-    add $20
-    ld e, a
-    jr nc, .tile_d_ok
-    inc d
-.tile_d_ok:
-    dec b
-    jr nz, .tile_loop
+    STITCH_COLUMN_ROW
+    STITCH_COLUMN_ROW
+    ld a, [nes_hs_attr_lo]
+    cp $F8                       ; attribute row 7 covers only rows 28-29
+    jr nc, .attr_done
+    ld a, [nes_hs_pal_bot]
+    ld c, a
+    STITCH_COLUMN_ROW
+    STITCH_COLUMN_ROW
+    ld a, [nes_hs_attr_lo]
+    add $08
+    ld [nes_hs_attr_lo], a
+    jp .attr_loop
+.attr_done:
 
     xor a
     ld [nes_vram_unlocked], a

@@ -10,6 +10,12 @@ REGALLOC ?= 3
 # no APU cost; 1 = APU register writes/$4015 reads drive CGB sound. Set it on
 # `make generate`/`make gbc`; it is recorded in runtime/generated_config.inc.
 APU ?= 0
+# Multi-frame catch-up (runtime pacing): 1 = bank up to CATCHUP_MAX host VBlanks
+# that elapsed while a translated NMI ran, so following short frames start
+# their NMI without waiting for the next VBlank. 0 (default) = previous
+# single-credit pacing, byte-identical builds. Recorded in generated_config.inc.
+CATCHUP ?= 0
+CATCHUP_MAX ?= 3
 POSTPASS_THROUGH ?= all
 # Profile-guided translated-code bank packing (tools/bench/bank_profile.py).
 # Defaults to profiles/<rom name>.bankprof when that file exists; BANK_PROFILE=
@@ -18,6 +24,8 @@ BANK_PROFILE ?= profiles/$(basename $(notdir $(ROM))).bankprof
 # Block-entry profile (tools/bench/rts_profile.py) ordering guarded RTS returns;
 # RTS_PROFILE= (empty) or a missing file keeps static JSR-site ordering.
 RTS_PROFILE ?= profiles/$(basename $(notdir $(ROM))).rtsprof
+# Per-RTS-site return edges (tools/bench/rts_edge_profile.py) order the compare chains.
+RTS_EDGE_PROFILE ?= profiles/$(basename $(notdir $(ROM))).rtsedge
 # 1 = keep every emitter bank unmerged (layout used to record a bank profile).
 REPACK_IDENTITY ?= 0
 # APU=1 only: audio host-speed compensation for testing under 2x/4x fast-forward.
@@ -39,6 +47,7 @@ help:
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache-a     # add A cache too'
 	@echo '  make gbc ROM="path/to/game.nes" POSTPASS_THROUGH=cache       # add all cache passes'
 	@echo '  make gbc ROM="path/to/game.nes" APU=1         # enable NES sound (APU emulation)'
+	@echo '  make gbc ROM="path/to/game.nes" CATCHUP=1     # multi-frame pacing catch-up (CATCHUP_MAX=3)'
 	@echo '  make gbc ROM="path/to/game.nes" APU=1 APU_TEST_SPEED=2 # compensate audio for mGBA 2x fast-forward'
 	@echo '  make test'
 
@@ -46,6 +55,8 @@ generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
 	@if [ "$(APU)" = "1" ]; then echo 'DEF NES2GBC_APU EQU 1 ; make generate APU=1' > runtime/generated_config.inc; \
 	else echo '; make generate APU=0: NES APU emulation disabled' > runtime/generated_config.inc; fi
+	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
+		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
 		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	else \
@@ -59,6 +70,7 @@ generate:
 		python3 tools/shrink_compare_generated.py runtime/generated.asm; \
 		python3 tools/hot_alu_generated.py runtime/generated.asm; \
 		python3 tools/fast_oam_dma_generated.py runtime/generated.asm; \
+		python3 tools/route_ppu_write_data.py runtime/generated.asm runtime/generated_config.inc; \
 		python3 tools/lazy_overflow_updates.py runtime/generated.asm; \
 		python3 tools/fold_fixed_prg_reads.py runtime/generated.asm "$(ROM)"; \
 		python3 tools/trim_indexed_ram_bus.py runtime/generated.asm; \
@@ -106,7 +118,12 @@ generate:
 			python3 tools/native_draw_sprite_object.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_multibyte_compare_copy.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_small_loops.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_enemy_parser.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_bounding_box.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_vram_run.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_metatile_column.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_relative_xy_leaf.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_tiny_leaves.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)" --identity "$(REPACK_IDENTITY)" --bank-profile "$(BANK_PROFILE)"; \
 			python3 tools/dead_hram_state_global.py runtime/generated.asm; \
 			python3 tools/fast_nonram_reads.py runtime/generated.asm; \
@@ -116,6 +133,24 @@ generate:
 			python3 tools/final_peephole.py runtime/generated.asm; \
 			python3 tools/cheap_carry_materialize.py runtime/generated.asm; \
 			python3 tools/sbc_carry_capture.py runtime/generated.asm; \
+			python3 tools/dead_a_reload.py runtime/generated.asm; \
+			python3 tools/store_reload.py runtime/generated.asm; \
+			python3 tools/dead_af_compute.py runtime/generated.asm; \
+			python3 tools/reg_copy_prop.py runtime/generated.asm; \
+			python3 tools/push_af_temp.py runtime/generated.asm; \
+			python3 tools/alu_imm_fold.py runtime/generated.asm; \
+			python3 tools/dead_reg_writes.py runtime/generated.asm; \
+			python3 tools/reg_copy_prop.py runtime/generated.asm; \
+			python3 tools/push_af_temp.py runtime/generated.asm; \
+			python3 tools/dead_reg_writes.py runtime/generated.asm; \
+			python3 tools/sec_sbc_to_sub.py runtime/generated.asm; \
+			python3 tools/rts_chain_reorder.py runtime/generated.asm --edge-profile "$(RTS_EDGE_PROFILE)"; \
+			python3 tools/rts_compare_first.py runtime/generated.asm --rts-profile "$(RTS_PROFILE)" --edge-profile "$(RTS_EDGE_PROFILE)"; \
+			python3 tools/native_dk_box_collision.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_move_object_h.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_dk_sprite_loops.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/fallthrough_layout.py runtime/generated.asm; \
+			python3 tools/thread_adapter_jumps.py runtime/generated.asm; \
 		fi; \
 		# TRACE and partial POSTPASS_THROUGH builds also expand generated blocks. \
 		# Normalize short/long NES-label jumps after the final selected pass so \

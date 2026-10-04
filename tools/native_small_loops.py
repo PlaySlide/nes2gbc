@@ -112,15 +112,28 @@ def emit(kind, pc, exit_pc, p, xs, ys):
               "ld a, d", "ldh [nes_x], a", "xor a", "ldh [nes_y], a", "ldh [nes_z_shadow], a", "ldh [nes_n_shadow], a"]
     elif kind == "cmp_add_wrap":
         A, B, C = ram(p["a"]), ram(p["b"]), ram(p["c"])
-        L += [ldy, "ld c, a", ldx, f"cp $80", f"jp nc, .{k}_slow", "ld b, a", f"ld a, [${ram(p['z']):04X}]", "ld e, a",
+        # [b] and c[[b]] are loop invariant unless a STA a,X lands on c+[b]
+        # (a..a+X): that case takes the translated slow path. Phase 1 walks
+        # skips with the original Y; the first add sets Y=[b] and enters the
+        # tight phase-2 loop with v=c[[b]] in D.
+        L += [ldx, "cp $80", f"jp nc, .{k}_slow", "ld b, a",
+              f"ld a, [${B:04X}]", f"add ${C & 0xFF:02X}", "ld l, a", f"ld a, ${C >> 8:02X}", "adc $00", "ld h, a",
+              "ld a, [hl]", "ld d, a",
+              "ld a, l", f"sub ${A & 0xFF:02X}", "ld e, a", "ld a, h", f"sbc ${A >> 8:02X}", f"jr nz, .{k}_ok",
+              "ld a, b", "cp e", f"jp nc, .{k}_slow",
+              f".{k}_ok:",
+              ldy, "ld c, a",
+              f"ld a, [${ram(p['z']):04X}]", "ld e, a",
               "ld a, b", f"add ${A & 0xFF:02X}", "ld l, a", f"ld a, ${A >> 8:02X}", "adc $00", "ld h, a",
-              f".{k}_l:",
-              "ld a, [hl]", "cp e", f"jr c, .{k}_skip",
-              "ld d, a", f"ld a, [${B:04X}]", "ld c, a", "push hl",
-              f"add ${C & 0xFF:02X}", "ld l, a", f"ld a, ${C >> 8:02X}", "adc $00", "ld h, a",
-              "ld a, d", "add [hl]", "pop hl", f"jr nc, .{k}_st", "add e", f".{k}_st:", "ld [hl], a", f"jr .{k}_nx",
-              f".{k}_skip:", "and a",  # 6502 C = 0 (A < z)
-              f".{k}_nx:", "dec hl", "dec b", "bit 7, b", f"jr z, .{k}_l",
+              f".{k}_l1:", "ld a, [hl]", "cp e", f"jr nc, .{k}_first",
+              "dec hl", "dec b", "bit 7, b", f"jr z, .{k}_l1",
+              "and a", f"jr .{k}_exit",
+              f".{k}_first:", f"ld a, [${B:04X}]", "ld c, a", "ld a, [hl]",
+              f".{k}_l2:", "add d", f"jr nc, .{k}_st", "add e", f".{k}_st:", "ld [hl], a",
+              f".{k}_nx:", "dec hl", "dec b", "bit 7, b", f"jr nz, .{k}_exit",
+              "ld a, [hl]", "cp e", f"jr nc, .{k}_l2",
+              "and a", f"jr .{k}_nx",  # 6502 C = 0 (A < z)
+              f".{k}_exit:",
               "ldh [nes_a], a", "ld a, $00", "adc a", "ldh [nes_c_shadow], a",
               "ld a, c", "ldh [nes_y], a", "ld a, $FF", "ldh [nes_x], a", "ldh [nes_z_shadow], a", "ldh [nes_n_shadow], a"]
     L += tail(k, exit_pc)

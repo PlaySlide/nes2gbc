@@ -496,6 +496,92 @@ nes_ppu_read_data:
 
 ; Write $2007.
 nes_ppu_write_data:
+    ; Fast path: SMB-style stitched nametable write inside a translated NMI
+    ; (vertical mirroring, split or stitch live). Same effects as the generic
+    ; path below for that state: the hidden-change bookkeeping is skipped by
+    ; the split/stitch test there too, the byte is stored to authoritative
+    ; WRAM, staged once per NMI, and the address increments.
+    ; ROMs with fixed non-vertical mirroring never take it, so
+    ; tools/route_ppu_write_data.py compiles it out for them.
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
+    ld a, [nes_mirroring]
+    dec a
+    jp nz, .generic
+    ld a, [nes_nmi_active]
+    and a
+    jp z, .generic
+    ldh a, [nes_split_active]
+    ld b, a
+    ld a, [nes_hstitch_valid]
+    or b
+    jr z, .generic
+    ld a, [nes_ppu_addr_hi]
+    cp $20
+    jr c, .generic
+    cp $3F
+    jr nc, .generic
+    ; Vertical mirroring: physical = $D0 | (A10, A9, A8); $3xxx mirrors too.
+    and $07
+    or $D0
+    ld h, a
+    ld a, [nes_ppu_addr_lo]
+    ld l, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld [hl], e
+
+    ; nes_ppu_stage_nametable_hl, inline.
+    ld a, [nes_nametable_queue_overflow]
+    and a
+    jr nz, .fast_increment
+    inc a
+    ld [nes_nametable_stage_used], a
+    ld a, h
+    add HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld d, a
+    ld e, l
+    ld a, [nes_stage_gen]
+    ld b, a
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [de]
+    cp b
+    jr z, .fast_duplicate
+    ld a, b
+    ld [de], a
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, [nes_nametable_queue_ptr_hi]
+    cp $E0
+    jr nc, .fast_overflow
+    ld d, a
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld e, a
+    ld a, l
+    ld [de], a
+    inc e
+    ld a, h
+    ld [de], a
+    inc de
+    ld a, e
+    ld [nes_nametable_queue_ptr_lo], a
+    ld a, d
+    ld [nes_nametable_queue_ptr_hi], a
+    jp nes_ppu_increment_addr
+
+.fast_duplicate:
+    ld a, $01
+    ldh [rSVBK], a
+.fast_increment:
+    jp nes_ppu_increment_addr
+
+.fast_overflow:
+    ld a, $01
+    ld [nes_nametable_queue_overflow], a
+    jp nes_ppu_increment_addr
+ENDC
+
+.generic:
     call nes_ppu_get_addr_hl
     ld a, h
     cp $20
@@ -620,16 +706,272 @@ ENDC
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
 
-SECTION "NES stage bit masks", ROM0, ALIGN[3]
-nes_stage_bit_masks:
-    db $01, $02, $04, $08, $10, $20, $40, $80
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
+; One byte of nes_ppu_write_run: HL = source (GB), DE = PPU address
+; ($2000-$3EFF), WRAM bank 1. \1 = 1 advances the source. Same effects as
+; the stitched nes_ppu_write_data fast path (queue room is pre-checked).
+; The stage mark and queue append run with interrupts off: the paced VBlank
+; ISR's queue retire (new generation + entry move) must not land between
+; them. Clobbers A/BC.
+MACRO RUN_ONE
+IF \1
+    ld a, [hli]
+ELSE
+    ld a, [hl]
+ENDC
+    push hl
+    ld c, a
+    ld a, d
+    and $07
+    or $D0
+    ld h, a
+    ld l, e
+    ld [hl], c ; authoritative WRAM (bank 1)
+    ld a, h
+    add HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld h, a
+    di
+    ld a, [nes_stage_gen]
+    ld b, a
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, [hl]
+    cp b
+    jr z, .dup\@
+    ld [hl], b
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, h
+    sub HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld b, a
+    ld c, l
+    ld a, [nes_nametable_queue_ptr_lo]
+    ld l, a
+    ld a, [nes_nametable_queue_ptr_hi]
+    ld h, a
+    ld [hl], c
+    inc l
+    ld [hl], b
+    inc hl
+    ld a, l
+    ld [nes_nametable_queue_ptr_lo], a
+    ld a, h
+    ld [nes_nametable_queue_ptr_hi], a
+    ei
+    jr .next\@
+.dup\@:
+    ld a, $01
+    ldh [rSVBK], a
+    ei
+.next\@:
+    pop hl
+    ld a, [nes_run_inc]
+    add e
+    ld e, a
+    jr nc, .nc\@
+    inc d
+.nc\@:
+ENDM
+ENDC
+
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
+SECTION "NES PPU write run temps", WRAM0
+nes_run_count: ds 1
+nes_run_inc:   ds 1
+nes_run_y:     ds 1
+
+SECTION "NES PPU write run", ROM0
+; Batched form of the stitched $2007 fast path for a VRAM-buffer copy loop
+; (SMB $8EB6, tools/native_vram_run.py):
+;   L: BCS +1 / INY / LDA (zp),Y / STA $2007 / DEX / BNE L
+; In: HL = GB address of the zero-page pointer; NES X/Y/C in HRAM.
+; Handled only when every byte would take the nes_ppu_write_data fast path
+; (vertical mirroring, NMI active, split/stitch live, no queue overflow, the
+; whole run stays in $2000-$3EFF), X != 0, and the source run stays inside
+; NES RAM without Y wrapping. Per byte it has exactly the fast path's effects
+; (authoritative store, once-per-transaction staging, address increment).
+; Out: A=1 handled: NES A/X/Y/Z/N in HRAM (X=0, Z set, N clear, C kept).
+;      A=0 not handled: nothing changed, BC preserved.
+; Clobbers DE/HL. Leaves WRAM bank 1 selected.
+nes_ppu_write_run:
+    push bc
+    ld a, [nes_mirroring]
+    dec a
+    jp nz, .no
+    ld a, [nes_nmi_active]
+    and a
+    jp z, .no
+    ldh a, [nes_split_active]
+    ld b, a
+    ld a, [nes_hstitch_valid]
+    or b
+    jp z, .no
+    ld a, [nes_nametable_queue_overflow]
+    and a
+    jp nz, .no
+    ldh a, [nes_x]
+    and a
+    jp z, .no
+    ld [nes_run_count], a
+    ; DE = zero-page pointer; must be NES RAM $0000-$07FF.
+    ld a, [hli]
+    ld e, a
+    ld a, [hl]
+    ld d, a
+    cp $08
+    jp nc, .no
+    ; B = final Y, DE = first source byte (NES address).
+    ldh a, [nes_y]
+    ld b, a
+    ldh a, [nes_c_shadow]
+    and a
+    jr nz, .src_repeat
+    ld a, [nes_run_count]
+    add b
+    jp c, .no ; Y would wrap
+    ld c, a   ; final Y = Y + X; bytes come from ptr + Y + 1 .. ptr + Y + X
+    ld a, b
+    inc a
+    add e
+    ld e, a
+    jr nc, .src_nc
+    inc d
+.src_nc:
+    ; last byte ptr + Y + X = DE + X - 1 must stay below $0800
+    ld a, [nes_run_count]
+    dec a
+    add e
+    ld a, d
+    adc $00
+    cp $08
+    jp nc, .no
+    ld a, c
+    ld [nes_run_y], a
+    jr .src_ready
+.src_repeat:
+    ld a, b   ; the same byte ptr + Y every time, Y unchanged
+    ld [nes_run_y], a
+    add e
+    ld e, a
+    jr nc, .src_repeat_nc
+    inc d
+.src_repeat_nc:
+    ld a, d
+    cp $08
+    jp nc, .no
+.src_ready:
+    ; Last PPU address = addr + inc * (X - 1) must stay in $2000-$3EFF.
+    ld a, [nes_ppu_addr_hi]
+    cp $20
+    jp c, .no
+    push de
+    ld a, [nes_run_count]
+    dec a
+    ld l, a
+    ld h, $00
+    ld a, [nes_ppuctrl]
+    bit 2, a
+    ld a, $01
+    jr z, .inc_ready
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld a, $20
+.inc_ready:
+    ld [nes_run_inc], a
+    ld a, [nes_ppu_addr_lo]
+    ld e, a
+    ld a, [nes_ppu_addr_hi]
+    ld d, a
+    add hl, de
+    ld a, h
+    cp $3F
+    pop hl ; HL = source (NES address)
+    jp nc, .no
+    ; Queue room for every byte (duplicates only need less): the VBlank
+    ; retire can only shrink the queue, so no byte of the run can overflow.
+    push hl
+    ld a, [nes_run_count]
+    ld l, a
+    ld h, $00
+    add hl, hl
+    ld a, [nes_nametable_queue_ptr_lo]
+    add l
+    ld l, a
+    ld a, [nes_nametable_queue_ptr_hi]
+    adc h
+    cp $E0
+    jr c, .room_ok
+    jr nz, .room_no
+    ld a, l
+    and a
+    jr z, .room_ok
+.room_no:
+    pop hl
+    jp .no
+.room_ok:
+    pop hl
+    ; Committed. Source NES RAM address -> GB WRAM0.
+    ld a, h
+    or $C0
+    ld h, a
+    ld a, $01
+    ld [nes_nametable_stage_used], a
+    ldh [rSVBK], a
+    ldh a, [nes_c_shadow]
+    and a
+    jr nz, .loop_repeat
+
+.loop:
+    RUN_ONE 1
+    ld a, [nes_run_count]
+    dec a
+    ld [nes_run_count], a
+    jr nz, .loop
+    dec hl
+    ld c, [hl]
+    jr .done
+
+.loop_repeat:
+    RUN_ONE 0
+    ld a, [nes_run_count]
+    dec a
+    ld [nes_run_count], a
+    jr nz, .loop_repeat
+    ld c, [hl]
+
+.done:
+    ld a, e
+    ld [nes_ppu_addr_lo], a
+    ld a, d
+    ld [nes_ppu_addr_hi], a
+    ld a, c
+    ldh [nes_a], a
+    ld a, [nes_run_y]
+    ldh [nes_y], a
+    xor a
+    ldh [nes_x], a
+    ldh [nes_z_shadow], a
+    ldh [nes_n_shadow], a
+    pop bc
+    inc a
+    ret
+
+.no:
+    pop bc
+    xor a
+    ret
+ENDC
+
 
 SECTION "NES stage first visit", ROM0
 ; Append physical virtual nametable address HL ($D000-$D7FF) to the
 ; current translated-NMI transaction. The tile/attribute value itself is already
 ; stored in authoritative WRAM, so duplicate addresses are harmless; the queue
 ; reads the final byte after RTI, so repeats within one NMI are suppressed via
-; the WRAMX bank-6 staging bitmap (one bit per physical address).
+; the WRAMX bank-6 generation map (one byte per physical address).
 ; HL is preserved; BC/DE are clobbered; WRAM bank 1 is restored.
 nes_ppu_stage_nametable_hl:
     ld a, [nes_nametable_queue_overflow]
@@ -639,37 +981,20 @@ nes_ppu_stage_nametable_hl:
     ld a, $01
     ld [nes_nametable_stage_used], a
 
-    ; B = bit mask for the low three address bits.
-    ld a, l
-    and $07
-    add LOW(nes_stage_bit_masks)
-    ld c, a
-    ld b, HIGH(nes_stage_bit_masks)
-    ld a, [bc]
-    ld b, a
-
-    ; DE = D800 + (((H & 7) << 5) | (L >> 3)) selects the bitmap byte.
-    ld a, l
-    srl a
-    srl a
-    srl a
-    ld e, a
+    ; DE = generation byte for HL ($Dxxx + $800).
     ld a, h
-    and $07
-    swap a
-    add a
-    or e
-    ld e, a
-    ld d, HIGH(nes_nametable_stage_seen)
+    add HIGH(nes_nametable_stage_seen - nes_nametable_ram)
+    ld d, a
+    ld e, l
+    ld a, [nes_stage_gen]
+    ld b, a
 
     ld a, $06
     ldh [rSVBK], a
     ld a, [de]
-    ld c, a
-    and b
-    jr nz, .stage_duplicate
-    ld a, c
-    or b
+    cp b
+    jr z, .stage_duplicate
+    ld a, b
     ld [de], a
     ld a, $01
     ldh [rSVBK], a

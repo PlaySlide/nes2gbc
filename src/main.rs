@@ -262,6 +262,36 @@ fn main() -> ExitCode {
 
         emit_follow_hint_init(&mut asm, follow_slot);
 
+        // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the
+        // interprocedural asm passes (tools/rts_return_sets.py).
+        let mut cfg_txt = String::new();
+        cfg_txt.push_str(&format!("V {:04X} {:04X} {:04X}\n", vectors.reset, vectors.nmi, vectors.irq_brk));
+        for block in graph.blocks.values() {
+            cfg_txt.push_str(&format!("B {:04X}\n", block.start));
+            for ins in &block.instructions {
+                cfg_txt.push_str(&format!("I {:04X} {:?} {:?}\n", ins.pc, ins.def.mnemonic, ins.def.mode));
+            }
+            for edge in &block.edges {
+                let kind = match edge.kind {
+                    cfg::EdgeKind::Fallthrough => "fall",
+                    cfg::EdgeKind::BranchTaken => "branch",
+                    cfg::EdgeKind::Jump => "jump",
+                    cfg::EdgeKind::Call => "call",
+                    cfg::EdgeKind::CallReturn => "ret",
+                    cfg::EdgeKind::IndirectJump { .. } => "ind",
+                };
+                match edge.target {
+                    Some(t) => cfg_txt.push_str(&format!("E {kind} {t:04X}\n")),
+                    None => cfg_txt.push_str(&format!("E {kind} -\n")),
+                }
+            }
+        }
+        let cfg_path = parent.join(format!("{stem}.cfg.txt"));
+        if let Err(err) = fs::write(&cfg_path, cfg_txt) {
+            eprintln!("error writing {}: {err}", cfg_path.display());
+            return ExitCode::FAILURE;
+        }
+
         if let Err(err) = fs::write(&out_path, asm) {
             eprintln!("error writing {}: {err}", out_path.display());
             return ExitCode::FAILURE;

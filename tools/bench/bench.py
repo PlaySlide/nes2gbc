@@ -10,7 +10,16 @@ Metric definitions
                   (nes_8057) is next reached (includes VBlank/STAT ISR time).
 Input is scheduled per NES NMI index (applied exactly at the $4016 latch), so
 game logic is deterministic across builds; NES RAM ($C000-$C7FF) hashes at fixed
-NMI indices and framebuffer hashes after fixed NMIs verify output is unchanged.
+NMI indices and framebuffer hashes after fixed NMIs verify output is unchanged. The framebuffer for
+check NMI N is the first emulator frame in which NMI N+1 starts; since 2026-10 it is
+also taken when NMIs N+1 and N+2 start in the same emulator frame (previously that
+screenshot was silently dropped, changing `check` without any output change).
+`check` is exact but, with PACING=1, which NES frame is on screen at that moment
+depends on timing, so a faster build can legitimately change it.
+`gate` is the correctness gate: NES RAM at every check NMI plus "published frame"
+screenshots (the LCD frame right after the VBlank commit that publishes NES frame
+N), compared with ref_smb.json (written from fe9c3c3 PACING=0). Frames pacing
+never published are counted, not compared. PACING=0 and PACING=1 both pass.
 """
 import argparse, hashlib, json, os, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,9 +50,55 @@ SCHEDULE = [
     (300, 2000, {"right"}),
     # periodic jumps while walking
 ] + [(s, s + 25, {"right", "a"}) for s in range(330, 2000, 70)]
+# Heavy-action scenario (--scenario heavy): run (B) right through 1-1 hopping
+# over goombas until Mario is stopped at the tall pipe by goombas he cannot
+# safely jump; 2-3 enemies stay active while he keeps hopping. Frozen from a
+# closed-loop controller run (heavy window: 640-1100, enemies 2-3).
+SCHEDULE_HEAVY = [(100, 106, {"start"}), (300, 515, {"b", "right"}), (515, 516, {"left"}),
+                  (516, 1200, {"b", "right"})] + [(a, b, {"a"}) for a, b in [
+    (416, 426), (516, 534), (609, 625), (680, 690), (729, 744), (767, 782), (805, 820),
+    (843, 858), (881, 896), (919, 937), (960, 978), (1001, 1019), (1042, 1060), (1083, 1101),
+    (1124, 1142), (1165, 1183)]]
+# Harsh scenario (--scenario harsh): walk right through 1-1 jumping OVER enemies
+# (never stomping) so they pile up while the screen scrolls; frames 1580-2050
+# cover the goomba pairs + koopa + goomba groups near the stairs (2-5 enemies,
+# avg 2.8, scrolling). Frozen from a closed-loop controller run.
+SCHEDULE_HARSH = [
+    (100, 106, {"start"}), (300, 471, {"right"}), (471, 494, {"a", "right"}),
+    (494, 590, {"right"}), (590, 615, {"b", "left"}), (615, 628, {"b", "right"}),
+    (628, 629, {"a", "b", "right"}), (629, 661, {"a", "right"}), (661, 778, {"right"}),
+    (778, 803, {"b", "left"}), (803, 816, {"b", "right"}), (816, 817, {"a", "b", "right"}),
+    (817, 849, {"a", "right"}), (849, 899, {"right"}), (899, 922, {"a", "right"}),
+    (922, 948, {"right"}), (948, 973, {"b", "left"}), (973, 986, {"b", "right"}),
+    (986, 987, {"a", "b", "right"}), (987, 1019, {"a", "right"}), (1019, 1147, {"right"}),
+    (1147, 1172, {"b", "left"}), (1172, 1185, {"b", "right"}), (1185, 1186, {"a", "b", "right"}),
+    (1186, 1218, {"a", "right"}), (1218, 1341, {"right"}), (1341, 1342, {"a", "b", "right"}),
+    (1342, 1372, {"a", "right"}), (1372, 1522, {"right"}), (1522, 1523, {"a", "b", "right"}),
+    (1523, 1553, {"a", "right"}), (1553, 1611, {"right"}), (1611, 1634, {"a", "right"}),
+    (1634, 1709, {"right"}), (1709, 1732, {"a", "right"}), (1732, 1809, {"right"}),
+    (1809, 1832, {"a", "right"}), (1832, 1922, {"right"}), (1922, 1945, {"a", "right"}),
+    (1945, 1971, {"right"}), (1971, 1994, {"a", "right"}), (1994, 2072, {"right"}),
+    (2072, 2097, {"b", "left"}), (2097, 2110, {"b", "right"}), (2110, 2111, {"a", "b", "right"}),
+    (2111, 2143, {"a", "right"}), (2143, 2164, {"right"}), (2164, 2189, {"b", "left"}),
+    (2189, 2202, {"b", "right"}), (2202, 2203, {"a", "b", "right"}), (2203, 2235, {"a", "right"}),
+    (2235, 2261, {"right"}), (2261, 2286, {"b", "left"}), (2286, 2299, {"b", "right"}),
+    (2299, 2300, {"a", "b", "right"}), (2300, 2332, {"a", "right"}), (2332, 2356, {"right"}),
+    (2356, 2381, {"b", "left"}), (2381, 2394, {"b", "right"}), (2394, 2395, {"a", "b", "right"}),
+    (2395, 2100, {"a", "right"}),
+]
+SCENARIOS = {
+    "std": {"schedule": SCHEDULE, "check": [60, 99, 150, 250, 320, 400, 500, 600, 700, 800, 900, 1000],
+            "windows": {"title": (30, 100), "play": (360, 850)}, "nmis": 1001, "ref": "ref_smb.json"},
+    "heavy": {"schedule": SCHEDULE_HEAVY, "check": [400, 500, 600, 650, 700, 800, 900, 1000, 1100],
+              "windows": {"play": (360, 640), "heavy": (640, 1100)}, "nmis": 1101, "ref": "ref_smb_heavy.json"},
+    "harsh": {"schedule": SCHEDULE_HARSH, "check": [400, 800, 1200, 1580, 1700, 1800, 1900, 2000, 2050],
+              "windows": {"walk": (360, 1580), "harsh": (1580, 2050)}, "nmis": 2051, "ref": "ref_smb_harsh.json"},
+}
 BTN = {"start": (W.PRESS_BUTTON_START, W.RELEASE_BUTTON_START),
        "right": (W.PRESS_ARROW_RIGHT, W.RELEASE_ARROW_RIGHT),
-       "a": (W.PRESS_BUTTON_A, W.RELEASE_BUTTON_A)}
+       "a": (W.PRESS_BUTTON_A, W.RELEASE_BUTTON_A),
+       "b": (W.PRESS_BUTTON_B, W.RELEASE_BUTTON_B),
+       "left": (W.PRESS_ARROW_LEFT, W.RELEASE_ARROW_LEFT)}
 
 def buttons_for(n):
     s = set()
@@ -60,7 +115,12 @@ def run(rom, sym, nmis, profile=None, shots=None):
     pb = PyBoy(rom, window="null", cgb=True, sound_emulated=False)
     pb.set_emulation_speed(0)
     st = {"nmi": 0, "pressed": set(), "nmi_cyc": [], "idle_cyc": [], "waiting": False,
-          "nmi_tick": [], "ram": {}, "latches": 0}
+          "nmi_tick": [], "ram": {}, "latches": 0, "vmem": {}, "rti": 0, "commits": []}
+
+    def screen_mem():
+        # GBC screen memory: VRAM banks 0+1 (tiles, maps, attributes) and OAM.
+        v = b"".join(bytes(pb.memory[k, 0x8000:0x9FFF]) + bytes([pb.memory[k, 0x9FFF]]) for k in (0, 1))
+        return hashlib.sha1(v + bytes(pb.memory[0xFE00:0xFEA0])).hexdigest()[:12]
 
     def on_nmi(_):
         c = pb._cycles()
@@ -68,6 +128,10 @@ def run(rom, sym, nmis, profile=None, shots=None):
         st["nmi_cyc"].append(c)
         st["nmi_tick"].append(st["tick"])
         st["waiting"] = True
+        if (st["nmi"] - 1) in CHECK_NMIS:
+            # state produced by NES frame N, sampled when NMI N+1 starts; independent of
+            # how many NMIs fall in one emulator frame (unlike the LCD screenshot)
+            st["vmem"][st["nmi"] - 1] = screen_mem()
         if st["nmi"] in CHECK_NMIS:
             st["ram"][st["nmi"]] = hashlib.sha1(bytes(pb.memory[0xC000:0xC800])).hexdigest()[:12]
 
@@ -89,6 +153,20 @@ def run(rom, sym, nmis, profile=None, shots=None):
     b, a = syms["nes_8057"]; pb.hook_register(b, a, on_idle, None)
     b, a = syms["nes_controller_latch"]; pb.hook_register(b, a, on_latch, None)
 
+    # Published-frame screenshots: NES frame k is published by the VBlank commit
+    # that runs after the k-th RTI; the LCD frame rendered right after that
+    # commit shows it. Unlike the NMI-relative shot this does not depend on how
+    # far pacing lets the next NMI run ahead, so PACING=0 and PACING=1 agree.
+    def on_rti(_):
+        st["rti"] += 1
+    def on_commit(_):
+        st["commits"].append(st["rti"])
+    have_pub = "nes_rti_pop_hl" in syms and "nes_gbc_vblank_isr.commit_ready" in syms
+    if have_pub:
+        b, a = syms["nes_rti_pop_hl"]; pb.hook_register(b, a, on_rti, None)
+        b, a = syms["nes_gbc_vblank_isr.commit_ready"]; pb.hook_register(b, a, on_commit, None)
+    pubs, pub_next = {}, []
+
     prof = None
     screens = {}
     st["tick"] = 0
@@ -103,14 +181,23 @@ def run(rom, sym, nmis, profile=None, shots=None):
         if prof is not None and st["nmi"] >= WINDOWS[PROFWIN][1] and "prof_end" not in st:
             pb.prof_detach(); st["prof_end"] = 1
         before = st["nmi"]
+        st["commits"] = []
         pb.tick(1, True)
         st["tick"] += 1
-        if st["nmi"] != before and (st["nmi"] - 1) in CHECK_NMIS and (st["nmi"] - 1) not in screens:
-            arr = pb.screen.ndarray
-            screens[st["nmi"] - 1] = hashlib.sha1(arr.tobytes()).hexdigest()[:12]
-            if shots:
-                os.makedirs(shots, exist_ok=True)
-                pb.screen.image.save(os.path.join(shots, "nmi%04d.png" % (st["nmi"] - 1)))
+        if pub_next or st["commits"]:
+            h = hashlib.sha1(pb.screen.ndarray.tobytes()).hexdigest()[:12]
+            for k in pub_next:
+                pubs.setdefault(k, h)
+            pub_next = [k for k in st["commits"] if k in CHECK_NMIS and k not in pubs]
+        # screenshot for check NMI N = first emulator frame in which NMI N+1 started
+        # (also when NMIs N+1 and N+2 share that frame, which used to drop the shot)
+        for n in range(before, st["nmi"]):
+            if n in CHECK_NMIS and n not in screens:
+                arr = pb.screen.ndarray
+                screens[n] = hashlib.sha1(arr.tobytes()).hexdigest()[:12]
+                if shots:
+                    os.makedirs(shots, exist_ok=True)
+                    pb.screen.image.save(os.path.join(shots, "nmi%04d.png" % n))
     wall = time.time() - t0
     if prof is not None:
         pb.prof_detach()
@@ -122,6 +209,7 @@ def run(rom, sym, nmis, profile=None, shots=None):
         ticks = st["nmi_tick"][hi - 1] - st["nmi_tick"][lo - 1]
         cyc = st["nmi_cyc"][hi - 1] - st["nmi_cyc"][lo - 1]
         work = [c - st["nmi_cyc"][n - 1] for n, c in st["idle_cyc"] if lo <= n < hi]
+        ws = sorted(work) or [0]
         res[name] = {
             "pct_native": round(100.0 * (hi - lo) / ticks, 2),
             "host_frames_per_nes_frame": round(ticks / (hi - lo), 3),
@@ -129,26 +217,65 @@ def run(rom, sym, nmis, profile=None, shots=None):
             "work_cycles_per_nes_frame": int(sum(work) / max(1, len(work))),
             "work_pct_of_host_frame": round(100.0 * sum(work) / max(1, len(work)) / HOST_FRAME_CYCLES, 1),
             "max_work_cycles": max(work) if work else 0,
+            "p50_work_cycles": ws[len(ws) // 2],
+            "p90_work_cycles": ws[min(len(ws) - 1, len(ws) * 9 // 10)],
+            "frames_over_budget": sum(1 for w in work if w > HOST_FRAME_CYCLES),
+            "frames": len(work),
         }
     res["ram_hash"] = st["ram"]
     res["screen_hash"] = screens
+    res["pub_hash"] = pubs
+    res["vmem_hash"] = st["vmem"]
+    # smem: NES RAM + GBC VRAM/OAM sampled at NMI N+1 entry. Stricter than the LCD shot and
+    # timing-independent with PACING=0; with PACING=1 OAM/attribute publish timing leaks in,
+    # so it is a diagnostic there, not a gate.
+    res["smem"] = hashlib.sha1(json.dumps([st["ram"], st["vmem"]], sort_keys=True).encode()).hexdigest()[:12]
+    # check (the gate): NES RAM + LCD screenshot hashes at CHECK_NMIS
     res["check"] = hashlib.sha1(json.dumps([st["ram"], screens], sort_keys=True).encode()).hexdigest()[:12]
     pb.stop(save=False)
     return res
+
+def gate(r, ref):
+    """Compare against a reference run: RAM at every check NMI must match, and every
+    published-frame screenshot this run has must match (a frame that pacing never
+    published is skipped and counted; it has no image to compare)."""
+    bad = [f"ram@{n}" for n in CHECK_NMIS if str(n) in ref["ram"] and r["ram_hash"].get(n) != ref["ram"][str(n)]]
+    cmp = skip = 0
+    for n in CHECK_NMIS:
+        if str(n) not in ref["pub"]:
+            continue
+        if n not in r["pub_hash"]:
+            skip += 1
+        elif r["pub_hash"][n] != ref["pub"][str(n)]:
+            bad.append(f"pub@{n}")
+        else:
+            cmp += 1
+    return ("OK" if not bad else "FAIL " + ",".join(bad)) + f" ({cmp} frames matched, {skip} unpublished)"
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--rom", default=os.path.join(HERE, "..", "..", "runtime", "build", "runtime.gbc"))
     ap.add_argument("--sym", default=None)
-    ap.add_argument("--nmis", type=int, default=1001)
+    ap.add_argument("--nmis", type=int, default=None)
+    ap.add_argument("--scenario", default="std", choices=sorted(SCENARIOS))
     ap.add_argument("--profile", default=None, help="save per-(bank,pc) cycle histogram .npy for play window")
-    ap.add_argument("--profwin", default="play", choices=["title", "play"])
+    ap.add_argument("--profwin", default="play", choices=["title", "play", "heavy", "harsh", "walk"])
     ap.add_argument("--shots", default=None, help="dir for PNG screenshots at check NMIs")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--ref", default=None, help="gate reference (RAM + published frames); default per scenario")
+    ap.add_argument("--write-ref", action="store_true", help="write this run as the gate reference")
     a = ap.parse_args()
     PROFWIN = a.profwin
+    sc = SCENARIOS[a.scenario]
+    SCHEDULE[:] = sc["schedule"]; CHECK_NMIS[:] = sc["check"]
+    WINDOWS.clear(); WINDOWS.update(sc["windows"])
+    a.nmis = a.nmis or sc["nmis"]
+    a.ref = a.ref or os.path.join(HERE, sc["ref"])
     sym = a.sym or os.path.splitext(a.rom)[0] + ".sym"
     r = run(a.rom, sym, a.nmis, a.profile, a.shots)
+    if a.write_ref:
+        json.dump({"ram": r["ram_hash"], "pub": r["pub_hash"]}, open(a.ref, "w"), indent=1, sort_keys=True)
+    r["gate"] = gate(r, json.load(open(a.ref))) if os.path.exists(a.ref) else "no reference"
     if a.json:
         print(json.dumps(r, indent=1))
     else:
@@ -157,6 +284,11 @@ if __name__ == "__main__":
                 d = r[w]
                 print(f"{w:6s} {d['pct_native']:6.2f}% native  {d['host_frames_per_nes_frame']:.3f} hostfr/NESfr  "
                       f"work {d['work_cycles_per_nes_frame']:7d} cyc/NESfr ({d['work_pct_of_host_frame']}% of host frame, max {d['max_work_cycles']})")
-        print(f"check={r['check']}  nmis={r['nmis']} ticks={r['ticks']} wall={r['wall_s']}s")
+                if a.scenario != "std":
+                    print(f"       dist p50 {d['p50_work_cycles']} p90 {d['p90_work_cycles']} max {d['max_work_cycles']} "
+                          f"over-budget {d['frames_over_budget']}/{d['frames']}")
+        print(f"gate={r['gate']}")
+        print(f"check={r['check']}  smem={r['smem']}  nmis={r['nmis']} ticks={r['ticks']} wall={r['wall_s']}s")
         print("ram  ", r["ram_hash"])
         print("screen", r["screen_hash"])
+        print("vmem ", r["vmem_hash"])

@@ -92,7 +92,18 @@ ldh [nes_p], a
 """
 
 
-def emit(pc, m, keep_v=True):
+def emit(pc, m, keep_v=True, krts=False):
+    K = f"{m['k']:04X}"
+    if krts:
+        # K: AND #$0F / STA $04 / LDA $03 (Z/N) inline; K's RTS stays shared.
+        keep03 = "ld e, a\n"
+        ktail = (f"and $0F\nld [$C004], a\nld a, e\nldh [nes_z_shadow], a\nldh [nes_n_shadow], a\n"
+                 f"ldh [nes_a], a\nld a, BANK(nes_{K}_rts)\nld hl, nes_{K}_rts\n"
+                 "jp nes_jump_known_hl_a_8bit ; 8-bit translated-code bank switch\n")
+    else:
+        keep03 = ""
+        ktail = (f"ldh [nes_a], a\nld a, BANK(nes_{K})\nld hl, nes_{K}\n"
+                 "jp nes_jump_known_hl_a_8bit ; 8-bit translated-code bank switch\n")
     ind = "    "
     vblock = V_BLOCK if keep_v else "; V not observable in this ROM: overflow flag not produced\n"
     t1 = f"nes_native_bbc_t1_{pc:04X}"
@@ -115,12 +126,8 @@ push hl
 ldh a, [nes_y]
 ld c, a
 ld [$C004], a
-ld hl, {t1}
-add l
+ld h, HIGH({t1})
 ld l, a
-adc h
-sub l
-ld h, a
 ld e, [hl]
 ld a, b
 add ${m['zA']:02X}
@@ -167,13 +174,8 @@ add d
 ld [$C006], a
 ld l, a
 push hl
-ld hl, {t2}
-ld a, c
-add l
-ld l, a
-adc h
-sub l
-ld h, a
+ld h, HIGH({t2})
+ld l, c
 ld e, [hl]
 ld a, b
 add ${m['zC']:02X}
@@ -186,9 +188,8 @@ ld e, a
 sub $20
 ld [$C002], a
 ld d, a
-ccf
-ld a, $00
-rla
+sbc a
+inc a ; 6502 C = !borrow as 1/0
 ldh [nes_c_shadow], a
 {vblock}pop hl
 ld a, l
@@ -201,7 +202,7 @@ or $C0
 ld h, a
 ld a, [hl]
 ld [$C003], a
-ld a, c
+{keep03}ld a, c
 ldh [nes_y], a
 ldh a, [nes_a]
 and a
@@ -215,12 +216,7 @@ add ${m['zA']:02X}
 ld l, a
 ld h, $C0
 ld a, [hl]
-ldh [nes_a], a
-ld a, BANK(nes_{m['k']:04X})
-ld hl, nes_{m['k']:04X}
-jp nes_jump_known_hl_a_8bit ; 8-bit translated-code bank switch
-{t1}:
-""".splitlines()
+{ktail}""".splitlines()
     out = []
     for x in body:
         if x.endswith(":") or x.startswith(";"):
@@ -229,10 +225,34 @@ jp nes_jump_known_hl_a_8bit ; 8-bit translated-code bank switch
             out.append(ind + x + "\n")
     def db(bs):
         return [ind + "db " + ", ".join(f"${v:02X}" for v in bs[i:i + 16]) + "\n" for i in range(0, 256, 16)]
-    out += db(m["T1"])
-    out.append(f"{t2}:\n")
-    out += db(m["T2"])
-    return out
+    # 256-byte-aligned ROM0 copies: the index is the low byte (any code bank).
+    tables = [f"\nSECTION \"Native bbc tables {pc:04X}\", ROM0, ALIGN[8]\n", f"{t1}:\n"] + db(m["T1"])
+    tables += [f"{t2}:\n"] + db(m["T2"])
+    return out, tables
+
+
+def label_k_rts(lines, k):
+    """Label K's RTS (after AND #$0F / STA $04 / LDA $03 materialized) as
+    nes_K_rts so the native body can run K's three instructions itself."""
+    K = f"{k:04X}"
+    if any(code(l) == f"nes_{K}_rts:" for l in lines):
+        return True
+    for j, l in enumerate(lines):
+        if code(l) != f"nes_{K}:":
+            continue
+        q = j + 1
+        while q < len(lines) and not code(lines[q]).startswith("SECTION") and not ANY_LABEL.match(code(lines[q])):
+            if code(lines[q]) == "PROFILE_INC nes_profile_rts_pop":
+                prev = [code(x) for x in lines[j:q] if code(x)]
+                pcs = [int(PC_COMMENT.match(x).group(1), 16) for x in lines[j:q] if PC_COMMENT.match(x)]
+                if prev[-4:] == ["ld a, [$C003]", "ldh [nes_z_shadow], a", "ldh [nes_n_shadow], a", "ldh [nes_a], a"] \
+                        and pcs == [k, k + 2, k + 4, k + 6]:
+                    lines.insert(q, f"nes_{K}_rts:\n")
+                    return True
+                return False
+            q += 1
+        return False
+    return False
 
 
 def main(asm, rom_path):
@@ -245,6 +265,7 @@ def main(asm, rom_path):
     keep_v = v_observable(text)
     lines = text.splitlines(keepends=True)
     done = 0
+    extra = []
     i = 0
     while i < len(lines):
         mm = LABEL_RE.match(code(lines[i]))
@@ -259,6 +280,10 @@ def main(asm, rom_path):
         if not m or not any(re.fullmatch(rf"nes_{m['k']:04X}:", code(l)) for l in lines):
             i += 1
             continue
+        here = lines[i]
+        krts = label_k_rts(lines, m["k"])
+        if lines[i] is not here:
+            i += 1  # K's label was inserted above this block
         e = i + 1
         while e < len(lines) and not code(lines[e]).startswith("SECTION") and not ANY_LABEL.match(code(lines[e])):
             e += 1
@@ -271,9 +296,12 @@ def main(asm, rom_path):
         if max(pcs) != pc + 24:
             i += 1
             continue
-        lines[first:e] = emit(pc, m, keep_v)
+        body, tables = emit(pc, m, keep_v, krts)
+        lines[first:e] = body
+        extra.extend(tables)
         done += 1
         i = first + 1
+    lines.extend(extra)
     p.write_text("".join(lines))
     print(f"native-blockbuf-collision: {done} routine(s) replaced")
 

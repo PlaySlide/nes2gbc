@@ -580,15 +580,17 @@ nes_joy_serial_loop::
     ; byte (A before the final ROL) and zero-page byte survive.
     ldh a, [nes_x]
     add d
-    jr c, .generic
+    jp c, .generic
     cp $17
-    jr z, .fast4017
+    jp z, .fast4017
     cp $16
-    jr nz, .generic
+    jp nz, .generic
     ld a, [nes_controller_strobe]
     and a
-    jr nz, .generic
+    jp nz, .generic
     ldh a, [nes_y]
+    cp $07
+    jr z, .fast7
     ld b, a
     ldh a, [nes_a]
     ld c, a
@@ -616,10 +618,55 @@ nes_joy_serial_loop::
     ld [hl], a
     ld a, d
     ld [nes_controller_shift], a
-    jr .done
+    jp .done
+.fast7:
+    ; Y = 7 (ReadPortBits after its first, translated iteration) in closed
+    ; form: A' = A.0 << 7 | rev(shift) >> 1, C = A.1, last PHA byte =
+    ; (A & 3) << 6 | rev(shift) >> 2, zp = A'.0, shift' = shift >> 7 | $FE.
+    ld a, [nes_controller_shift]
+    ld l, a
+    rlca
+    or $FE
+    ld [nes_controller_shift], a
+    ld h, HIGH(nes_bit_reverse)
+    ld a, [hl]
+    srl a
+    ld b, a
+    ldh a, [nes_a]
+    ld c, a
+    rrca
+    rrca
+    ld d, a
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+    ld a, d
+    and $C0
+    ld d, a
+    ld a, b
+    srl a
+    or d
+    ld d, a
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], d
+    ld a, b
+    and $01
+    ld h, $C0
+    ld l, e
+    ld [hl], a
+    ld a, c
+    rrca
+    and $80
+    or b
+    ld c, a
+    jp .done
 .fast4017:
     ; $4017 reads are 0 (nes_cpu_read_joy_hl): each bit shifts a 0 into A.
     ldh a, [nes_y]
+    cp $07
+    jr z, .fast17_7
     ld b, a
     ldh a, [nes_a]
     ld c, a
@@ -639,7 +686,32 @@ nes_joy_serial_loop::
     ld h, $C0
     ld l, e
     ld [hl], $00
-    jr .done
+    jp .done
+.fast17_7:
+    ; Y = 7: A' = A.0 << 7, C = A.1, last PHA byte = (A & 3) << 6, zp = 0.
+    ldh a, [nes_a]
+    ld c, a
+    rrca
+    rrca
+    ld b, a
+    ld a, $00
+    rla
+    ldh [nes_c_shadow], a
+    ld a, b
+    and $C0
+    ld b, a
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], b
+    ld h, $C0
+    ld l, e
+    ld [hl], $00
+    ld a, c
+    rrca
+    and $80
+    ld c, a
+    jp .done
 .generic:
     ldh a, [nes_y]
     ld b, a
@@ -1004,9 +1076,17 @@ IF !DEF(NES2GBC_NO_PACING)
     ld a, [nes_pace_idle_hi]
     and a
     jr z, .no_credit
+IF DEF(NES2GBC_CATCHUP)
+    ; Spend one banked VBlank (up to NES2GBC_CATCHUP_MAX accumulate).
+    ld a, [nes_pace_credit]
+    dec a
+    ld [nes_pace_credit], a
+    ld a, $01
+ELSE
     xor a
     ld [nes_pace_credit], a
     inc a
+ENDC
     ld [nes_pace_armed], a
     ldh [nes_host_vblank_pending], a
 .no_credit:
@@ -1126,21 +1206,7 @@ ENDC
 
     xor a
     ld [nes_nametable_stage_used], a
-    push hl
-    ld a, $06
-    ldh [rSVBK], a
-    xor a
-    ld hl, nes_nametable_stage_seen
-    ld b, $100 / 16
-.clear_nametable_stage_seen:
-REPT 16
-    ld [hli], a
-ENDR
-    dec b
-    jr nz, .clear_nametable_stage_seen
-    ld a, $01
-    ldh [rSVBK], a
-    pop hl
+    call nes_stage_new_generation
 
 .stage_seen_clear_done:
     xor a
@@ -1149,18 +1215,26 @@ ENDR
     ; games do not rewrite both scroll states on every NMI.
     PROFILE_INC nes_profile_nmi
 
-    ; Hardware interrupt stack frame: PC high, PC low, P with B clear.
+    ; Hardware interrupt stack frame: PC high, PC low, P with B clear
+    ; (three nes_stack_push_a inlined; nes_materialize_p keeps HL, E ends
+    ; holding the pushed P as before).
     ld b, h
     ld c, l
-    ld a, b
-    call nes_stack_push_a
-    ld a, c
-    call nes_stack_push_a
-
+    ldh a, [nes_sp]
+    ld l, a
+    ld h, $C1
+    ld [hl], b
+    dec l
+    ld [hl], c
+    dec l
     call nes_materialize_p
     and $EF
     or $20
-    call nes_stack_push_a
+    ld [hl], a
+    ld e, a
+    dec l
+    ld a, l
+    ldh [nes_sp], a
 
     ldh a, [nes_p]
     or $04
@@ -1173,6 +1247,33 @@ ENDR
 
 .no_nmi:
     xor a
+    ret
+
+; Start a new nametable staging transaction for the dedupe map: bump the
+; generation; on wrap clear the whole map. Clobbers AF/BC (HL preserved).
+; Leaves WRAM bank 1 selected.
+nes_stage_new_generation:
+    ld a, [nes_stage_gen]
+    inc a
+    ld [nes_stage_gen], a
+    ret nz
+    inc a
+    ld [nes_stage_gen], a
+    push hl
+    ld a, $06
+    ldh [rSVBK], a
+    xor a
+    ld hl, nes_nametable_stage_seen
+    ld b, $800 / 16
+.clear:
+REPT 16
+    ld [hli], a
+ENDR
+    dec b
+    jr nz, .clear
+    ld a, $01
+    ldh [rSVBK], a
+    pop hl
     ret
 
 nes_unimplemented_operand_read:
@@ -1229,12 +1330,32 @@ ENDC
     inc e
 ENDM
 
+; Snapshot -> live only (DE walk); the post-publication snapshot is dead.
+MACRO PACE_LOAD_DE ; var, snapshot index, kind
+    ld a, [de]
+IF STRCMP("\3", "H") == 0
+    ldh [\1], a
+ELSE
+    ld [\1], a
+ENDC
+    inc e
+ENDM
+
 DEF PACE_IDX_OAM_DIRTY EQU 4
 DEF PACE_IDX_MASK_DIRTY EQU 8
-DEF PACE_IDX_PALETTE_DIRTY EQU 18
-DEF PACE_IDX_SCROLL_DIRTY EQU 19
-DEF PACE_IDX_CTRL_DIRTY EQU 20
+DEF PACE_IDX_PALETTE_DIRTY EQU 16
+DEF PACE_IDX_SCROLL_DIRTY EQU 17
+DEF PACE_IDX_CTRL_DIRTY EQU 18
+DEF PACE_IDX_REBUILD_DIRTY EQU 11
+DEF PACE_IDX_OAM_EMIT EQU 14
+DEF PACE_IDX_OAM_READY EQU 15
 
+; Only state the VBlank commit reads or writes is snapshotted/swapped.
+; NMI-side bookkeeping that no ISR path touches (nes_nametable_stage_used,
+; nes_generic_hidden_change_count, nes_scroll_pair_count and
+; nes_split_pending_x/y/ctrl, used only by the $2005/$2006/$2007/PPUCTRL
+; handlers and NMI start) stays live: exchanging it twice per paced
+; publication was a no-op.
 MACRO PACE_FOR_VARS ; op macro
     \1 nes_ppuctrl, 0, W
     \1 nes_ppumask, 1, W
@@ -1245,38 +1366,75 @@ MACRO PACE_FOR_VARS ; op macro
     \1 nes_nametable_queue_ptr_hi, 6, W
     \1 nes_nametable_queue_overflow, 7, W
     \1 nes_mask_dirty, 8, W
-    \1 nes_nametable_stage_used, 9, W
-    \1 nes_split_duplicate_streak, 10, W
-    \1 nes_split_retire_grace_used, 11, W
-    \1 nes_generic_map_rebuild_dirty, 12, W
-    \1 nes_generic_hidden_change_count, 13, W
-    \1 nes_view_x, 14, H
-    \1 nes_view_y, 15, H
-    \1 nes_oam_emit_count, 16, H
-    \1 nes_oam_shadow_ready, 17, H
-    \1 nes_palette_dirty, 18, H
-    \1 nes_scroll_dirty, 19, H
-    \1 nes_ctrl_dirty, 20, H
-    \1 nes_scroll_pair_count, 21, H
-    \1 nes_split_active, 22, H
-    \1 nes_split_top_x, 23, H
-    \1 nes_split_top_y, 24, H
-    \1 nes_split_bottom_x, 25, H
-    \1 nes_split_bottom_y, 26, H
-    \1 nes_split_line, 27, H
-    \1 nes_split_top_ctrl, 28, H
-    \1 nes_split_bottom_ctrl, 29, H
-    \1 nes_split_pending_x, 30, H
-    \1 nes_split_pending_y, 31, H
-    \1 nes_split_pending_ctrl, 32, H
+    \1 nes_split_duplicate_streak, 9, W
+    \1 nes_split_retire_grace_used, 10, W
+    \1 nes_generic_map_rebuild_dirty, 11, W
+    \1 nes_view_x, 12, H
+    \1 nes_view_y, 13, H
+    \1 nes_oam_emit_count, 14, H
+    \1 nes_oam_shadow_ready, 15, H
+    \1 nes_palette_dirty, 16, H
+    \1 nes_scroll_dirty, 17, H
+    \1 nes_ctrl_dirty, 18, H
+    \1 nes_split_active, 19, H
+    \1 nes_split_top_x, 20, H
+    \1 nes_split_top_y, 21, H
+    \1 nes_split_bottom_x, 22, H
+    \1 nes_split_bottom_y, 23, H
+    \1 nes_split_line, 24, H
+    \1 nes_split_top_ctrl, 25, H
+    \1 nes_split_bottom_ctrl, 26, H
 ENDM
 
-ASSERT 33 <= $30 ; PACE_FOR_VARS entries fit nes_pace_snap
-ASSERT HIGH(nes_pace_snap) == HIGH(nes_pace_snap + 32) ; DE walk uses inc e
+ASSERT 27 <= $30 ; PACE_FOR_VARS entries fit nes_pace_snap
+ASSERT HIGH(nes_pace_snap) == HIGH(nes_pace_snap + 26) ; DE walk uses inc e
 
 ; Copy the just-completed frame's publishable state into the pacing snapshot.
 ; Clobbers AF/BC/DE/HL.
 nes_pace_take_snapshot:
+IF DEF(NES2GBC_CATCHUP)
+    ; Catch-up can complete a second frame before the VBlank that publishes
+    ; the first: the newer frame supersedes the snapshot (that older frame is
+    ; never shown on its own). Its queued entries stay in the queue; merge
+    ; its pending publications so nothing it changed is lost.
+    ld a, [nes_pace_snap_valid]
+    and a
+    jr z, .merge_done
+    ld hl, nes_pace_snap + PACE_IDX_MASK_DIRTY
+    ld a, [nes_mask_dirty]
+    or [hl]
+    ld [nes_mask_dirty], a
+    ld hl, nes_pace_snap + PACE_IDX_SCROLL_DIRTY
+    ldh a, [nes_scroll_dirty]
+    or [hl]
+    ldh [nes_scroll_dirty], a
+    ld hl, nes_pace_snap + PACE_IDX_CTRL_DIRTY
+    ldh a, [nes_ctrl_dirty]
+    or [hl]
+    ldh [nes_ctrl_dirty], a
+    ld hl, nes_pace_snap + PACE_IDX_REBUILD_DIRTY
+    ld a, [nes_generic_map_rebuild_dirty]
+    or [hl]
+    ld [nes_generic_map_rebuild_dirty], a
+    ; Palette: the snapshot copy equals the live shadow unless this frame
+    ; changed it (then palette_dirty is set and it is copied again).
+    ldh a, [nes_palette_dirty]
+    and a
+    jr nz, .merge_palette_done
+    ld a, [nes_pace_snap_palette]
+    ldh [nes_palette_dirty], a
+.merge_palette_done:
+    ; OAM: if this frame did no DMA, keep the older projected pace page.
+    ld a, [nes_oam_dirty]
+    and a
+    jr nz, .merge_done
+    ld a, [nes_pace_snap + PACE_IDX_OAM_DIRTY]
+    and a
+    jr z, .merge_done
+    call .merge_keep_oam
+    ret
+.merge_done:
+ENDC
     ; Project OAM now if needed, exactly as the commit would have.
     ld a, [nes_oam_dirty]
     and a
@@ -1337,11 +1495,29 @@ nes_pace_take_snapshot:
     ldh [nes_scroll_pair_count], a
     ret
 
+IF DEF(NES2GBC_CATCHUP)
+; take_snapshot body for a superseding frame without its own OAM DMA: keep
+; the older snapshot's OAM page, emit count and ready flag.
+.merge_keep_oam:
+    ld a, [nes_pace_snap + PACE_IDX_OAM_EMIT]
+    push af
+    ld a, [nes_pace_snap + PACE_IDX_OAM_READY]
+    push af
+    call .oam_snap_done
+    pop af
+    ld [nes_pace_snap + PACE_IDX_OAM_READY], a
+    pop af
+    ld [nes_pace_snap + PACE_IDX_OAM_EMIT], a
+    ld a, $01
+    ld [nes_pace_snap + PACE_IDX_OAM_DIRTY], a
+    ret
+ENDC
+
 ; After a paced publication flushed the snapshot's queue prefix
 ; [$D800, nes_pace_q_end), drop that prefix from the live queue (the running
-; NMI appended after it) and clear its dedupe-bitmap bytes so later writes to
-; those addresses are queued again. Clearing a whole bitmap byte can only
-; cause harmless duplicate entries. Runs in the ISR; WRAM bank 1 is current.
+; NMI appended after it) and start a new dedupe generation so later writes to
+; those addresses are queued again (can only cause harmless duplicate
+; entries). Runs in the ISR; WRAM bank 1 is current.
 nes_pace_retire_flushed_queue:
     ld a, [nes_pace_q_end_lo]
     ld e, a
@@ -1354,40 +1530,11 @@ nes_pace_retire_flushed_queue:
     and a
     ret z
 .clear_bits:
-    ; Walk prefix entries, clearing the stage-seen byte for each.
-    ld hl, nes_nametable_queue
-.bit_loop:
-    ld a, l
-    cp e
-    jr nz, .bit_entry
-    ld a, h
-    cp d
-    jr z, .bits_done
-.bit_entry:
-    ld a, [hli]
-    ld c, a
-    ld a, [hli]
-    ld b, a
-    ; index = ((B & 7) << 5) | (C >> 3)
-    ld a, c
-    srl a
-    srl a
-    srl a
-    ld c, a
-    ld a, b
-    and $07
-    swap a
-    add a
-    or c
-    ld c, a
-    ld b, HIGH(nes_nametable_stage_seen)
-    ld a, $06
-    ldh [rSVBK], a
-    xor a
-    ld [bc], a
-    ld a, $01
-    ldh [rSVBK], a
-    jr .bit_loop
+    ; Forget every staged mark (new generation). Live entries the running NMI
+    ; already queued may get a harmless duplicate entry if written again.
+    push de
+    call nes_stage_new_generation
+    pop de
 .bits_done:
     ; Move live entries [prefix_end, ptr) down to the queue start.
     ld hl, nes_nametable_queue
@@ -1435,20 +1582,34 @@ ASSERT LOW(nes_gbc_oam_shadow) == 0 && LOW(nes_pace_oam) == 0
 nes_pace_swap:
     ld de, nes_pace_snap
     PACE_FOR_VARS PACE_SWAP_DE
-    ld a, [nes_pace_snap_palette]
-    and a
-    ret z
-    ld hl, nes_gbc_palette_shadow
-    ld de, nes_pace_palette
-    ld b, $40
-.swap_palette:
-    ld c, [hl]
-    ld a, [de]
-    ld [hli], a
-    ld a, c
-    ld [de], a
-    inc e
-    dec b
-    jr nz, .swap_palette
+    ; The palette is not swapped: nes_video_sync_palette_shadow reads the
+    ; snapshot copy (nes_pace_palette) directly during a paced publication.
+    ret
+
+; Swap-back after a COMMITTED paced publication: the snapshot is retired
+; (snap_valid cleared right after), so only the running NMI's live state needs
+; restoring; copy it back instead of exchanging. Clobbers AF/BC/DE/HL.
+nes_pace_restore_live:
+    ld de, nes_pace_snap
+    PACE_FOR_VARS PACE_LOAD_DE
     ret
 ENDC
+
+SECTION "NES bit reverse", ROM0, ALIGN[8]
+nes_bit_reverse:
+    db $00, $80, $40, $C0, $20, $A0, $60, $E0, $10, $90, $50, $D0, $30, $B0, $70, $F0
+    db $08, $88, $48, $C8, $28, $A8, $68, $E8, $18, $98, $58, $D8, $38, $B8, $78, $F8
+    db $04, $84, $44, $C4, $24, $A4, $64, $E4, $14, $94, $54, $D4, $34, $B4, $74, $F4
+    db $0C, $8C, $4C, $CC, $2C, $AC, $6C, $EC, $1C, $9C, $5C, $DC, $3C, $BC, $7C, $FC
+    db $02, $82, $42, $C2, $22, $A2, $62, $E2, $12, $92, $52, $D2, $32, $B2, $72, $F2
+    db $0A, $8A, $4A, $CA, $2A, $AA, $6A, $EA, $1A, $9A, $5A, $DA, $3A, $BA, $7A, $FA
+    db $06, $86, $46, $C6, $26, $A6, $66, $E6, $16, $96, $56, $D6, $36, $B6, $76, $F6
+    db $0E, $8E, $4E, $CE, $2E, $AE, $6E, $EE, $1E, $9E, $5E, $DE, $3E, $BE, $7E, $FE
+    db $01, $81, $41, $C1, $21, $A1, $61, $E1, $11, $91, $51, $D1, $31, $B1, $71, $F1
+    db $09, $89, $49, $C9, $29, $A9, $69, $E9, $19, $99, $59, $D9, $39, $B9, $79, $F9
+    db $05, $85, $45, $C5, $25, $A5, $65, $E5, $15, $95, $55, $D5, $35, $B5, $75, $F5
+    db $0D, $8D, $4D, $CD, $2D, $AD, $6D, $ED, $1D, $9D, $5D, $DD, $3D, $BD, $7D, $FD
+    db $03, $83, $43, $C3, $23, $A3, $63, $E3, $13, $93, $53, $D3, $33, $B3, $73, $F3
+    db $0B, $8B, $4B, $CB, $2B, $AB, $6B, $EB, $1B, $9B, $5B, $DB, $3B, $BB, $7B, $FB
+    db $07, $87, $47, $C7, $27, $A7, $67, $E7, $17, $97, $57, $D7, $37, $B7, $77, $F7
+    db $0F, $8F, $4F, $CF, $2F, $AF, $6F, $EF, $1F, $9F, $5F, $DF, $3F, $BF, $7F, $FF

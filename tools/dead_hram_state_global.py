@@ -11,6 +11,10 @@ Conservative model:
 * edges follow fallthrough, jp/jr to labels defined inside translated code
   sections, and `ld hl, <label>` + `jp nes_jump_known_hl_a[_8bit]` bank
   transfers;
+* the generic `jp nes_dispatch_hl` fallback of a translated 6502 RTS gets
+  edges to that RTS's static return continuations when tools/rts_return_sets.py
+  can prove them from the recompiler's CFG dump (`<stem>.cfg.txt`); RTS sites
+  it cannot prove keep the conservative all-live exit;
 * every other exit (ret/reti/jp hl, dispatch, NMI entry, RTS helpers, data,
   SECTION boundaries, unresolved targets) treats all six bytes as live;
 * calls are transparent only for whitelisted helpers that never read these
@@ -22,6 +26,11 @@ Any other mention of a tracked byte is a read.
 from __future__ import annotations
 import bisect, re, sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rts_return_sets import return_sets  # noqa: E402
+
+INSN_RE = re.compile(r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ")
 
 VARS = ["nes_a", "nes_x", "nes_y", "nes_z_shadow", "nes_n_shadow", "nes_c_shadow"]
 BIT = {v: 1 << i for i, v in enumerate(VARS)}
@@ -50,6 +59,40 @@ def main(path: str) -> None:
     lines = p.read_text().splitlines(keepends=True)
     n = len(lines)
     codes = [l.split(";", 1)[0].strip() for l in lines]
+    cfg = p.with_name(p.stem + ".cfg.txt")
+    rsets = return_sets(cfg)[0] if cfg.exists() else {}
+    # 6502 instruction whose translation a line belongs to (last comment above it in the section)
+    insn_of = [None] * n
+    last = None
+    for i, l in enumerate(lines):
+        if l.startswith("SECTION"):
+            last = None
+        m = INSN_RE.search(l)
+        if m:
+            last = (int(m.group(1), 16), m.group(3))
+        insn_of[i] = last
+    rts_edges = 0
+    # Where each RTS translation starts, and every label reference, so a fallback
+    # that other code jumps into (a shared tail) keeps the conservative exit.
+    insn_start = [None] * n
+    for i in range(n):
+        if insn_of[i] is not None:
+            insn_start[i] = insn_start[i - 1] if i and insn_of[i - 1] == insn_of[i] and insn_start[i - 1] is not None else i
+    refs = {}
+    for i, c in enumerate(codes):
+        for t in re.findall(r"(?:^|[\s,])([A-Za-z_.][A-Za-z0-9_.@]*)$", c) if c.split(" ", 1)[0] in ("jp", "jr", "call") else []:
+            refs.setdefault(t, []).append(i)
+
+    def private_tail(i):
+        lo = insn_start[i]
+        for k in range(lo, i + 1):
+            m = LABEL_RE.match(codes[k])
+            if m:
+                nm = m.group(1)
+                for r in refs.get(nm, []) + (refs.get("." + nm.split(".")[-1], []) if "." in nm[1:] else []):
+                    if not (lo <= r <= i) and not (insn_of[r] == insn_of[i] and insn_start[r] == lo):
+                        return False
+        return True
 
     # Section classification and IF handling.
     in_code = [False] * n
@@ -182,6 +225,13 @@ def main(path: str) -> None:
                     succ[i] = (t,)
                 continue
             t = resolve(tgt, i) if tgt != "hl" else None
+            if t is None and tgt == "nes_dispatch_hl" and not cond and insn_of[i] and insn_of[i][1] == "Rts":
+                conts = rsets.get(insn_of[i][0])
+                ts = [resolve("nes_%04X" % c, i) for c in sorted(conts)] if conts else None
+                if ts and all(x is not None for x in ts) and private_tail(i):
+                    succ[i] = tuple(ts)
+                    rts_edges += 1
+                    continue
             if t is None:
                 use[i] = ALL
                 succ[i] = (i + 1,) if cond else ()
@@ -232,7 +282,7 @@ def main(path: str) -> None:
             stats[v] += 1
     p.write_text("".join(l for k, l in enumerate(lines) if k not in remove))
     print("dead-hram-global: removed " + ", ".join(f"{c} {v}" for v, c in stats.items() if c) +
-          f" ({len(remove)} stores)")
+          f" ({len(remove)} stores; {rts_edges} RTS fallbacks with proven return sets)")
 
 
 if __name__ == "__main__":
