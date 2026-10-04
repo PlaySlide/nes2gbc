@@ -6,13 +6,22 @@ Input: the sidecar CFG dump written next to generated.asm by the recompiler
 
 For every subroutine entry E (a static JSR target) we walk E's body along
 intra-procedural edges (fallthrough, branches, JMP abs, JSR->return
-continuation; never into callees) and track the 6502 stack depth relative to
-E's entry. An RTS reached at depth 0 returns to one of E's JSR continuations.
+continuation, resolved indirect-jump targets; never into callees) and track
+the 6502 stack depth relative to E's entry. An RTS reached at depth 0 returns
+to one of E's JSR continuations.
+
+Indirect jumps are tail jumps: a handler T reached from E's body at depth 0
+returns to E's continuations. For a non-returning inline JSR dispatcher (SMB
+JumpEngine: `JSR D` followed by a word table; D pops that JSR frame and does
+JMP (ptr)), the CFG puts the table targets on the calling block, so the
+handler is walked from the caller's region at the caller's depth; the
+dispatcher's own JMP (ptr), reached at depth -2 inside D, is not followed
+again when every one of its targets is covered by such a calling block.
 
 `return_sets()` maps each RTS PC to the set of continuation PCs it can return
 to, or to None (unknown, i.e. treat every return as reaching anything) when:
-* the RTS is reachable from a dynamic entry (reset/NMI/IRQ vectors or an
-  indirect-jump target), whose return context is unknown;
+* the RTS is reachable from a reset/NMI/IRQ vector body, whose return
+  context is unknown;
 * the RTS is reached at a non-zero or inconsistent stack depth, or its body
   contains TXS/RTI/BRK;
 * the RTS is not reachable from any entry.
@@ -26,7 +35,7 @@ from pathlib import Path
 
 PUSH = {"Pha": 1, "Php": 1, "Pla": -1, "Plp": -1}
 BAD = {"Txs", "Rti", "Brk"}
-INTRA = {"fall", "branch", "jump", "ret"}
+INTRA = {"fall", "branch", "jump", "ret", "ind"}
 
 
 def load(path):
@@ -53,6 +62,7 @@ def return_sets(path):
     conts = collections.defaultdict(set)   # entry -> JSR continuations
     dynamic = set(vectors)
     unresolved = False
+    inline_targets = set()                 # handlers listed on an inline-dispatch calling block
     for b in blocks.values():
         call = [t for k, t in b["edges"] if k == "call"]
         ret = [t for k, t in b["edges"] if k == "ret"]
@@ -64,8 +74,8 @@ def return_sets(path):
             if k == "ind":
                 if t is None:
                     unresolved = True
-                else:
-                    dynamic.add(t)
+                elif call:
+                    inline_targets.add(t)
     rts_blocks = {s for s, b in blocks.items() if b["ins"] and b["ins"][-1][1] == "Rts"}
     ctx = collections.defaultdict(set)      # rts block -> entries
     unknown = set()
@@ -94,6 +104,11 @@ def return_sets(path):
             for k, t in b["edges"]:
                 if k not in INTRA or t is None or t not in blocks:
                     continue
+                if k == "ind" and d < 0:
+                    if d == -2 and t in inline_targets:
+                        continue   # dispatcher internals; handled at the calling block
+                    bad = True
+                    continue
                 if t in depth:
                     if depth[t] != d:
                         bad = True
@@ -107,7 +122,7 @@ def return_sets(path):
     out = {}
     for s in rts_blocks:
         pc = blocks[s]["ins"][-1][0]
-        if unresolved or pushed or s in unknown or not ctx[s] or (ctx[s] & dynamic):
+        if unresolved or pushed or s in unknown or not ctx[s] or (ctx[s] & dynamic):  # dynamic == vectors
             res = None
         else:
             res = set()
