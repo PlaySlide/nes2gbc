@@ -59,11 +59,40 @@ SCHEDULE_HEAVY = [(100, 106, {"start"}), (300, 515, {"b", "right"}), (515, 516, 
     (416, 426), (516, 534), (609, 625), (680, 690), (729, 744), (767, 782), (805, 820),
     (843, 858), (881, 896), (919, 937), (960, 978), (1001, 1019), (1042, 1060), (1083, 1101),
     (1124, 1142), (1165, 1183)]]
+# Harsh scenario (--scenario harsh): walk right through 1-1 jumping OVER enemies
+# (never stomping) so they pile up while the screen scrolls; frames 1580-2050
+# cover the goomba pairs + koopa + goomba groups near the stairs (2-5 enemies,
+# avg 2.8, scrolling). Frozen from a closed-loop controller run.
+SCHEDULE_HARSH = [
+    (100, 106, {"start"}), (300, 471, {"right"}), (471, 494, {"a", "right"}),
+    (494, 590, {"right"}), (590, 615, {"b", "left"}), (615, 628, {"b", "right"}),
+    (628, 629, {"a", "b", "right"}), (629, 661, {"a", "right"}), (661, 778, {"right"}),
+    (778, 803, {"b", "left"}), (803, 816, {"b", "right"}), (816, 817, {"a", "b", "right"}),
+    (817, 849, {"a", "right"}), (849, 899, {"right"}), (899, 922, {"a", "right"}),
+    (922, 948, {"right"}), (948, 973, {"b", "left"}), (973, 986, {"b", "right"}),
+    (986, 987, {"a", "b", "right"}), (987, 1019, {"a", "right"}), (1019, 1147, {"right"}),
+    (1147, 1172, {"b", "left"}), (1172, 1185, {"b", "right"}), (1185, 1186, {"a", "b", "right"}),
+    (1186, 1218, {"a", "right"}), (1218, 1341, {"right"}), (1341, 1342, {"a", "b", "right"}),
+    (1342, 1372, {"a", "right"}), (1372, 1522, {"right"}), (1522, 1523, {"a", "b", "right"}),
+    (1523, 1553, {"a", "right"}), (1553, 1611, {"right"}), (1611, 1634, {"a", "right"}),
+    (1634, 1709, {"right"}), (1709, 1732, {"a", "right"}), (1732, 1809, {"right"}),
+    (1809, 1832, {"a", "right"}), (1832, 1922, {"right"}), (1922, 1945, {"a", "right"}),
+    (1945, 1971, {"right"}), (1971, 1994, {"a", "right"}), (1994, 2072, {"right"}),
+    (2072, 2097, {"b", "left"}), (2097, 2110, {"b", "right"}), (2110, 2111, {"a", "b", "right"}),
+    (2111, 2143, {"a", "right"}), (2143, 2164, {"right"}), (2164, 2189, {"b", "left"}),
+    (2189, 2202, {"b", "right"}), (2202, 2203, {"a", "b", "right"}), (2203, 2235, {"a", "right"}),
+    (2235, 2261, {"right"}), (2261, 2286, {"b", "left"}), (2286, 2299, {"b", "right"}),
+    (2299, 2300, {"a", "b", "right"}), (2300, 2332, {"a", "right"}), (2332, 2356, {"right"}),
+    (2356, 2381, {"b", "left"}), (2381, 2394, {"b", "right"}), (2394, 2395, {"a", "b", "right"}),
+    (2395, 2100, {"a", "right"}),
+]
 SCENARIOS = {
     "std": {"schedule": SCHEDULE, "check": [60, 99, 150, 250, 320, 400, 500, 600, 700, 800, 900, 1000],
             "windows": {"title": (30, 100), "play": (360, 850)}, "nmis": 1001, "ref": "ref_smb.json"},
     "heavy": {"schedule": SCHEDULE_HEAVY, "check": [400, 500, 600, 650, 700, 800, 900, 1000, 1100],
               "windows": {"play": (360, 640), "heavy": (640, 1100)}, "nmis": 1101, "ref": "ref_smb_heavy.json"},
+    "harsh": {"schedule": SCHEDULE_HARSH, "check": [400, 800, 1200, 1580, 1700, 1800, 1900, 2000, 2050],
+              "windows": {"walk": (360, 1580), "harsh": (1580, 2050)}, "nmis": 2051, "ref": "ref_smb_harsh.json"},
 }
 BTN = {"start": (W.PRESS_BUTTON_START, W.RELEASE_BUTTON_START),
        "right": (W.PRESS_ARROW_RIGHT, W.RELEASE_ARROW_RIGHT),
@@ -230,7 +259,7 @@ if __name__ == "__main__":
     ap.add_argument("--nmis", type=int, default=None)
     ap.add_argument("--scenario", default="std", choices=sorted(SCENARIOS))
     ap.add_argument("--profile", default=None, help="save per-(bank,pc) cycle histogram .npy for play window")
-    ap.add_argument("--profwin", default="play", choices=["title", "play", "heavy"])
+    ap.add_argument("--profwin", default="play", choices=["title", "play", "heavy", "harsh", "walk"])
     ap.add_argument("--shots", default=None, help="dir for PNG screenshots at check NMIs")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--ref", default=None, help="gate reference (RAM + published frames); default per scenario")
