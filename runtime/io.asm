@@ -23,6 +23,14 @@ nes_chr_bank_mask:    ds 1
 nes_chr_bank:         ds 1
 nes_chr_gbc_bank_base: ds 1
 
+; Banked cartridge state is linker-placed so the fixed diagnostic/IO layout
+; above remains byte-for-byte stable for existing NROM debugging.
+SECTION "NES banked cartridge state", WRAM0
+nes_prg_bank:          ds 1 ; active 16 KiB bank in the switchable CPU window
+nes_prg_bank_mask:     ds 1
+nes_prg_fixed_bank:    ds 1 ; last physical 16 KiB PRG bank
+nes_chr_rom_bank_base: ds 1 ; first GBC ROM bank containing raw NES CHR
+
 SECTION "NES virtual IO state", WRAM0[$C818]
 nes_ppu_status:       ds 1
 nes_ppuctrl:          ds 1
