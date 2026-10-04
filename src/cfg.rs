@@ -266,6 +266,25 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   call_off+=1;
  }
 
+ // Form 4: pointer construction anywhere in PRG that reaches this JMP (ptr)
+ // through straight-line code, possibly via JMP abs into a shared tail:
+ //   LDA table,R / STA ptr / [INR] / LDA table(+1),R / JMP tail
+ //   tail: STA ptr+1 / JMP (ptr)
+ // A tiny forward walk tracks whether A still holds the high-byte load when
+ // ptr+1 is stored and requires reaching exactly this JMP (ptr).
+ if let Ok(jmp_off)=off(mapper,prg.len(),jmp_pc){
+  let mut o=0usize;
+  while o+5<=prg.len(){
+   if (prg[o]==0xB9||prg[o]==0xBD)&&prg[o+3]==0x85&&prg[o+4]==pointer as u8{
+    let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+    if let Some(b)=walk_pointer_tail(mapper,prg,o,jmp_off,pointer,base){
+     if !tables.contains(&b){tables.push(b)}
+    }
+   }
+   o+=1;
+  }
+ }
+
  let mut out=Vec::new();
  for base in tables{
   let mut found_any=false;
@@ -284,6 +303,54 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   }
  }
  out
+}
+// Helper for indirect_table_targets Form 4. `o` is the PRG offset of
+// `LDA base,R / STA ptr`. Returns the table base when straight-line code from
+// there loads the matching high byte (base+1 with the same index, or base after
+// one INY/INX), stores it to ptr+1 and reaches the JMP (ptr) at `jmp_off`.
+fn walk_pointer_tail(mapper:u16,prg:&[u8],o:usize,jmp_off:usize,pointer:u16,base:u16)->Option<u16>{
+ let index_y=prg[o]==0xB9;
+ let mut pc=0x8000u16.wrapping_add((o+5)as u16);
+ let mut inc=0u8;
+ let mut a_hi:Option<u16>=None; // high-byte table loaded into A
+ let mut hi_stored=false;
+ for _ in 0..16{
+  let i=dec(mapper,prg,pc).ok()?;
+  let cur=off(mapper,prg.len(),pc).ok()?;
+  let next=pc.wrapping_add(i.def.len()as u16);
+  use Mnemonic::*;
+  match i.def.mnemonic{
+   Jmp if i.def.mode==AddressingMode::Indirect=>{
+    if cur!=jmp_off||i.operand!=pointer||!hi_stored{return None}
+    return Some(base);
+   }
+   Jmp=>{pc=i.operand;continue}
+   Iny if index_y=>{inc+=1}
+   Inx if !index_y=>{inc+=1}
+   Lda if (index_y&&i.def.mode==AddressingMode::AbsoluteY)||(!index_y&&i.def.mode==AddressingMode::AbsoluteX)=>{
+    let t=i.operand;
+    a_hi=if (inc==0&&t==base.wrapping_add(1))||(inc==1&&t==base){Some(t)}else{None};
+   }
+   Sta|Stx|Sty if i.def.mode==AddressingMode::ZeroPage&&i.operand==pointer=>return None,
+   Sta if i.def.mode==AddressingMode::ZeroPage&&i.operand==pointer.wrapping_add(1)=>{
+    if a_hi.is_none(){return None}
+    hi_stored=true;
+   }
+   Stx|Sty if i.def.mode==AddressingMode::ZeroPage&&i.operand==pointer.wrapping_add(1)=>return None,
+   Sta|Stx|Sty|Nop|Clc|Sec|Cld|Cli|Sei|Clv|Php|Pha=>{}
+   Ldx if index_y=>{}
+   Ldy if !index_y=>{}
+   Tax if index_y=>{}
+   Tay if !index_y=>{}
+   Cmp|Cpx|Cpy|Bit=>{}
+   Asl|Lsr|Rol|Ror if i.def.mode==AddressingMode::Accumulator=>{a_hi=None}
+   Asl|Lsr|Rol|Ror|Inc|Dec=>{if i.operand==pointer||i.operand==pointer.wrapping_add(1){return None}}
+   Lda|Txa|Tya|Pla|Adc|Sbc|And|Ora|Eor=>{a_hi=None}
+   _=>return None,
+  }
+  pc=next;
+ }
+ None
 }
 // Recognize the classic 6502 computed-jump-via-RTS idiom:
 //
@@ -352,15 +419,89 @@ fn pushed_return_continuation(mapper:u16,prg:&[u8],ins:&[DecodedInstruction])->O
  Some(target)
 }
 
+// Truncate an existing block that contains `t` as an interior instruction
+// boundary, ending it with a fallthrough to `t`. Returns true if split.
+fn split_block_at(blocks:&mut BTreeMap<u16,BasicBlock>,t:u16)->bool{
+ let Some((&start,_))=blocks.range(..t).next_back()else{return false};
+ let b=blocks.get_mut(&start).unwrap();
+ let Some(idx)=b.instructions.iter().position(|i|i.pc==t)else{return false};
+ if idx==0{return false}
+ b.instructions.truncate(idx);
+ b.edges=vec![Edge{kind:EdgeKind::Fallthrough,target:Some(t)}];
+ true
+}
+
+fn reachable_blocks(blocks:&BTreeMap<u16,BasicBlock>,roots:impl Iterator<Item=u16>)->BTreeSet<u16>{
+ let mut seen=BTreeSet::new();let mut work:Vec<u16>=roots.collect();
+ while let Some(a)=work.pop(){
+  if !seen.insert(a){continue}
+  if let Some(b)=blocks.get(&a){for t in b.edges.iter().filter_map(|e|e.target){if blocks.contains_key(&t)&&!seen.contains(&t){work.push(t)}}}
+ }
+ seen.retain(|a|blocks.contains_key(a));
+ seen
+}
+
+fn anchored_word_table_targets(mapper:u16,prg:&[u8],blocks:&BTreeMap<u16,BasicBlock>,confirmed:&BTreeSet<u16>,gaps:&BTreeSet<u16>)->Vec<u16>{
+ const MIN_RUN:usize=3;
+ let n=prg.len();
+ // 16 KiB PRG is mirrored; only accept the half the vectors execute from so
+ // unrelated data words in the other mirror do not extend a run.
+ let half=if n==0x4000{Some(u16::from_le_bytes([prg[n-4],prg[n-3]])&0xC000)}else{None};
+ let ok=|w:u16|->bool{
+  if w<0x8000{return false}
+  if let Some(h)=half{if w&0xC000!=h{return false}}
+  looks_like_code(mapper,prg,w)
+ };
+ // Bytes already decoded as instructions are code, not table data. This keeps
+ // compare/branch chains (C9 07 F0 03 ...) from reading as pointer runs.
+ let mut code=vec![false;n];
+ for b in blocks.values(){for i in &b.instructions{
+  if let Ok(o)=off(mapper,n,i.pc){for k in 0..i.def.len()as usize{if o+k<n{code[o+k]=true}}}
+ }}
+ let mut out=Vec::new();
+ for align in 0..2usize{
+  let mut run:Vec<u16>=Vec::new();
+  let mut o=align;
+  loop{
+   let w=if o+1<n{Some(u16::from_le_bytes([prg[o],prg[o+1]]))}else{None};
+   match w{
+    Some(w) if !code[o]&&!code[o+1]&&ok(w)=>run.push(w),
+    _=>{
+     let distinct:BTreeSet<u16>=run.iter().copied().collect();
+     let known=distinct.iter().filter(|t|confirmed.contains(t)).count();
+     let gap_hits=distinct.iter().filter(|t|!confirmed.contains(t)&&gaps.contains(t)).count();
+     let anchors=known+gap_hits;
+     // Short data runs often hit two block starts by coincidence; a gap hit
+     // (routine start after a terminator) is much stronger evidence.
+     let accept=gap_hits>=2||(anchors>=3&&run.len()>=6);
+     if std::env::var_os("NES2GBC_CFG_DEBUG").is_some()&&distinct.len()>=MIN_RUN&&anchors>=2{
+      eprint!("{} ",if accept{"ACCEPT"}else{"reject"});
+      eprintln!("cfg: run @{:04X} len {} distinct {} confirmed {}: {}",0x10000-n+o-2*run.len(),run.len(),distinct.len(),anchors,run.iter().map(|t|format!("{}{:04X}",if confirmed.contains(t){"*"}else if gaps.contains(t){"+"}else{""},t)).collect::<Vec<_>>().join(" "));
+     }
+     if distinct.len()>=MIN_RUN&&accept{
+      for &t in &run{if !out.contains(&t){out.push(t)}}
+     }
+     run.clear();
+     if w.is_none(){break}
+    }
+   }
+   o+=2;
+  }
+ }
+ out
+}
+
 pub fn discover_from_vectors(mapper:u16,prg:&[u8],v:Vectors)->Result<ControlFlowGraph,AnalysisError>{discover(mapper,prg,&[v.reset,v.nmi,v.irq_brk])}
 pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,AnalysisError>{
  if mapper!=0&&mapper!=3{return Err(AnalysisError::UnsupportedMapper(mapper))}if prg.len()!=0x4000&&prg.len()!=0x8000{return Err(AnalysisError::UnsupportedPrgSize(prg.len()))}
  let mut work=VecDeque::new();let mut seen=BTreeSet::new();for &e in entries{q(&mut work,&mut seen,e)}
- let mut blocks=BTreeMap::new();let mut diagnostics=Vec::new();let mut continuations:Vec<u16>=Vec::new();
+ let mut blocks=BTreeMap::new();let mut diagnostics=Vec::new();let mut continuations:Vec<u16>=Vec::new();let mut harvested:Vec<u16>=Vec::new();
+ let cfg_debug=std::env::var_os("NES2GBC_CFG_DEBUG").is_some();
+ loop{
  while let Some(start)=work.pop_front(){if blocks.contains_key(&start){continue}let mut pc=start;let mut ins=Vec::new();let mut edges=Vec::new();
   loop{
    if pc!=start&&(blocks.contains_key(&pc)||seen.contains(&pc)){edges.push(Edge{kind:EdgeKind::Fallthrough,target:Some(pc)});break}
-   let i=match dec(mapper,prg,pc){Ok(i)=>i,Err(AnalysisError::Decode(error))=>{diagnostics.push(AnalysisDiagnostic{pc,error});break},Err(e)=>return Err(e)};
+   let i=match dec(mapper,prg,pc){Ok(i)=>i,Err(AnalysisError::Decode(error))=>{diagnostics.push(AnalysisDiagnostic{pc,error});break},Err(AnalysisError::UnmappedAddress(_))if pc!=start=>break,Err(e)=>return Err(e)};
    let next=pc.wrapping_add(i.def.len()as u16);ins.push(i);
    if branch(i.def.mnemonic){let t=rel(i);edges.push(Edge{kind:EdgeKind::BranchTaken,target:Some(t)});edges.push(Edge{kind:EdgeKind::Fallthrough,target:Some(next)});q(&mut work,&mut seen,t);q(&mut work,&mut seen,next);break}
    match i.def.mnemonic{
@@ -412,7 +553,39 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
    }
   } blocks.insert(start,BasicBlock{start,instructions:ins,edges});
  }
- let mut ep=entries.to_vec();ep.extend(continuations);ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
+  // Static discovery converged. Look for jump tables whose indexing code we
+  // could not decode (gapped tables, two-level tables, pointer-to-table
+  // setups): runs of >=3 consecutive little-endian words in non-code bytes
+  // that all point at plausible code, with >=3 distinct values. Evidence for
+  // a member is being an already-discovered block, or (stronger) sitting
+  // directly after an unconditional terminator (JMP/RTS/RTI), where an
+  // otherwise-unreached routine usually starts. A run is accepted with >=2
+  // such gap hits, or >=3 pieces of evidence in a run of >=6 words.
+  // Excitebike ($C03C table: $C2BD, $C514, ...) and Kung Fu ($8000 table
+  // tail: $84F0, $8427, ...) need this.
+  let mut added=false;
+  // Only blocks reachable without earlier word-table guesses may confirm a
+  // run; otherwise a single wrong guess decodes data whose bytes confirm more
+  // wrong runs (seen with Ice Hockey).
+  let confirmed=reachable_blocks(&blocks,entries.iter().chain(continuations.iter()).copied());
+  let gaps:BTreeSet<u16>=blocks.values().filter(|b|confirmed.contains(&b.start)).filter_map(|b|{
+   let last=b.instructions.last()?;
+   if !matches!(last.def.mnemonic,Mnemonic::Jmp|Mnemonic::Rts|Mnemonic::Rti){return None}
+   Some(last.pc.wrapping_add(last.def.len()as u16))
+  }).collect();
+  for t in anchored_word_table_targets(mapper,prg,&blocks,&confirmed,&gaps){
+   if blocks.contains_key(&t){continue}
+   if cfg_debug{eprintln!("cfg: word-table entry ${t:04X}")}
+   // A target already `seen` may be an interior instruction of a block built
+   // earlier; split so the code is translated once under its own label.
+   if seen.contains(&t){if split_block_at(&mut blocks,t){work.push_back(t);added=true;if !harvested.contains(&t){harvested.push(t)}}continue}
+   q(&mut work,&mut seen,t);
+   if !harvested.contains(&t){harvested.push(t)}
+   added=true;
+  }
+  if !added{break}
+ }
+ let mut ep=entries.to_vec();ep.extend(continuations);ep.extend(harvested);ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
 }
 #[cfg(test)]
 mod tests {
@@ -432,6 +605,35 @@ mod tests {
 
         assert!(graph.blocks.contains_key(&0x8004));
         assert!(graph.blocks.contains_key(&0x8006));
+    }
+
+    #[test]
+    fn discovers_shared_tail_pointer_table() {
+        // Excitebike: LDA $C000,Y / STA $00 / INY / LDA $C000,Y / JMP tail
+        //             tail: STA $01 / JMP ($0000)
+        let mut prg = vec![0x00; 0x8000];
+        put(&mut prg, 0x9000, &[0xB9, 0x00, 0xA0, 0x85, 0x00, 0xC8, 0xB9, 0x00, 0xA0, 0x4C, 0x20, 0x90]);
+        put(&mut prg, 0x9020, &[0x85, 0x01, 0x6C, 0x00, 0x00]);
+        put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+    }
+
+    #[test]
+    fn harvests_word_table_with_routines_after_terminators() {
+        // Unrecognized indexing; the table's members start right after RTS.
+        let mut prg = vec![0x00; 0x8000];
+        put(&mut prg, 0x9000, &[0x20, 0x00, 0x91, 0x20, 0x10, 0x91, 0x60]);
+        put(&mut prg, 0x9100, &[0xA9, 0x01, 0x60, 0xA9, 0x02, 0x60]); // $9103 after RTS
+        put(&mut prg, 0x9110, &[0xA9, 0x03, 0x60, 0xA9, 0x04, 0x60]); // $9113 after RTS
+        put(&mut prg, 0xA000, &[0x03, 0x91, 0x13, 0x91, 0x00, 0x91]);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9103));
+        assert!(graph.blocks.contains_key(&0x9113));
+        assert!(graph.entry_points.contains(&0x9103));
     }
 
     #[test]
