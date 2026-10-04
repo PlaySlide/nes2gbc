@@ -10,6 +10,119 @@ nes_generic_hidden_change_count: ds 1
 
 SECTION "NES PPU helpers", ROM0
 
+; Clear the 8 KiB cartridge CHR-RAM backing store. WRAMX banks 2 and 3
+; represent PPU $0000-$0FFF and $1000-$1FFF respectively.
+nes_clear_chr_ram:
+    ldh a, [rSVBK]
+    push af
+    ld a, $02
+.clear_bank:
+    ldh [rSVBK], a
+    push af
+    ld hl, $D000
+    ld bc, $1000
+.clear_byte:
+    xor a
+    ld [hli], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, .clear_byte
+    pop af
+    inc a
+    cp $04
+    jr c, .clear_bank
+    pop af
+    ldh [rSVBK], a
+    ret
+
+; Input HL = PPU pattern address $0000-$1FFF. Output A = raw NES CHR byte.
+nes_chr_ram_read_hl:
+    push bc
+    ldh a, [rSVBK]
+    push af
+    ld a, h
+    bit 4, a
+    ld a, $02
+    jr z, .read_bank_ready
+    inc a
+.read_bank_ready:
+    ldh [rSVBK], a
+    ld a, h
+    and $0F
+    or $D0
+    ld h, a
+    ld b, [hl]
+    pop af
+    ldh [rSVBK], a
+    ld a, b
+    pop bc
+    ret
+
+; Input HL = PPU pattern address $0000-$1FFF, E = raw NES CHR byte.
+; Keep the raw NES planar layout in WRAM and update the affected converted
+; CGB tile row immediately. NES stores all eight plane-0 row bytes followed
+; by all eight plane-1 bytes; CGB VRAM interleaves the two bytes per row.
+nes_chr_ram_write_hl:
+    push bc
+    push de
+    ldh a, [rSVBK]
+    push af
+
+    ld a, h
+    bit 4, a
+    ld d, $00
+    ld a, $02
+    jr z, .write_bank_ready
+    inc a
+    inc d
+.write_bank_ready:
+    ldh [rSVBK], a
+    ld a, h
+    and $0F
+    or $D0
+    ld h, a
+    ld a, e
+    ld [hl], a
+
+    ; Fetch both NES bitplanes for this row from the raw tile.
+    res 3, l
+    ld a, [hl]
+    ld b, a
+    set 3, l
+    ld a, [hl]
+    ld c, a
+
+    ; Converted tile address is the same 16-byte tile base, plus row*2.
+    ld a, l
+    and $07
+    add a
+    ld e, a
+    ld a, l
+    and $F0
+    or e
+    ld l, a
+    ld a, h
+    and $0F
+    or $80
+    ld h, a
+
+    call nes_video_wait_vram
+    ld a, d
+    ldh [rVBK], a
+    ld a, b
+    ld [hli], a
+    ld a, c
+    ld [hl], a
+    xor a
+    ldh [rVBK], a
+
+    pop af
+    ldh [rSVBK], a
+    pop de
+    pop bc
+    ret
+
 ; Input: L = mirrored PPU register index ($00-$07)
 ; Output: A = register value
 nes_ppu_cpu_read:
@@ -695,7 +808,11 @@ ENDC
     jp nes_ppu_increment_addr
 
 .pattern:
-    ; CHR ROM is read-only for NROM/CNROM. CHR-RAM support comes later.
+    ld a, [nes_chr_is_ram]
+    and a
+    jr z, .pattern_done
+    call nes_chr_ram_write_hl
+.pattern_done:
     jp nes_ppu_increment_addr
 
 .palette:
@@ -1049,6 +1166,10 @@ nes_ppu_read_raw:
     ret
 
 .pattern:
+    ld a, [nes_chr_is_ram]
+    and a
+    jp nz, nes_chr_ram_read_hl
+
     ; Raw NES CHR banks are packed after the cartridge's PRG data. NROM keeps
     ; the historical base at bank 3; banked mappers use a generated base.
     ld a, [nes_chr_rom_bank_base]
