@@ -26,11 +26,17 @@ nes_chr_gbc_bank_base: ds 1
 ; Banked cartridge state is linker-placed so the fixed diagnostic/IO layout
 ; above remains byte-for-byte stable for existing NROM debugging.
 SECTION "NES banked cartridge state", WRAM0
-nes_prg_bank:          ds 1 ; active 16 KiB bank in the switchable CPU window
+nes_prg_bank:          ds 1 ; active physical bank at CPU $8000-$BFFF
+nes_prg_hi_bank:       ds 1 ; active physical bank at CPU $C000-$FFFF (MMC1)
 nes_prg_bank_mask:     ds 1
 nes_prg_fixed_bank:    ds 1 ; last physical 16 KiB PRG bank
 nes_chr_rom_bank_base: ds 1 ; first GBC ROM bank containing raw NES CHR
 nes_chr_is_ram:         ds 1 ; cartridge has CHR RAM instead of CHR ROM
+nes_mmc1_shift:        ds 1 ; serial load register, hardware-style initial $10
+nes_mmc1_control:      ds 1
+nes_mmc1_chr0:         ds 1
+nes_mmc1_chr1:         ds 1
+nes_mmc1_prg:          ds 1
 
 ; Mapper 1/2 CHR RAM uses two otherwise-free 4 KiB WRAMX banks. Mapper-0
 ; 16 KiB PRG caching also uses these banks, but CHR-RAM cartridges never take
