@@ -30,6 +30,15 @@ nes_prg_bank:          ds 1 ; active 16 KiB bank in the switchable CPU window
 nes_prg_bank_mask:     ds 1
 nes_prg_fixed_bank:    ds 1 ; last physical 16 KiB PRG bank
 nes_chr_rom_bank_base: ds 1 ; first GBC ROM bank containing raw NES CHR
+nes_chr_is_ram:         ds 1 ; cartridge has CHR RAM instead of CHR ROM
+
+; Mapper 1/2 CHR RAM uses two otherwise-free 4 KiB WRAMX banks. Mapper-0
+; 16 KiB PRG caching also uses these banks, but CHR-RAM cartridges never take
+; that cache path, so the storage is mutually exclusive at runtime.
+SECTION "NES CHR RAM low", WRAMX[$D000], BANK[2]
+nes_chr_ram_lo: ds $1000
+SECTION "NES CHR RAM high", WRAMX[$D000], BANK[3]
+nes_chr_ram_hi: ds $1000
 
 SECTION "NES virtual IO state", WRAM0[$C818]
 nes_ppu_status:       ds 1
