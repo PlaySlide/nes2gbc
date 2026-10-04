@@ -50,9 +50,26 @@ SCHEDULE = [
     (300, 2000, {"right"}),
     # periodic jumps while walking
 ] + [(s, s + 25, {"right", "a"}) for s in range(330, 2000, 70)]
+# Heavy-action scenario (--scenario heavy): run (B) right through 1-1 hopping
+# over goombas until Mario is stopped at the tall pipe by goombas he cannot
+# safely jump; 2-3 enemies stay active while he keeps hopping. Frozen from a
+# closed-loop controller run (heavy window: 640-1100, enemies 2-3).
+SCHEDULE_HEAVY = [(100, 106, {"start"}), (300, 515, {"b", "right"}), (515, 516, {"left"}),
+                  (516, 1200, {"b", "right"})] + [(a, b, {"a"}) for a, b in [
+    (416, 426), (516, 534), (609, 625), (680, 690), (729, 744), (767, 782), (805, 820),
+    (843, 858), (881, 896), (919, 937), (960, 978), (1001, 1019), (1042, 1060), (1083, 1101),
+    (1124, 1142), (1165, 1183)]]
+SCENARIOS = {
+    "std": {"schedule": SCHEDULE, "check": [60, 99, 150, 250, 320, 400, 500, 600, 700, 800, 900, 1000],
+            "windows": {"title": (30, 100), "play": (360, 850)}, "nmis": 1001, "ref": "ref_smb.json"},
+    "heavy": {"schedule": SCHEDULE_HEAVY, "check": [400, 500, 600, 650, 700, 800, 900, 1000, 1100],
+              "windows": {"play": (360, 640), "heavy": (640, 1100)}, "nmis": 1101, "ref": "ref_smb_heavy.json"},
+}
 BTN = {"start": (W.PRESS_BUTTON_START, W.RELEASE_BUTTON_START),
        "right": (W.PRESS_ARROW_RIGHT, W.RELEASE_ARROW_RIGHT),
-       "a": (W.PRESS_BUTTON_A, W.RELEASE_BUTTON_A)}
+       "a": (W.PRESS_BUTTON_A, W.RELEASE_BUTTON_A),
+       "b": (W.PRESS_BUTTON_B, W.RELEASE_BUTTON_B),
+       "left": (W.PRESS_ARROW_LEFT, W.RELEASE_ARROW_LEFT)}
 
 def buttons_for(n):
     s = set()
@@ -163,6 +180,7 @@ def run(rom, sym, nmis, profile=None, shots=None):
         ticks = st["nmi_tick"][hi - 1] - st["nmi_tick"][lo - 1]
         cyc = st["nmi_cyc"][hi - 1] - st["nmi_cyc"][lo - 1]
         work = [c - st["nmi_cyc"][n - 1] for n, c in st["idle_cyc"] if lo <= n < hi]
+        ws = sorted(work) or [0]
         res[name] = {
             "pct_native": round(100.0 * (hi - lo) / ticks, 2),
             "host_frames_per_nes_frame": round(ticks / (hi - lo), 3),
@@ -170,6 +188,10 @@ def run(rom, sym, nmis, profile=None, shots=None):
             "work_cycles_per_nes_frame": int(sum(work) / max(1, len(work))),
             "work_pct_of_host_frame": round(100.0 * sum(work) / max(1, len(work)) / HOST_FRAME_CYCLES, 1),
             "max_work_cycles": max(work) if work else 0,
+            "p50_work_cycles": ws[len(ws) // 2],
+            "p90_work_cycles": ws[min(len(ws) - 1, len(ws) * 9 // 10)],
+            "frames_over_budget": sum(1 for w in work if w > HOST_FRAME_CYCLES),
+            "frames": len(work),
         }
     res["ram_hash"] = st["ram"]
     res["screen_hash"] = screens
@@ -205,15 +227,21 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--rom", default=os.path.join(HERE, "..", "..", "runtime", "build", "runtime.gbc"))
     ap.add_argument("--sym", default=None)
-    ap.add_argument("--nmis", type=int, default=1001)
+    ap.add_argument("--nmis", type=int, default=None)
+    ap.add_argument("--scenario", default="std", choices=sorted(SCENARIOS))
     ap.add_argument("--profile", default=None, help="save per-(bank,pc) cycle histogram .npy for play window")
-    ap.add_argument("--profwin", default="play", choices=["title", "play"])
+    ap.add_argument("--profwin", default="play", choices=["title", "play", "heavy"])
     ap.add_argument("--shots", default=None, help="dir for PNG screenshots at check NMIs")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--ref", default=os.path.join(HERE, "ref_smb.json"), help="gate reference (RAM + published frames)")
+    ap.add_argument("--ref", default=None, help="gate reference (RAM + published frames); default per scenario")
     ap.add_argument("--write-ref", action="store_true", help="write this run as the gate reference")
     a = ap.parse_args()
     PROFWIN = a.profwin
+    sc = SCENARIOS[a.scenario]
+    SCHEDULE[:] = sc["schedule"]; CHECK_NMIS[:] = sc["check"]
+    WINDOWS.clear(); WINDOWS.update(sc["windows"])
+    a.nmis = a.nmis or sc["nmis"]
+    a.ref = a.ref or os.path.join(HERE, sc["ref"])
     sym = a.sym or os.path.splitext(a.rom)[0] + ".sym"
     r = run(a.rom, sym, a.nmis, a.profile, a.shots)
     if a.write_ref:
@@ -227,6 +255,9 @@ if __name__ == "__main__":
                 d = r[w]
                 print(f"{w:6s} {d['pct_native']:6.2f}% native  {d['host_frames_per_nes_frame']:.3f} hostfr/NESfr  "
                       f"work {d['work_cycles_per_nes_frame']:7d} cyc/NESfr ({d['work_pct_of_host_frame']}% of host frame, max {d['max_work_cycles']})")
+                if a.scenario != "std":
+                    print(f"       dist p50 {d['p50_work_cycles']} p90 {d['p90_work_cycles']} max {d['max_work_cycles']} "
+                          f"over-budget {d['frames_over_budget']}/{d['frames']}")
         print(f"gate={r['gate']}")
         print(f"check={r['check']}  smem={r['smem']}  nmis={r['nmis']} ticks={r['ticks']} wall={r['wall_s']}s")
         print("ram  ", r["ram_hash"])

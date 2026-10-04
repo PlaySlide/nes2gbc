@@ -23,3 +23,13 @@ Profiling: `run.sh --profile /tmp/p.npy [--profwin title]` then
 `crosscheck.py game.nes build.gbc` gives a generic NMI-rate/RAM-hash run for
 other games (DK/IC/BF RAM hashes are timing-sensitive, so only use them to
 detect crashes/hangs, not exact equality).
+
+## Heavy-action scenario
+
+`bench.py --scenario heavy` (or `tools/bench/run.sh --scenario heavy`) runs a
+second frozen input schedule: Mario runs through 1-1 hopping over goombas and
+is held at the tall pipe with 2-3 enemies active. Windows: `play` (360-640,
+mostly 1 enemy) and `heavy` (640-1100, 2-3 enemies). For non-std scenarios the
+per-frame work distribution (p50/p90/max, frames over the 140,448-cycle host
+frame budget) is printed. Gate reference: `ref_smb_heavy.json` (5323060 PACING=0;
+P0 `check=df2281c43a8c`).
