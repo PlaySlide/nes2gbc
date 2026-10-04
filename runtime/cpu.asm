@@ -454,6 +454,14 @@ ENDC
 
 .prg:
     PROFILE_INC nes_profile_read_prg
+
+    ; UxROM: $8000-$BFFF is selected by the mapper register while
+    ; $C000-$FFFF is permanently the last 16 KiB PRG bank. Raw NES PRG
+    ; banks are embedded one-for-one in GBC ROM banks starting at bank 1.
+    ld a, [nes_mapper]
+    cp $02
+    jr z, .prg_mapper2
+
     ; Mirrored 16 KiB PRG is cached in WRAMX banks 2-5 at startup.
     ld a, [nes_prg_16k_mirror]
     and a
@@ -471,6 +479,40 @@ ENDC
     or $D0
     ld h, a
     ld a, [hl]
+    ret
+
+.prg_mapper2:
+    ld a, h
+    cp $C0
+    jr c, .prg_mapper2_switchable
+    ld a, [nes_prg_fixed_bank]
+    jr .prg_mapper2_have_bank
+.prg_mapper2_switchable:
+    ld a, [nes_prg_bank]
+.prg_mapper2_have_bank:
+    ; Physical PRG bank N is stored in GBC ROM bank N+1.
+    inc a
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+
+    ; A 16 KiB NES window maps directly onto ROMX $4000-$7FFF.
+    ld a, h
+    and $3F
+    or $40
+    ld h, a
+    ld l, [hl]
+
+    ; Generic PRG reads are temporary data-bank switches. Restore the
+    ; translated-code bank before returning to generated code.
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    ld a, l
+IF DEF(NES2GBC_DEBUG_TRACE)
+    ld [nes_debug_bus_value], a
+ENDC
     ret
 
 .prg_banked_rom:
@@ -827,8 +869,10 @@ ENDC
 
 .mapper:
     PROFILE_INC nes_profile_write_mapper
-    ; CNROM writes anywhere in $8000-$FFFF select the 8 KiB CHR bank.
     ld a, [nes_mapper]
+    cp $02
+    jr z, .mapper2
+    ; CNROM writes anywhere in $8000-$FFFF select the 8 KiB CHR bank.
     cp $03
     ret nz
     ld a, [nes_chr_bank_mask]
@@ -840,6 +884,17 @@ ENDC
     ld a, b
     ld [nes_chr_bank], a
     call nes_upload_chr_bank
+    ret
+
+.mapper2:
+    ; UxROM writes anywhere in $8000-$FFFF select the 16 KiB bank visible
+    ; at $8000-$BFFF. The fixed high bank never changes.
+    ld a, [nes_prg_bank_mask]
+    and e
+    ld b, a
+.mapper2_valid:
+    ld a, b
+    ld [nes_prg_bank], a
     ret
 
 .write_4011:
