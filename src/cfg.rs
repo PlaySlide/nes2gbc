@@ -180,6 +180,7 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
  //   LDA table,Y / STA ptr / INY / LDA table,Y / STA ptr+1 / JMP (ptr)
  let start=jmp_pc.saturating_sub(64).max(0x8000);
  let mut tables=Vec::new();
+ let mut split_targets:Vec<u16>=Vec::new();
  let mut pc=start;
  while pc.saturating_add(11)<=jmp_pc{
   let o=match off(mapper,prg.len(),pc){Ok(o)=>o,Err(_)=>break};
@@ -218,6 +219,26 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
    let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
    let high_base=u16::from_le_bytes([prg[o+6],prg[o+7]]);
    if high_base==base.wrapping_add(1)&&!tables.contains(&base){tables.push(base)}
+  }
+  // Form 1c: split low-byte / high-byte arrays, LDA lo,R / STA ptr /
+  // LDA hi,R / STA ptr+1 with the arrays back to back, so the distance
+  // between the bases is the entry count. Excitebike $DA4B: lo $D8EF,
+  // hi $D8F1 -> $E0E6, $E2AF.
+  if o+10<=prg.len()
+   &&(prg[o]==0xB9||prg[o]==0xBD)&&prg[o+5]==prg[o]
+   &&prg[o+3]==0x85&&prg[o+4]==pointer as u8
+   &&prg[o+8]==0x85&&prg[o+9]==pointer.wrapping_add(1)as u8
+  {
+   let lo_base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+   let hi_base=u16::from_le_bytes([prg[o+6],prg[o+7]]);
+   let d=if hi_base>lo_base{hi_base-lo_base}else{lo_base-hi_base};
+   if (2..=64).contains(&d){
+    for i in 0..d{
+     let (Ok(lo),Ok(hi))=(off(mapper,prg.len(),lo_base.wrapping_add(i)),off(mapper,prg.len(),hi_base.wrapping_add(i)))else{break};
+     let t=u16::from_le_bytes([prg[lo],prg[hi]]);
+     if t>=0x8000&&looks_like_code(mapper,prg,t)&&!split_targets.contains(&t){split_targets.push(t)}
+    }
+   }
   }
   pc=pc.wrapping_add(1);
  }
@@ -344,6 +365,7 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
    if !out.contains(&target){out.push(target)}
   }
  }
+ for t in split_targets{if !out.contains(&t){out.push(t)}}
  out
 }
 // Helper for indirect_table_targets Form 5: from PRG offset `o` (just after
@@ -717,6 +739,19 @@ mod tests {
             ],
         );
         put(&mut prg, 0xA000, &[0x00, 0x92, 0x10, 0x92]);
+        put(&mut prg, 0x9200, &[0x60]);
+        put(&mut prg, 0x9210, &[0x60]);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9200));
+        assert!(graph.blocks.contains_key(&0x9210));
+    }
+
+    #[test]
+    fn discovers_split_low_high_byte_tables() {
+        // Excitebike $DA48: LDA lo,Y / STA $00 / LDA hi,Y / STA $01 / JMP ($0000)
+        let mut prg = vec![0x00; 0x8000];
+        put(&mut prg, 0x9000, &[0xB9, 0x00, 0xA0, 0x85, 0x00, 0xB9, 0x02, 0xA0, 0x85, 0x01, 0x6C, 0x00, 0x00]);
+        put(&mut prg, 0xA000, &[0x00, 0x10, 0x92, 0x92]);
         put(&mut prg, 0x9200, &[0x60]);
         put(&mut prg, 0x9210, &[0x60]);
         let graph = discover(0, &prg, &[0x9000]).unwrap();
