@@ -10,7 +10,7 @@ header[4] = 4  # four 16 KiB PRG banks
 header[5] = 1  # 8 KiB CHR
 header[6] = 0x20  # mapper 2 (UxROM)
 
-banks = [bytearray([0xEA] * 0x4000) for _ in range(4)]
+banks = [bytearray([0x02] * 0x4000) for _ in range(4)]  # illegal 6502 padding: never mistaken for code
 
 # Each switchable bank selects the next bank, then redispatches $8000.
 # If translated-PC dispatch ignores the mapper bank this becomes the wrong
