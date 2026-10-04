@@ -124,6 +124,7 @@ generate:
 			python3 tools/native_vram_run.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_metatile_column.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_relative_xy_leaf.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/native_tiny_leaves.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)" --identity "$(REPACK_IDENTITY)" --bank-profile "$(BANK_PROFILE)"; \
 			python3 tools/dead_hram_state_global.py runtime/generated.asm; \
 			python3 tools/fast_nonram_reads.py runtime/generated.asm; \
