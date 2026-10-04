@@ -329,11 +329,34 @@ fn rts_stack_table_targets(mapper:u16,prg:&[u8],rts_pc:u16)->Vec<u16>{
  out
 }
 
+// Recognize a constant return address pushed before a computed jump:
+//
+//   LDA #>(continuation-1)
+//   PHA
+//   LDA #<(continuation-1)
+//   PHA
+//   ... (usually a stack-built RTS jump table or JMP (ptr))
+//
+// The callee's eventual RTS resumes at continuation, which is never the
+// fallthrough of a JSR, so it must be discovered as its own dispatch entry.
+// Bomberman does this at $CFD4 (continuation $CFE3).
+fn pushed_return_continuation(mapper:u16,prg:&[u8],ins:&[DecodedInstruction])->Option<u16>{
+ let n=ins.len();
+ if n<4{return None}
+ let w=&ins[n-4..];
+ let imm_lda=|i:&DecodedInstruction|i.def.mnemonic==Mnemonic::Lda&&i.def.mode==AddressingMode::Immediate;
+ if !(imm_lda(&w[0])&&w[1].def.mnemonic==Mnemonic::Pha&&imm_lda(&w[2])&&w[3].def.mnemonic==Mnemonic::Pha){return None}
+ let raw=((w[0].operand as u16&0xFF)<<8)|(w[2].operand&0xFF);
+ let target=raw.wrapping_add(1);
+ if target<0x8000||!looks_like_code(mapper,prg,target){return None}
+ Some(target)
+}
+
 pub fn discover_from_vectors(mapper:u16,prg:&[u8],v:Vectors)->Result<ControlFlowGraph,AnalysisError>{discover(mapper,prg,&[v.reset,v.nmi,v.irq_brk])}
 pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,AnalysisError>{
  if mapper!=0&&mapper!=3{return Err(AnalysisError::UnsupportedMapper(mapper))}if prg.len()!=0x4000&&prg.len()!=0x8000{return Err(AnalysisError::UnsupportedPrgSize(prg.len()))}
  let mut work=VecDeque::new();let mut seen=BTreeSet::new();for &e in entries{q(&mut work,&mut seen,e)}
- let mut blocks=BTreeMap::new();let mut diagnostics=Vec::new();
+ let mut blocks=BTreeMap::new();let mut diagnostics=Vec::new();let mut continuations:Vec<u16>=Vec::new();
  while let Some(start)=work.pop_front(){if blocks.contains_key(&start){continue}let mut pc=start;let mut ins=Vec::new();let mut edges=Vec::new();
   loop{
    if pc!=start&&(blocks.contains_key(&pc)||seen.contains(&pc)){edges.push(Edge{kind:EdgeKind::Fallthrough,target:Some(pc)});break}
@@ -377,11 +400,19 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
      }
      break
     }
-    Mnemonic::Rti|Mnemonic::Brk=>break,_=>pc=next
+    Mnemonic::Rti|Mnemonic::Brk=>break,
+    Mnemonic::Pha=>{
+     // No edge reaches the continuation (a later RTS does, dynamically), so
+     // register it as an entry point: code selection and dispatch tables are
+     // seeded from entry points.
+     if let Some(t)=pushed_return_continuation(mapper,prg,&ins){q(&mut work,&mut seen,t);if !continuations.contains(&t){continuations.push(t)}}
+     pc=next
+    }
+    _=>pc=next
    }
   } blocks.insert(start,BasicBlock{start,instructions:ins,edges});
  }
- let mut ep=entries.to_vec();ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
+ let mut ep=entries.to_vec();ep.extend(continuations);ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
 }
 #[cfg(test)]
 mod tests {
@@ -401,6 +432,24 @@ mod tests {
 
         assert!(graph.blocks.contains_key(&0x8004));
         assert!(graph.blocks.contains_key(&0x8006));
+    }
+
+    #[test]
+    fn discovers_pushed_constant_return_continuation() {
+        let mut prg = vec![0xEA; 0x8000];
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xA9, 0x90, 0x48, // LDA #$90 / PHA
+                0xA9, 0x0F, 0x48, // LDA #$0F / PHA -> continuation $9010
+                0x6C, 0x00, 0x02, // JMP ($0200), unresolved
+            ],
+        );
+        put(&mut prg, 0x9010, &[0x60]);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9010));
+        assert!(graph.entry_points.contains(&0x9010));
     }
 
     #[test]
