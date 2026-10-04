@@ -419,7 +419,7 @@ ELSE
 
     ; APU / controller register reads.
     cp $40
-    jr nz, .unsupported
+    jp nz, .unsupported
     ld a, l
     cp $11
     jr z, .read_4011
@@ -431,7 +431,7 @@ ENDC
     jr z, .read_4016
     cp $17
     jr z, .read_4017
-    jr .unsupported
+    jp .unsupported
 ENDC
 
 .ram:
@@ -835,7 +835,7 @@ ELSE
     jr nc, .mapper
 
     cp $40
-    jr nz, .unsupported
+    jp nz, .unsupported
     ld a, l
     cp $11
     jr z, .write_4011
@@ -847,7 +847,7 @@ IF DEF(NES2GBC_APU)
     cp $18
     jr c, .write_apu
 ENDC
-    jr .unsupported
+    jp .unsupported
 ENDC
 
 .ram:
