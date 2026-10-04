@@ -115,7 +115,7 @@ fn emit_poll(out: &mut String, pc: u16) {
     writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
     writeln!(out, "    and a").unwrap();
     writeln!(out, "    jr z, :+").unwrap();
-    writeln!(out, "    ld hl, $${pc:04X}").unwrap();
+    writeln!(out, "    ld hl, ${pc:04X}").unwrap();
     writeln!(out, "    call nes_poll_nmi_hl").unwrap();
     writeln!(out, "    and a").unwrap();
     writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
@@ -147,14 +147,14 @@ fn emit_block(
     writeln!(out, "{name}:").unwrap();
 
     writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
-    writeln!(out, "    ld hl, $${:04X}", block.start).unwrap();
+    writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
     writeln!(out, "    call nes_profile_trace_pc").unwrap();
     writeln!(out, "ENDC").unwrap();
 
     if debug_trace {
-        writeln!(out, "    ld a, $${:02X}", (block.start >> 8) as u8).unwrap();
+        writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
         writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
-        writeln!(out, "    ld a, $${:02X}", block.start as u8).unwrap();
+        writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
         writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
     }
 
@@ -165,7 +165,7 @@ fn emit_block(
     for instruction in &block.instructions {
         writeln!(
             out,
-            "    ; $${:04X}: $${:02X} {:?} {:?}",
+            "    ; ${:04X}: ${:02X} {:?} {:?}",
             instruction.pc,
             instruction.opcode,
             instruction.def.mnemonic,
@@ -177,9 +177,9 @@ fn emit_block(
             Ok(ops) => out.push_str(&lr35902::emit_ops(&ops)),
             Err(err) => {
                 writeln!(out, "    ; TODO {err}").unwrap();
-                writeln!(out, "    ld a, $${:02X}", instruction.pc as u8).unwrap();
+                writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
                 writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
-                writeln!(out, "    ld a, $${:02X}", (instruction.pc >> 8) as u8).unwrap();
+                writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
                 writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
                 writeln!(out, "    jp nes_unimplemented").unwrap();
                 writeln!(out).unwrap();
@@ -196,7 +196,7 @@ fn emit_block(
                 .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                 .and_then(|edge| edge.target)
             {
-                writeln!(out, "    ld hl, $${target:04X}").unwrap();
+                writeln!(out, "    ld hl, ${target:04X}").unwrap();
                 writeln!(out, "    jp nes_dispatch_hl").unwrap();
             }
         }
@@ -218,7 +218,7 @@ fn emit_stub(
     writeln!(out, "nes_{pc:04X}:").unwrap();
     writeln!(out, "    ld a, [nes_prg_bank]").unwrap();
     for &(bank, _) in variants {
-        writeln!(out, "    cp $${bank:02X}").unwrap();
+        writeln!(out, "    cp ${bank:02X}").unwrap();
         writeln!(out, "    jp z, .m2_b{bank:02X}").unwrap();
     }
     writeln!(out, "    jp nes_unimplemented").unwrap();
@@ -226,7 +226,7 @@ fn emit_stub(
     for &(bank, target_bank) in variants {
         let target = label(BlockId::Banked(bank, pc));
         writeln!(out, ".m2_b{bank:02X}:").unwrap();
-        writeln!(out, "    ld a, $${target_bank:02X}").unwrap();
+        writeln!(out, "    ld a, ${target_bank:02X}").unwrap();
         writeln!(out, "    ld hl, {target}").unwrap();
         writeln!(out, "    jp nes_jump_known_hl_a").unwrap();
     }
@@ -350,7 +350,7 @@ pub fn emit_mapper2_cfgs(
     writeln!(out, "    ld a, [nes_reset_count]").unwrap();
     writeln!(out, "    inc a").unwrap();
     writeln!(out, "    ld [nes_reset_count], a").unwrap();
-    writeln!(out, "    ld hl, $${:04X}", options.reset).unwrap();
+    writeln!(out, "    ld hl, ${:04X}", options.reset).unwrap();
     writeln!(out, "    jp nes_dispatch_hl").unwrap();
     writeln!(out).unwrap();
 
