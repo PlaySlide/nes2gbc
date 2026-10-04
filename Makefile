@@ -99,7 +99,6 @@ generate:
 			python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
 			python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
-			python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 			python3 tools/fast_fill_loops.py runtime/generated.asm; \
 			python3 tools/native_joypad_loops.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_blockbuf_collision.py runtime/generated.asm "$(ROM)"; \
@@ -118,6 +117,10 @@ generate:
 			python3 tools/cheap_carry_materialize.py runtime/generated.asm; \
 			python3 tools/sbc_carry_capture.py runtime/generated.asm; \
 		fi; \
+		# TRACE and partial POSTPASS_THROUGH builds also expand generated blocks. \
+		# Normalize short/long NES-label jumps after the final selected pass so \
+		# debug/pass-isolation builds cannot leave an out-of-range JR behind. \
+		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 
 gbc: generate
