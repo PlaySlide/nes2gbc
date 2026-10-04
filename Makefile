@@ -151,6 +151,7 @@ generate:
 			python3 tools/native_move_object_h.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/native_dk_sprite_loops.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/fallthrough_layout.py runtime/generated.asm; \
+			python3 tools/thread_adapter_jumps.py runtime/generated.asm; \
 		fi; \
 	fi
 
