@@ -40,6 +40,14 @@ nes_chr_ram_lo: ds $1000
 SECTION "NES CHR RAM high", WRAMX[$D000], BANK[3]
 nes_chr_ram_hi: ds $1000
 
+; $6000-$7FFF cartridge PRG RAM. This shares the same mutually-exclusive
+; scratch-bank pool as NROM's startup PRG cache; banked cartridges do not use
+; that cache. Battery persistence can later map this state to GBC SRAM.
+SECTION "NES PRG RAM low", WRAMX[$D000], BANK[4]
+nes_prg_ram_lo: ds $1000
+SECTION "NES PRG RAM high", WRAMX[$D000], BANK[5]
+nes_prg_ram_hi: ds $1000
+
 SECTION "NES virtual IO state", WRAM0[$C818]
 nes_ppu_status:       ds 1
 nes_ppuctrl:          ds 1
