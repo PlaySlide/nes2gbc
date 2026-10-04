@@ -1049,9 +1049,12 @@ nes_ppu_read_raw:
     ret
 
 .pattern:
-    ; Each 8 KiB NES CHR bank gets its own GBC ROM bank starting at bank 3.
+    ; Raw NES CHR banks are packed after the cartridge's PRG data. NROM keeps
+    ; the historical base at bank 3; banked mappers use a generated base.
+    ld a, [nes_chr_rom_bank_base]
+    ld b, a
     ld a, [nes_chr_bank]
-    add $03
+    add b
     ld [$2000], a
 
     ; Map PPU $0000-$1FFF to GBC ROMX $4000-$5FFF.
