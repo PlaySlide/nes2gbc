@@ -1216,6 +1216,10 @@ nes_ppu_map_nametable_hl:
     ld a, [nes_mirroring]
     cp $01
     jr z, .vertical
+    cp $03
+    jr z, .one_low
+    cp $04
+    jr z, .one_high
 
     ; Horizontal: logical 0/1 -> physical 0, logical 2/3 -> physical 1.
     ld a, h
@@ -1227,6 +1231,14 @@ nes_ppu_map_nametable_hl:
     ; Vertical: logical 0/2 -> physical 0, logical 1/3 -> physical 1.
     ld a, h
     and $04
+    jr .combine
+
+.one_low:
+    xor a
+    jr .combine
+
+.one_high:
+    ld a, $04
 
 .combine:
     or c
