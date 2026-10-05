@@ -376,6 +376,33 @@ nes_cache_prg16_to_wram:
     jr c, .copy_bank
     ret
 
+; Read the currently mapped UxROM PRG byte for mapper bus-conflict
+; resolution. Input HL = $8000-$FFFF, output A = ROM byte. Restores the
+; translated-code MBC5 bank before returning.
+nes_mapper2_conflict_read_hl:
+    ld a, h
+    cp $C0
+    jr c, .switchable
+    ld a, [nes_prg_fixed_bank]
+    jr .have_bank
+.switchable:
+    ld a, [nes_prg_bank]
+.have_bank:
+    inc a
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+
+    ld a, h
+    and $3F
+    or $40
+    ld h, a
+    ld a, [hl]
+    push af
+    call nes_restore_code_bank
+    pop af
+    ret
+
 ; Generic CPU read. Input HL = NES CPU address, output A = value.
 nes_cpu_read:
     PROFILE_INC nes_profile_cpu_read
@@ -954,12 +981,17 @@ ENDC
 
 .mapper2:
     ; UxROM writes anywhere in $8000-$FFFF select the 16 KiB bank visible
-    ; at $8000-$BFFF. The fixed high bank never changes.
+    ; at $8000-$BFFF. NES 2.0 submapper 2 explicitly requests the discrete-
+    ; logic AND bus conflict: mapper sees CPU_value & currently-mapped ROM_byte.
+    ld a, [nes_submapper]
+    cp $02
+    jr nz, .mapper2_no_conflict
+    call nes_mapper2_conflict_read_hl
+    and e
+    ld e, a
+.mapper2_no_conflict:
     ld a, [nes_prg_bank_mask]
     and e
-    ld b, a
-.mapper2_valid:
-    ld a, b
     ld [nes_prg_bank], a
     ret
 
