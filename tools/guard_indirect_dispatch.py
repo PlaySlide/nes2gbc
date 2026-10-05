@@ -444,7 +444,13 @@ def main() -> int:
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     label_bank, line_bank = index_labels(lines)
     labels = set(label_bank)
-    rom = NesRom(args.rom)
+    try:
+        rom = NesRom(args.rom)
+    except ValueError as err:
+        if "currently supports mapper 0/3" in str(err):
+            print(f"indirect-fast: {err}; skipped")
+            return 0
+        raise
     incoming = static_incoming_scores(lines, labels)
 
     sites = find_sites(lines, line_bank)
