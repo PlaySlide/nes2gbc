@@ -10,30 +10,14 @@ nes_generic_hidden_change_count: ds 1
 
 SECTION "NES PPU helpers", ROM0
 
-; Clear the 8 KiB cartridge CHR-RAM backing store. WRAMX banks 2 and 3
-; represent PPU $0000-$0FFF and $1000-$1FFF respectively.
+; Clear the 8 KiB cartridge CHR-RAM backing store. This is boot-only,
+; so keep the loop out of scarce ROM0 and run it from the reserved helper bank.
 nes_clear_chr_ram:
-    ldh a, [rSVBK]
-    push af
-    ld a, $02
-.clear_bank:
-    ldh [rSVBK], a
-    push af
-    ld hl, $D000
-    ld bc, $1000
-.clear_byte:
+    ld a, $FF
+    ld [$2000], a
     xor a
-    ld [hli], a
-    dec bc
-    ld a, b
-    or c
-    jr nz, .clear_byte
-    pop af
-    inc a
-    cp $04
-    jr c, .clear_bank
-    pop af
-    ldh [rSVBK], a
+    ld [$3000], a
+    call nes_clear_chr_ram_romx
     ret
 
 ; Input HL = PPU pattern address $0000-$1FFF. Output A = raw NES CHR byte.
@@ -1351,3 +1335,30 @@ nes_oam_dma:
     ld a, $01
     ld [nes_oam_dirty], a
     ret
+
+SECTION "NES CHR RAM clear helper", ROMX, BANK[255]
+nes_clear_chr_ram_romx:
+    ldh a, [rSVBK]
+    push af
+    ld a, $02
+.clear_bank:
+    ldh [rSVBK], a
+    push af
+    ld hl, $D000
+    ld bc, $1000
+.clear_byte:
+    xor a
+    ld [hli], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, .clear_byte
+    pop af
+    inc a
+    cp $04
+    jr c, .clear_bank
+    pop af
+    ldh [rSVBK], a
+    ret
+
+
