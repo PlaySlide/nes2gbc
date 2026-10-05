@@ -344,6 +344,7 @@ fn main() -> ExitCode {
         asm.push_str("\n");
         asm.push_str(&recompile::emit_runtime_config(&recompile::RuntimeConfig {
             mapper: cart.mapper,
+            submapper: cart.submapper,
             mirroring: cart.mirroring,
             prg_len: cart.prg_rom.len(),
             chr_len: cart.chr_rom.len(),
