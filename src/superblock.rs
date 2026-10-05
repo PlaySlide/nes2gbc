@@ -68,7 +68,7 @@ fn assign_code_banks(
             bank += 1;
             used = 0;
         }
-        assert!(bank <= 255, "translated code exceeds current 8-bit MBC5 bank allocator");
+        assert!(bank <= 254, "translated code exceeds 8-bit MBC5 allocator (bank 255 reserved for runtime helpers)");
         assigned.insert(*addr, bank);
         used += cost;
     }
