@@ -83,8 +83,8 @@ fn assign_code_banks(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTre
             used = 0;
         }
         assert!(
-            bank <= 255,
-            "translated code exceeds current 8-bit MBC5 bank allocator"
+            bank <= 254,
+            "translated code exceeds 8-bit MBC5 allocator (bank 255 reserved for runtime helpers)"
         );
         assigned.insert(*addr, bank);
         used += cost;
