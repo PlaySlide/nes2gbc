@@ -36,6 +36,14 @@ jobs:
         run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean all
       - name: Verify UxROM ROM exists
         run: test -s runtime/build/runtime.gbc
+      - name: Generate cross-bank UxROM CFG regression ROM
+        run: python3 tools/make_mapper2_crossbank_smoke_rom.py /tmp/nes2gbc-mapper2-crossbank.nes
+      - name: Recompile cross-bank UxROM
+        run: make generate ROM=/tmp/nes2gbc-mapper2-crossbank.nes APU=1
+      - name: Verify converged bank-1 post-switch entry exists
+        run: grep -q '^nes_m2_b01_9000:' runtime/generated.asm
+      - name: Assemble cross-bank UxROM GBC ROM with RGBDS
+        run: docker run --rm -v "$PWD/runtime:/work" -w /work ghcr.io/gbdev/rgbds:latest make clean all
       - name: Generate large synthetic UxROM linker stress ROM
         run: python3 tools/make_mapper2_large_smoke_rom.py /tmp/nes2gbc-mapper2-large.nes
       - name: Recompile large UxROM with APU
