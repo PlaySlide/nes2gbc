@@ -32,6 +32,13 @@ fn terminal_mnemonic(m: crate::cpu6502::Mnemonic) -> bool {
     )
 }
 
+fn complete_block(block: &BasicBlock) -> bool {
+    let Some(last) = block.instructions.last() else {
+        return false;
+    };
+    terminal_mnemonic(last.def.mnemonic) || !block.edges.is_empty()
+}
+
 fn block_cost(block: &BasicBlock) -> usize {
     64 + block.instructions.len() * 96
 }
@@ -258,6 +265,12 @@ pub fn emit_mapper2_cfgs(
     for (bank, graph) in views {
         let polls = poll_points(graph);
         for (&pc, block) in &graph.blocks {
+            // Cross-bank convergence intentionally probes addresses that may be
+            // data in some physical banks. CFG records a failed probe as an
+            // empty or unterminated block; never expose those through dispatch.
+            if !complete_block(block) {
+                continue;
+            }
             if pc >= 0xC000 {
                 fixed.entry(pc).or_insert_with(|| block.clone());
                 if polls.contains(&pc) {
