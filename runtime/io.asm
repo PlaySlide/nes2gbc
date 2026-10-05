@@ -17,6 +17,7 @@ nes_diag_ring: ds $10
 
 SECTION "NES cartridge state", WRAM0[$C810]
 nes_mapper:           ds 1
+nes_submapper:        ds 1
 nes_mirroring:        ds 1
 nes_prg_16k_mirror:   ds 1
 nes_chr_bank_mask:    ds 1
