@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::{collections::BTreeMap, env, fs, path::PathBuf, process::ExitCode};
 
 use nes2gbc::{assets, banked, cfg, cpu6502, ines, recompile, superblock};
@@ -220,20 +221,73 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         let fixed = &cart.prg_rom[(bank_count - 1) * 0x4000..bank_count * 0x4000];
+        let mut prg_views = Vec::with_capacity(bank_count);
         for bank in 0..bank_count {
             let mut view = Vec::with_capacity(0x8000);
             view.extend_from_slice(&cart.prg_rom[bank * 0x4000..(bank + 1) * 0x4000]);
             view.extend_from_slice(fixed);
-            let g = match cfg::discover_from_vectors(0, &view, vectors) {
-                Ok(graph) => graph,
-                Err(err) => {
-                    eprintln!("CFG discovery stopped in mapper-2 PRG bank {bank}: {err}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            switch_lo_views.push((bank as u8, g));
+            prg_views.push(view);
         }
-        println!("Mapper {} mode-3 PRG views analyzed: {bank_count}", cart.mapper);
+
+        // Bank-switching code commonly discovers a target while executing one
+        // physical low PRG bank, then selects another bank before transferring
+        // to that same logical CPU address. A per-bank CFG rooted only at the
+        // reset vectors therefore misses perfectly valid post-switch code.
+        //
+        // Converge the low-window entry set across every physical-bank view:
+        // once an address is proven code in any bank, try it as an entry in all
+        // banks. Invalid/data incarnations stop quickly at decode diagnostics;
+        // valid incarnations expose the next generation of banked targets.
+        let mut shared_low_entries = BTreeSet::<u16>::new();
+        let mut converged_views = Vec::new();
+        let mut rounds = 0usize;
+        loop {
+            rounds += 1;
+            converged_views.clear();
+            let mut discovered_low = shared_low_entries.clone();
+
+            let mut entries = vec![vectors.reset, vectors.nmi, vectors.irq_brk];
+            entries.extend(shared_low_entries.iter().copied());
+
+            for (bank, view) in prg_views.iter().enumerate() {
+                let g = match cfg::discover(0, view, &entries) {
+                    Ok(graph) => graph,
+                    Err(err) => {
+                        eprintln!(
+                            "CFG discovery stopped in mapper-{} PRG bank {bank}: {err}",
+                            cart.mapper
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                };
+                for &pc in g.blocks.keys() {
+                    if (0x8000..0xC000).contains(&pc) {
+                        discovered_low.insert(pc);
+                    }
+                }
+                for edge in g.blocks.values().flat_map(|block| &block.edges) {
+                    if let Some(pc) = edge.target {
+                        if (0x8000..0xC000).contains(&pc) {
+                            discovered_low.insert(pc);
+                        }
+                    }
+                }
+                converged_views.push((bank as u8, g));
+            }
+
+            if discovered_low == shared_low_entries || rounds >= 12 {
+                shared_low_entries = discovered_low;
+                break;
+            }
+            shared_low_entries = discovered_low;
+        }
+
+        switch_lo_views = converged_views;
+        println!(
+            "Mapper {} mode-3 PRG views analyzed: {bank_count}; banked CFG converged in {rounds} round(s) with {} shared low-window entrie(s)",
+            cart.mapper,
+            shared_low_entries.len()
+        );
         switch_lo_views[0].1.clone()
     } else {
         match cfg::discover_from_vectors(cart.mapper, cart.prg_rom, vectors) {
