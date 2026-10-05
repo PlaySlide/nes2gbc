@@ -17,7 +17,6 @@ nes_diag_ring: ds $10
 
 SECTION "NES cartridge state", WRAM0[$C810]
 nes_mapper:           ds 1
-nes_submapper:        ds 1
 nes_mirroring:        ds 1
 nes_prg_16k_mirror:   ds 1
 nes_chr_bank_mask:    ds 1
@@ -27,6 +26,7 @@ nes_chr_gbc_bank_base: ds 1
 ; Banked cartridge state is linker-placed so the fixed diagnostic/IO layout
 ; above remains byte-for-byte stable for existing NROM debugging.
 SECTION "NES banked cartridge state", WRAM0
+nes_submapper:         ds 1 ; NES 2.0 mapper variant (banked mappers only)
 nes_prg_bank:          ds 1 ; active physical bank at CPU $8000-$BFFF
 nes_prg_hi_bank:       ds 1 ; active physical bank at CPU $C000-$FFFF (MMC1)
 nes_prg_bank_mask:     ds 1
