@@ -51,7 +51,7 @@ fn assign_bank(
         *bank += 1;
         *used = 0;
     }
-    assert!(*bank <= 255, "translated mapper code exceeds current 8-bit MBC5 bank allocator");
+    assert!(*bank <= 254, "translated mapper code exceeds 8-bit MBC5 allocator (bank 255 reserved for runtime helpers)");
     assigned.insert(id, *bank);
     *used += cost;
 }
