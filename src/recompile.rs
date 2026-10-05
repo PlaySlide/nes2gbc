@@ -836,6 +836,7 @@ pub fn emit_cfg_with_interrupts(
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig<'a> {
     pub mapper: u16,
+    pub submapper: u8,
     pub mirroring: crate::ines::Mirroring,
     pub prg_len: usize,
     pub chr_len: usize,
@@ -876,6 +877,8 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     writeln!(out, "nes_generated_init:").unwrap();
     writeln!(out, "    ld a, ${:02X}", config.mapper as u8).unwrap();
     writeln!(out, "    ld [nes_mapper], a").unwrap();
+    writeln!(out, "    ld a, ${:02X}", config.submapper).unwrap();
+    writeln!(out, "    ld [nes_submapper], a").unwrap();
     writeln!(out, "    ld a, ${mirroring:02X}").unwrap();
     writeln!(out, "    ld [nes_mirroring], a").unwrap();
     writeln!(out, "    ld a, ${prg_16k_mirror:02X}").unwrap();
@@ -980,6 +983,7 @@ mod tests {
     fn runtime_config_caches_mirrored_16k_prg() {
         let cfg = RuntimeConfig {
             mapper: 0,
+            submapper: 0,
             mirroring: crate::ines::Mirroring::Horizontal,
             prg_len: 0x4000,
             chr_len: 0x2000,
