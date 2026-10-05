@@ -1005,6 +1005,97 @@ ENDC
 
 
 
+; Recompute MMC1 mapping in fixed ROM0. It always returns with helper bank
+; $FF selected so a caller executing from that bank remains valid.
+nes_mmc1_apply:
+    ; Mirroring encoding used by nes_ppu_map_nametable_hl:
+    ; 0=horizontal, 1=vertical, 3=one-screen low, 4=one-screen high.
+    ld a, [nes_mmc1_control]
+    and $03
+    jr z, .mirror_low
+    cp $01
+    jr z, .mirror_high
+    cp $02
+    jr z, .mirror_vertical
+    xor a
+    jr .mirror_store
+.mirror_low:
+    ld a, $03
+    jr .mirror_store
+.mirror_high:
+    ld a, $04
+    jr .mirror_store
+.mirror_vertical:
+    ld a, $01
+.mirror_store:
+    ld [nes_mirroring], a
+
+    ; C = selected 16 KiB PRG bank, B = implemented-bank mask.
+    ld a, [nes_prg_bank_mask]
+    ld b, a
+    ld a, [nes_mmc1_prg]
+    and b
+    ld c, a
+
+    ld a, [nes_mmc1_control]
+    and $0C
+    cp $08
+    jr z, .prg_mode2
+    cp $0C
+    jr z, .prg_mode3
+
+    ; Modes 0/1: switch a 32 KiB pair, ignoring PRG register bit 0.
+    ld a, c
+    res 0, a
+    and b
+    ld [nes_prg_bank], a
+    inc a
+    and b
+    ld [nes_prg_hi_bank], a
+    jr .chr
+
+.prg_mode2:
+    xor a
+    ld [nes_prg_bank], a
+    ld a, c
+    ld [nes_prg_hi_bank], a
+    jr .chr
+
+.prg_mode3:
+    ld a, c
+    ld [nes_prg_bank], a
+    ld a, [nes_prg_fixed_bank]
+    ld [nes_prg_hi_bank], a
+
+.chr:
+    ; CHR RAM needs no bank upload. For CHR ROM, support MMC1's 8 KiB mode
+    ; immediately; split 4 KiB CHR-ROM banking is a separate renderer step.
+    ld a, [nes_chr_is_ram]
+    and a
+    jr nz, .done
+    ld a, [nes_mmc1_control]
+    bit 4, a
+    jr nz, .done
+
+    ld a, [nes_mmc1_chr0]
+    srl a
+    ld b, a
+    ld a, [nes_chr_bank_mask]
+    and b
+    ld b, a
+    ld a, [nes_chr_bank]
+    cp b
+    jr z, .done
+    ld a, b
+    ld [nes_chr_bank], a
+    call nes_upload_chr_bank
+.done:
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    ret
+
 ; Input: A = lhs, E = rhs. Uses lazy 6502 carry-in.
 ; Output: A = result, updates lazy C/Z/N and V in nes_p.
 nes_adc_a_e:
@@ -1752,6 +1843,8 @@ nes_bit_reverse:
 
 ; Mapper-specific cold runtime lives in a dedicated MBC5 bank so commercial
 ; banked games do not exhaust the 16 KiB fixed ROM0 runtime.
+
+
 SECTION "NES MMC1 mapper helper", ROMX[$4000], BANK[255]
 
 ; Input: H = CPU address high byte, E = mapper write value.
@@ -1821,88 +1914,3 @@ nes_mmc1_write_romx:
     and $1F
     ld [nes_mmc1_chr1], a
     jp nes_mmc1_apply
-
-nes_mmc1_apply:
-    ; Mirroring encoding used by nes_ppu_map_nametable_hl:
-    ; 0=horizontal, 1=vertical, 3=one-screen low, 4=one-screen high.
-    ld a, [nes_mmc1_control]
-    and $03
-    jr z, .mirror_low
-    cp $01
-    jr z, .mirror_high
-    cp $02
-    jr z, .mirror_vertical
-    xor a
-    jr .mirror_store
-.mirror_low:
-    ld a, $03
-    jr .mirror_store
-.mirror_high:
-    ld a, $04
-    jr .mirror_store
-.mirror_vertical:
-    ld a, $01
-.mirror_store:
-    ld [nes_mirroring], a
-
-    ; C = selected 16 KiB PRG bank, B = implemented-bank mask.
-    ld a, [nes_prg_bank_mask]
-    ld b, a
-    ld a, [nes_mmc1_prg]
-    and b
-    ld c, a
-
-    ld a, [nes_mmc1_control]
-    and $0C
-    cp $08
-    jr z, .prg_mode2
-    cp $0C
-    jr z, .prg_mode3
-
-    ; Modes 0/1: switch a 32 KiB pair, ignoring PRG register bit 0.
-    ld a, c
-    res 0, a
-    and b
-    ld [nes_prg_bank], a
-    inc a
-    and b
-    ld [nes_prg_hi_bank], a
-    jr .chr
-
-.prg_mode2:
-    xor a
-    ld [nes_prg_bank], a
-    ld a, c
-    ld [nes_prg_hi_bank], a
-    jr .chr
-
-.prg_mode3:
-    ld a, c
-    ld [nes_prg_bank], a
-    ld a, [nes_prg_fixed_bank]
-    ld [nes_prg_hi_bank], a
-
-.chr:
-    ; CHR RAM needs no bank upload. For CHR ROM, support MMC1's 8 KiB mode
-    ; immediately; split 4 KiB CHR-ROM banking is a separate renderer step.
-    ld a, [nes_chr_is_ram]
-    and a
-    ret nz
-    ld a, [nes_mmc1_control]
-    bit 4, a
-    ret nz
-
-    ld a, [nes_mmc1_chr0]
-    srl a
-    ld b, a
-    ld a, [nes_chr_bank_mask]
-    and b
-    ld b, a
-    ld a, [nes_chr_bank]
-    cp b
-    ret z
-    ld a, b
-    ld [nes_chr_bank], a
-    call nes_upload_chr_bank
-    ret
-
