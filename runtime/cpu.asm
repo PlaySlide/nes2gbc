@@ -752,6 +752,28 @@ nes_prg_read_hi_a::
     ld [$2000], a
     ld a, l
     ret
+; nes_cpu_read_hi for code translated for view bank K: In: HL = NES address
+; >= $2000, A = K+1 (bank K is mapped while that code runs). Same results and
+; clobbers as nes_cpu_read_hi.
+nes_cpu_read_hi_view::
+    bit 7, h
+    jp z, nes_cpu_read_hi
+    res 7, h
+    bit 6, h
+    jr nz, .hi
+    set 6, h
+.go:
+    ld [$2000], a
+    ld l, [hl]
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    xor a
+    ld a, l
+    ret
+.hi:
+    ld a, [nes_prg_hi_bank]
+    inc a
+    jr .go
 nes_prg_read_hi_dyn::
     ld a, [nes_prg_hi_bank]
     inc a

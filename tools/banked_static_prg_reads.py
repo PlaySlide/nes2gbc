@@ -120,6 +120,27 @@ def main(path, rom):
             edits[k] = []
         edits[tail[-1]] = rep + [":\n"]
         edits[i] = []
+    # Remaining dynamic-address reads in code translated for view bank K
+    # (instruction PC in $8000-$BFFF): bank K is mapped, so a $8000-$BFFF
+    # address needs no nes_prg_bank load (nes_cpu_read_hi_view, A = K+1).
+    label = None
+    pc = None
+    n_view = 0
+    for i, l in enumerate(L):
+        mm = LABEL.match(l)
+        if mm:
+            label = mm.group(1)
+        mp = PC.search(l)
+        if mp:
+            pc = int(mp.group(1), 16)
+        if C[i] != "call nes_cpu_read_hi" or i in edits:
+            continue
+        lab = M2.match(label or "")
+        if lab and pc is not None and 0x8000 <= pc < 0xC000 and 0x8000 <= int(lab.group(2), 16) < 0xC000 and not check:
+            k = int(lab.group(1), 16)
+            edits[i] = [f"    ld a, ${k + 1:02X} ; PRG bank {k} is the executing view\n", "    call nes_cpu_read_hi_view\n"]
+            n_view += 1
+    print(f"banked-static-prg-reads: {n_view} dynamic read(s) in view code use nes_cpu_read_hi_view")
     res = []
     for k, l in enumerate(L):
         if k in edits:
