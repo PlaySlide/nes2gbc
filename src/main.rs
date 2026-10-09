@@ -413,6 +413,28 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
 
+        // Banked mappers can execute code their reset code copies into RAM
+        // (Zelda runs $6C90-$7EFF from PRG RAM). Enable the runtime 6502
+        // interpreter for PCs below $8000 there; mapper 0/3 builds stay
+        // byte-identical. Idempotent so repeated direct runs don't redefine.
+        if cart.mapper == 1 || cart.mapper == 2 {
+            let config_path = parent.join("generated_config.inc");
+            let line = "DEF NES2GBC_RAM_INTERP EQU 1 ; banked mapper: interpret RAM-resident code";
+            let existing = fs::read_to_string(&config_path).unwrap_or_default();
+            if !existing.lines().any(|l| l.starts_with("DEF NES2GBC_RAM_INTERP ")) {
+                let mut text = existing;
+                if !text.is_empty() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(line);
+                text.push('\n');
+                if let Err(err) = fs::write(&config_path, text) {
+                    eprintln!("error writing {}: {err}", config_path.display());
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+
         println!("Generated LR35902 assembly: {}", out_path.display());
         println!("Embedded PRG data: {}", prg_path.display());
         println!("Embedded CHR data: {}", chr_path.display());

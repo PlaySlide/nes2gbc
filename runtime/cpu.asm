@@ -179,7 +179,11 @@ ENDC
 
     ld a, h
     cp $80
+IF DEF(NES2GBC_RAM_INTERP)
+    jp c, nes_interp_enter
+ELSE
     jp c, nes_unimplemented
+ENDC
 
     ; Direct-mapped cache of resolved translations: 128 entries indexed by
     ; (lo - hi) & $7F (fewer hot collisions than lo & $7F), tagged by

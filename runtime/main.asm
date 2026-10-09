@@ -1119,4 +1119,7 @@ INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
 INCLUDE "video.asm"
 INCLUDE "input.asm"
+IF DEF(NES2GBC_RAM_INTERP)
+INCLUDE "interp.asm"
+ENDC
 INCLUDE "generated.asm"

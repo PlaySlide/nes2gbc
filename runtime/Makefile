@@ -31,7 +31,7 @@ all: $(OUTPUT)
 build:
 	mkdir -p build
 
-$(OBJ): main.asm generated_config.inc hardware.inc io.asm apu.asm profile.asm cpu.asm ppu.asm video.asm input.asm generated.asm | build
+$(OBJ): main.asm generated_config.inc hardware.inc interp.asm io.asm apu.asm profile.asm cpu.asm ppu.asm video.asm input.asm generated.asm | build
 	rgbasm $(RGBASM_FLAGS) -o "$@" main.asm
 
 $(HEADER_OBJ): header_reserve.asm | build
