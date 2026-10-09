@@ -110,6 +110,7 @@ generate:
 			python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 			python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
 			python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
+			python3 tools/banked_direct_transfers.py runtime/generated.asm; \
 			python3 tools/fast_code_bank_switch.py runtime/generated.asm; \
 			python3 tools/fast_fill_loops.py runtime/generated.asm; \
 			python3 tools/native_joypad_loops.py runtime/generated.asm "$(ROM)"; \

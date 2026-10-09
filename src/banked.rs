@@ -81,6 +81,31 @@ fn poll_points(graph: &ControlFlowGraph) -> BTreeSet<u16> {
     points
 }
 
+/// True when no instruction in `block` can write a mapper register
+/// ($8000-$FFFF), so the PRG bank mapped at its exit equals the one mapped
+/// at its entry. Indirect stores and indexed stores that may reach $8000 are
+/// treated as possible bank switches.
+fn bank_stable(block: &BasicBlock) -> bool {
+    use crate::cpu6502::{AddressingMode::*, Mnemonic::*};
+    block.instructions.iter().all(|ins| {
+        let writes = match ins.def.mnemonic {
+            Sta | Stx | Sty => true,
+            Inc | Dec | Asl | Lsr | Rol | Ror => ins.def.mode != Accumulator,
+            Brk => return false,
+            _ => false,
+        };
+        if !writes {
+            return true;
+        }
+        match ins.def.mode {
+            ZeroPage | ZeroPageX | ZeroPageY => true,
+            Absolute => ins.operand < 0x8000,
+            AbsoluteX | AbsoluteY => (ins.operand as u32) + 0xFF < 0x8000,
+            _ => false,
+        }
+    })
+}
+
 fn label(id: BlockId) -> String {
     match id {
         BlockId::Fixed(pc) | BlockId::Stub(pc) => format!("nes_{pc:04X}"),
@@ -155,6 +180,11 @@ fn emit_block(
     }
     let name = label(id);
     writeln!(out, "{name}:").unwrap();
+    if matches!(id, BlockId::Banked(..)) && bank_stable(block) {
+        // Read by tools/banked_direct_transfers.py: static exits may enter
+        // this view's own variant of a $8000-$BFFF target directly.
+        writeln!(out, "    ; m2-bank-stable").unwrap();
+    }
 
     writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
     writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
