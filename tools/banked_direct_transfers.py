@@ -45,6 +45,7 @@ def main(path: str) -> None:
     out = list(lines)
     view = None      # bank NN of the current $8000-$BFFF variant section
     stable = False
+    pure = False     # current overlay block cannot store into PRG RAM
     in_code = False
     n_fixed = n_stub = n_variant = n_overlay = kept = 0
     for i, l in enumerate(lines):
@@ -53,11 +54,15 @@ def main(path: str) -> None:
             in_code = bool(m)
             view = m.group(2) if m and m.group(2) else None
             stable = False
+            pure = False
             continue
         if not in_code:
             continue
         if "; m2-bank-stable" in l:
             stable = True
+            continue
+        if "; ovl-pure" in l:
+            pure = True
             continue
         if code(l) != "jp nes_dispatch_hl":
             continue
@@ -75,8 +80,11 @@ def main(path: str) -> None:
                 target = cand
                 n_variant += 1
         if target is None and 0x6000 <= t < 0x8000 and f"nes_r_{t:04X}" in labels:
-            # Translated PRG-RAM overlay block (it validates its own bytes).
+            # Translated PRG-RAM overlay block (it validates its own bytes);
+            # a pure overlay source skips the re-validation.
             target = f"nes_r_{t:04X}"
+            if pure and f"nes_r_{t:04X}_nc" in labels:
+                target = f"nes_r_{t:04X}_nc"
             n_overlay += 1
         if target is None and t >= 0x8000 and f"nes_{t:04X}" in labels:
             target = f"nes_{t:04X}"

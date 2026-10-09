@@ -189,6 +189,13 @@ fn emit_block(
     writeln!(out, "{name}:").unwrap();
     if let (BlockId::Overlay(pc), Some(expect)) = (id, expect) {
         emit_overlay_check(out, pc, expect);
+        // Unchecked entry for static edges from overlay blocks that cannot
+        // store into PRG RAM (`; ovl-pure`): the bytes they were entered
+        // with are still intact. NMI resumes and other entries use nes_r_.
+        writeln!(out, "nes_r_{pc:04X}_nc:").unwrap();
+        if !block_may_write_prg_ram(block) {
+            writeln!(out, "    ; ovl-pure").unwrap();
+        }
     }
     if matches!(id, BlockId::Banked(..)) && !shared && bank_stable(block) {
         // Read by tools/banked_direct_transfers.py: static exits may enter
@@ -257,6 +264,25 @@ fn emit_block(
         }
     }
     writeln!(out).unwrap();
+}
+
+/// Conservatively: may any instruction of the block store to $6000-$7FFF?
+fn block_may_write_prg_ram(block: &BasicBlock) -> bool {
+    use crate::cpu6502::{AddressingMode as M, Mnemonic::*};
+    block.instructions.iter().any(|i| {
+        let writes = matches!(i.def.mnemonic, Sta | Stx | Sty | Inc | Dec | Asl | Lsr | Rol | Ror)
+            && i.def.mode != M::Accumulator;
+        if !writes {
+            return false;
+        }
+        let hits = |lo: u32, hi: u32| lo < 0x8000 && hi >= 0x6000;
+        match i.def.mode {
+            M::ZeroPage | M::ZeroPageX | M::ZeroPageY => false,
+            M::Absolute => hits(i.operand as u32, i.operand as u32),
+            M::AbsoluteX | M::AbsoluteY => hits(i.operand as u32, i.operand as u32 + 0xFF),
+            _ => true,
+        }
+    })
 }
 
 /// Overlay block entry: confirm PRG RAM still holds the bytes this block was
