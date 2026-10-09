@@ -1,4 +1,5 @@
 pub mod banked;
+pub mod overlay;
 pub mod assets;
 pub mod cfg;
 pub mod cpu6502;

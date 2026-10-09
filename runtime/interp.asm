@@ -6,7 +6,7 @@ nes_ipc_lo: ds 1 ; interpreted 6502 PC
 nes_ipc_hi: ds 1
 nes_iea_lo: ds 1 ; effective address of the current instruction
 nes_iea_hi: ds 1
-nes_interp_may_exit: ds 1 ; 1 after a control transfer: try translated code at PC >= $8000
+nes_interp_may_exit: ds 1 ; 1 after a control transfer: try translated code at PC >= $8000 (or PRG RAM with an overlay)
 nes_interp_rom_entries: ds 2 ; diagnostic: untranslated ROM PCs handed to the interpreter
 nes_interp_rom_last_lo: ds 1 ; diagnostic: last such PC
 nes_interp_rom_last_hi: ds 1
@@ -57,7 +57,12 @@ nes_interp_run:
     ld [nes_interp_may_exit], a
 nes_interp_next:
     ld a, [nes_ipc_hi]
+IF DEF(NES2GBC_RAM_OVERLAY)
+    ; PRG-RAM PCs may have an ahead-of-time translation too.
+    cp $60
+ELSE
     cp $80
+ENDC
     jr c, .fetch
     ld a, [nes_interp_may_exit]
     and a

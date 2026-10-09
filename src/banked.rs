@@ -17,6 +17,8 @@ enum BlockId {
     Fixed(u16),
     Banked(u8, u16),
     Stub(u16),
+    /// Ahead-of-time translation of PRG-RAM code (see overlay.rs).
+    Overlay(u16),
 }
 
 fn is_branch(m: crate::cpu6502::Mnemonic) -> bool {
@@ -110,6 +112,7 @@ fn label(id: BlockId) -> String {
     match id {
         BlockId::Fixed(pc) | BlockId::Stub(pc) => format!("nes_{pc:04X}"),
         BlockId::Banked(bank, pc) => format!("nes_m2_b{bank:02X}_{pc:04X}"),
+        BlockId::Overlay(pc) => format!("nes_r_{pc:04X}"),
     }
 }
 
@@ -164,6 +167,7 @@ fn emit_block(
     host_bank: u16,
     do_poll: bool,
     debug_trace: bool,
+    expect: Option<&[u8]>,
 ) {
     match id {
         BlockId::Fixed(pc) => {
@@ -176,10 +180,16 @@ fn emit_block(
             )
             .unwrap();
         }
+        BlockId::Overlay(pc) => {
+            writeln!(out, "SECTION \"NES overlay block {pc:04X}\", ROMX, BANK[{host_bank}]").unwrap();
+        }
         BlockId::Stub(_) => unreachable!(),
     }
     let name = label(id);
     writeln!(out, "{name}:").unwrap();
+    if let (BlockId::Overlay(pc), Some(expect)) = (id, expect) {
+        emit_overlay_check(out, pc, expect);
+    }
     if matches!(id, BlockId::Banked(..)) && bank_stable(block) {
         // Read by tools/banked_direct_transfers.py: static exits may enter
         // this view's own variant of a $8000-$BFFF target directly.
@@ -244,6 +254,97 @@ fn emit_block(
     writeln!(out).unwrap();
 }
 
+/// Overlay block entry: confirm PRG RAM still holds the bytes this block was
+/// translated from; otherwise interpret from this PC. $6000-$6FFF lives in
+/// WRAMX bank 4 and $7000-$7FFF in bank 5, both at $D000.
+fn emit_overlay_check(out: &mut String, pc: u16, expect: &[u8]) {
+    writeln!(out, "    ldh a, [rSVBK]").unwrap();
+    writeln!(out, "    ld b, a").unwrap();
+    let mut cur_bank = None;
+    for (k, &byte) in expect.iter().enumerate() {
+        let addr = pc.wrapping_add(k as u16);
+        let wbank = if addr & 0x1000 != 0 { 5 } else { 4 };
+        if cur_bank != Some(wbank) {
+            writeln!(out, "    ld a, {wbank}").unwrap();
+            writeln!(out, "    ldh [rSVBK], a").unwrap();
+            writeln!(out, "    ld hl, ${:04X}", 0xD000 | (addr & 0x0FFF)).unwrap();
+            cur_bank = Some(wbank);
+        }
+        writeln!(out, "    ld a, [hli]").unwrap();
+        writeln!(out, "    cp ${byte:02X}").unwrap();
+        writeln!(out, "    jp nz, .ovl_stale").unwrap();
+    }
+    writeln!(out, "    ld a, b").unwrap();
+    writeln!(out, "    ldh [rSVBK], a").unwrap();
+    writeln!(out, "    jr .ovl_ok").unwrap();
+    writeln!(out, ".ovl_stale:").unwrap();
+    writeln!(out, "    ld a, b").unwrap();
+    writeln!(out, "    ldh [rSVBK], a").unwrap();
+    writeln!(out, "    ld hl, ${pc:04X}").unwrap();
+    writeln!(out, "    jp nes_interp_enter").unwrap();
+    writeln!(out, ".ovl_ok:").unwrap();
+}
+
+/// PRG-RAM overlay dispatch: HL = NES PC in $6000-$7FFF (others go straight
+/// to the interpreter). Two 4 KiB-page tables of (bank, 0, addr) entries.
+fn emit_overlay_dispatch(out: &mut String, addresses: &BTreeSet<u16>) {
+    writeln!(out, "SECTION \"NES overlay dispatch\", ROM0").unwrap();
+    writeln!(out, "nes_overlay_dispatch_hl:").unwrap();
+    writeln!(out, "    ld a, h").unwrap();
+    writeln!(out, "    cp $60").unwrap();
+    writeln!(out, "    jp c, nes_interp_enter").unwrap();
+    writeln!(out, "    ld b, h").unwrap();
+    writeln!(out, "    ld e, l").unwrap();
+    writeln!(out, "    bit 4, a").unwrap();
+    writeln!(out, "    ld a, BANK(nes_overlay_table_6)").unwrap();
+    writeln!(out, "    jr z, :+").unwrap();
+    writeln!(out, "    ld a, BANK(nes_overlay_table_7)").unwrap();
+    writeln!(out, ":").unwrap();
+    writeln!(out, "    ld [$2000], a").unwrap();
+    writeln!(out, "    xor a").unwrap();
+    writeln!(out, "    ld [$3000], a").unwrap();
+    writeln!(out, "    ld a, h").unwrap();
+    writeln!(out, "    and $0F").unwrap();
+    writeln!(out, "    ld h, a").unwrap();
+    writeln!(out, "    add hl, hl").unwrap();
+    writeln!(out, "    add hl, hl").unwrap();
+    writeln!(out, "    set 6, h").unwrap();
+    writeln!(out, "    ld a, [hli]").unwrap();
+    writeln!(out, "    and a").unwrap();
+    writeln!(out, "    jr z, .miss").unwrap();
+    writeln!(out, "    ld c, a").unwrap();
+    writeln!(out, "    inc hl").unwrap();
+    writeln!(out, "    ld a, [hli]").unwrap();
+    writeln!(out, "    ld h, [hl]").unwrap();
+    writeln!(out, "    ld l, a").unwrap();
+    writeln!(out, "    ld a, c").unwrap();
+    writeln!(out, "    jp nes_jump_known_hl_a").unwrap();
+    writeln!(out, ".miss:").unwrap();
+    writeln!(out, "    ld h, b").unwrap();
+    writeln!(out, "    ld l, e").unwrap();
+    writeln!(out, "    jp nes_interp_enter").unwrap();
+    writeln!(out).unwrap();
+    for page in [6u16, 7] {
+        let base = page << 12;
+        writeln!(out, "SECTION \"NES overlay dispatch table {page}\", ROMX[$4000]").unwrap();
+        writeln!(out, "nes_overlay_table_{page}:").unwrap();
+        let mut cursor = 0usize;
+        for addr in addresses.range(base..base + 0x1000).copied() {
+            let offset = (addr - base) as usize;
+            if offset > cursor {
+                writeln!(out, "    ds {}, $00", (offset - cursor) * 4).unwrap();
+            }
+            writeln!(out, "    db BANK(nes_r_{addr:04X}), $00").unwrap();
+            writeln!(out, "    dw nes_r_{addr:04X}").unwrap();
+            cursor = offset + 1;
+        }
+        if cursor < 0x1000 {
+            writeln!(out, "    ds {}, $00", (0x1000 - cursor) * 4).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+}
+
 fn emit_stub(
     out: &mut String,
     pc: u16,
@@ -294,6 +395,7 @@ fn emit_stub(
 pub fn emit_mapper2_cfgs(
     views: &[(u8, ControlFlowGraph)],
     options: EmitOptions,
+    overlay: Option<&crate::overlay::RamOverlay>,
 ) -> String {
     assert!(!views.is_empty(), "mapper 2 requires at least one PRG bank view");
 
@@ -394,6 +496,24 @@ pub fn emit_mapper2_cfgs(
             &mut used,
         );
     }
+    if let Some(ov) = overlay {
+        for (&pc, block) in &ov.blocks {
+            let bytes: usize = block.instructions.iter().map(|i| i.def.len() as usize).sum();
+            assign_bank(
+                &mut assigned,
+                BlockId::Overlay(pc),
+                block_cost(block) + 24 + bytes * 6,
+                &mut host_bank,
+                &mut used,
+            );
+        }
+        println!(
+            "ram-overlay: translated {} block(s) of PRG-RAM code at ${:04X}-${:04X}",
+            ov.blocks.len(),
+            ov.dst,
+            ov.dst as usize + ov.bytes.len() - 1
+        );
+    }
 
     println!(
         "mapper2: emitted {} fixed block(s), {} banked block variant(s), {} bank-aware dispatch stub(s) across {} PRG bank view(s)",
@@ -425,6 +545,7 @@ pub fn emit_mapper2_cfgs(
             assigned[&BlockId::Fixed(pc)],
             fixed_polls.contains(&pc),
             options.debug_trace,
+            None,
         );
     }
     for (&(bank, pc), block) in &banked_selected {
@@ -435,7 +556,25 @@ pub fn emit_mapper2_cfgs(
             assigned[&BlockId::Banked(bank, pc)],
             banked_polls.contains(&(bank, pc)),
             options.debug_trace,
+            None,
         );
+    }
+    if let Some(ov) = overlay {
+        for (&pc, block) in &ov.blocks {
+            let len: usize = block.instructions.iter().map(|i| i.def.len() as usize).sum();
+            let start = (pc - ov.dst) as usize;
+            emit_block(
+                &mut out,
+                BlockId::Overlay(pc),
+                block,
+                assigned[&BlockId::Overlay(pc)],
+                true,
+                options.debug_trace,
+                Some(&ov.bytes[start..start + len]),
+            );
+        }
+        let entries: BTreeSet<u16> = ov.blocks.keys().copied().collect();
+        emit_overlay_dispatch(&mut out, &entries);
     }
 
     for (&pc, banks) in &variants {

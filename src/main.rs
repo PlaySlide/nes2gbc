@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::{collections::BTreeMap, env, fs, path::PathBuf, process::ExitCode};
 
-use nes2gbc::{assets, banked, cfg, cpu6502, ines, recompile, superblock};
+use nes2gbc::{assets, banked, cfg, cpu6502, ines, overlay, recompile, superblock};
 
 fn print_hot_profile(graph: &cfg::ControlFlowGraph) {
     let mut mnemonics: BTreeMap<String, usize> = BTreeMap::new();
@@ -339,8 +339,15 @@ fn main() -> ExitCode {
             max_blocks,
             debug_trace,
         };
+        let ram_overlay = if (cart.mapper == 1 || cart.mapper == 2)
+            && env::var_os("NES2GBC_NO_RAM_OVERLAY").is_none()
+        {
+            overlay::detect(&switch_lo_views, cart.prg_rom)
+        } else {
+            None
+        };
         let mut asm = if cart.mapper == 1 || cart.mapper == 2 {
-            banked::emit_mapper2_cfgs(&switch_lo_views, emit_options)
+            banked::emit_mapper2_cfgs(&switch_lo_views, emit_options, ram_overlay.as_ref())
         } else {
             superblock::emit_cfg_with_interrupts(
                 &graph,
@@ -420,14 +427,25 @@ fn main() -> ExitCode {
         if cart.mapper == 1 || cart.mapper == 2 {
             let config_path = parent.join("generated_config.inc");
             let line = "DEF NES2GBC_RAM_INTERP EQU 1 ; banked mapper: interpret RAM-resident code";
+            let ovl_line = "DEF NES2GBC_RAM_OVERLAY EQU 1 ; translated PRG-RAM code overlay";
             let existing = fs::read_to_string(&config_path).unwrap_or_default();
-            if !existing.lines().any(|l| l.starts_with("DEF NES2GBC_RAM_INTERP ")) {
-                let mut text = existing;
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
+            let mut text: String = existing
+                .lines()
+                .filter(|l| !l.starts_with("DEF NES2GBC_RAM_OVERLAY "))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            let mut changed = text != existing;
+            if !text.lines().any(|l| l.starts_with("DEF NES2GBC_RAM_INTERP ")) {
                 text.push_str(line);
                 text.push('\n');
+                changed = true;
+            }
+            if ram_overlay.is_some() {
+                text.push_str(ovl_line);
+                text.push('\n');
+                changed = true;
+            }
+            if changed {
                 if let Err(err) = fs::write(&config_path, text) {
                     eprintln!("error writing {}: {err}", config_path.display());
                     return ExitCode::FAILURE;

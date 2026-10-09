@@ -25,7 +25,7 @@ import re, sys
 from pathlib import Path
 
 LIMIT = 0x4000 - 0x200
-SEC_RE = re.compile(r'^(\s*SECTION\s+"(NES block [0-9A-Fa-f]{4}|NES mapper2 b[0-9A-Fa-f]{2} block [0-9A-Fa-f]{4}|NES mapper2 dispatch stub [0-9A-Fa-f]{4}|NES canonical superblock entry [0-9A-Fa-f]{4}|Hot PRG mirrors b\d+|Native leaf [0-9A-Fa-f]{4} bank \d+)",\s*ROMX,\s*BANK\[)(\d+)(\].*)$')
+SEC_RE = re.compile(r'^(\s*SECTION\s+"(NES block [0-9A-Fa-f]{4}|NES mapper2 b[0-9A-Fa-f]{2} block [0-9A-Fa-f]{4}|NES mapper2 dispatch stub [0-9A-Fa-f]{4}|NES overlay block [0-9A-Fa-f]{4}|NES canonical superblock entry [0-9A-Fa-f]{4}|Hot PRG mirrors b\d+|Native leaf [0-9A-Fa-f]{4} bank \d+)",\s*ROMX,\s*BANK\[)(\d+)(\].*)$')
 ANY_SEC = re.compile(r"^\s*SECTION\b")
 LABEL_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):{1,2}$")
 REG8 = {"a", "b", "c", "d", "e", "h", "l", "[hl]"}
