@@ -245,6 +245,7 @@ fn main() -> ExitCode {
         let mut bank_seeds: Vec<BTreeSet<u16>> = vec![BTreeSet::new(); bank_count];
         let mut converged_views = Vec::new();
         let mut rounds = 0usize;
+        let mut overlay_seeded = false;
         loop {
             rounds += 1;
             converged_views.clear();
@@ -284,6 +285,20 @@ fn main() -> ExitCode {
             shared_fixed_entries = next_fixed;
             bank_seeds = next_seeds;
             if !changed || rounds >= 16 {
+                // Code copied into PRG RAM may call $8000-$BFFF routines that
+                // every bank duplicates byte-for-byte (Zelda's MMC1 bank
+                // switch at $BFAC/$BF98). Seed those once into bank 0; the
+                // emitter shares that translation with the identical banks.
+                if !overlay_seeded && env::var_os("NES2GBC_NO_RAM_OVERLAY").is_none() {
+                    overlay_seeded = true;
+                    let mut added = false;
+                    for t in overlay::shared_low_targets(&converged_views, cart.prg_rom) {
+                        added |= bank_seeds[0].insert(t);
+                    }
+                    if added {
+                        continue;
+                    }
+                }
                 break;
             }
         }
@@ -347,7 +362,7 @@ fn main() -> ExitCode {
             None
         };
         let mut asm = if cart.mapper == 1 || cart.mapper == 2 {
-            banked::emit_mapper2_cfgs(&switch_lo_views, emit_options, ram_overlay.as_ref())
+            banked::emit_mapper2_cfgs(&switch_lo_views, emit_options, ram_overlay.as_ref(), cart.prg_rom)
         } else {
             superblock::emit_cfg_with_interrupts(
                 &graph,

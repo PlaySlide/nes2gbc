@@ -168,6 +168,7 @@ fn emit_block(
     do_poll: bool,
     debug_trace: bool,
     expect: Option<&[u8]>,
+    shared: bool,
 ) {
     match id {
         BlockId::Fixed(pc) => {
@@ -190,7 +191,7 @@ fn emit_block(
     if let (BlockId::Overlay(pc), Some(expect)) = (id, expect) {
         emit_overlay_check(out, pc, expect);
     }
-    if matches!(id, BlockId::Banked(..)) && bank_stable(block) {
+    if matches!(id, BlockId::Banked(..)) && !shared && bank_stable(block) {
         // Read by tools/banked_direct_transfers.py: static exits may enter
         // this view's own variant of a $8000-$BFFF target directly.
         writeln!(out, "    ; m2-bank-stable").unwrap();
@@ -348,7 +349,7 @@ fn emit_overlay_dispatch(out: &mut String, addresses: &BTreeSet<u16>) {
 fn emit_stub(
     out: &mut String,
     pc: u16,
-    variants: &[(u8, u16)],
+    variants: &[(u8, u16, u8)],
     host_bank: u16,
 ) {
     writeln!(
@@ -358,7 +359,7 @@ fn emit_stub(
     .unwrap();
     writeln!(out, "nes_{pc:04X}:").unwrap();
     writeln!(out, "    ld a, [nes_prg_bank]").unwrap();
-    for &(bank, _) in variants {
+    for &(bank, _, _) in variants {
         writeln!(out, "    cp ${bank:02X}").unwrap();
         writeln!(out, "    jp z, .m2_b{bank:02X}").unwrap();
     }
@@ -371,8 +372,9 @@ fn emit_stub(
     writeln!(out, "    jp nes_unimplemented").unwrap();
     writeln!(out, "ENDC").unwrap();
 
-    for &(bank, target_bank) in variants {
-        let target = label(BlockId::Banked(bank, pc));
+    for &(bank, target_bank, label_bank) in variants {
+        // label_bank != bank: byte-identical code shared from another bank.
+        let target = label(BlockId::Banked(label_bank, pc));
         writeln!(out, ".m2_b{bank:02X}:").unwrap();
         writeln!(out, "    ld a, ${target_bank:02X}").unwrap();
         writeln!(out, "    ld hl, {target}").unwrap();
@@ -396,6 +398,7 @@ pub fn emit_mapper2_cfgs(
     views: &[(u8, ControlFlowGraph)],
     options: EmitOptions,
     overlay: Option<&crate::overlay::RamOverlay>,
+    prg: &[u8],
 ) -> String {
     assert!(!views.is_empty(), "mapper 2 requires at least one PRG bank view");
 
@@ -461,9 +464,26 @@ pub fn emit_mapper2_cfgs(
         }
     }
 
-    let mut variants: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+    // Share translations across banks holding byte-identical code (e.g. a
+    // bank-switch routine duplicated at the same address in every bank and
+    // called from code that runs with any bank mapped).
+    let (aliases, shared_canon) = identical_bank_aliases(views, &banked_selected, prg);
+    let mut variants: BTreeMap<u16, Vec<(u8, u8)>> = BTreeMap::new();
     for &(bank, pc) in banked_selected.keys() {
-        variants.entry(pc).or_default().push(bank);
+        variants.entry(pc).or_default().push((bank, bank));
+    }
+    for (&(bank, pc), &canon) in &aliases {
+        variants.entry(pc).or_default().push((bank, canon));
+    }
+    for v in variants.values_mut() {
+        v.sort();
+    }
+    if !aliases.is_empty() {
+        println!(
+            "mapper2: {} byte-identical cross-bank alias(es) share {} translated block(s)",
+            aliases.len(),
+            shared_canon.len()
+        );
     }
 
     let mut assigned = BTreeMap::new();
@@ -546,6 +566,7 @@ pub fn emit_mapper2_cfgs(
             fixed_polls.contains(&pc),
             options.debug_trace,
             None,
+            false,
         );
     }
     for (&(bank, pc), block) in &banked_selected {
@@ -557,6 +578,7 @@ pub fn emit_mapper2_cfgs(
             banked_polls.contains(&(bank, pc)),
             options.debug_trace,
             None,
+            shared_canon.contains(&(bank, pc)),
         );
     }
     if let Some(ov) = overlay {
@@ -571,6 +593,7 @@ pub fn emit_mapper2_cfgs(
                 true,
                 options.debug_trace,
                 Some(&ov.bytes[start..start + len]),
+                false,
             );
         }
         let entries: BTreeSet<u16> = ov.blocks.keys().copied().collect();
@@ -578,10 +601,10 @@ pub fn emit_mapper2_cfgs(
     }
 
     for (&pc, banks) in &variants {
-        let routed: Vec<(u8, u16)> = banks
+        let routed: Vec<(u8, u16, u8)> = banks
             .iter()
             .copied()
-            .map(|bank| (bank, assigned[&BlockId::Banked(bank, pc)]))
+            .map(|(bank, canon)| (bank, assigned[&BlockId::Banked(canon, pc)], canon))
             .collect();
         emit_stub(&mut out, pc, &routed, assigned[&BlockId::Stub(pc)]);
     }
@@ -592,6 +615,98 @@ pub fn emit_mapper2_cfgs(
     emit_dispatch_tables(&mut out, &addresses);
 
     out
+}
+
+/// `(bank, pc) -> canonical bank` for $8000-$BFFF code with no translation in
+/// `bank` whose whole low-window closure (every block reachable from it
+/// without leaving $8000-$BFFF) is byte-identical to a translated closure in
+/// the canonical bank. Also returns the canonical blocks involved: they must
+/// not assume their own bank at exit (no `m2-bank-stable` direct variants).
+fn identical_bank_aliases(
+    views: &[(u8, ControlFlowGraph)],
+    banked: &BTreeMap<(u8, u16), BasicBlock>,
+    prg: &[u8],
+) -> (BTreeMap<(u8, u16), u8>, BTreeSet<(u8, u16)>) {
+    const MAX_CLOSURE: usize = 64;
+    let bank_count = prg.len() / 0x4000;
+    let mut aliases: BTreeMap<(u8, u16), u8> = BTreeMap::new();
+    let mut shared = BTreeSet::new();
+    if bank_count < 3 {
+        return (aliases, shared);
+    }
+    let range = |b: &BasicBlock| -> (usize, usize) {
+        let lo = (b.start as usize) & 0x3FFF;
+        let hi = b
+            .instructions
+            .last()
+            .map(|i| ((i.pc as usize) & 0x3FFF) + i.def.len() as usize)
+            .unwrap_or(lo);
+        (lo, hi.min(0x4000))
+    };
+    for (bank, g) in views {
+        let bank = *bank;
+        if bank as usize >= bank_count - 1 {
+            continue; // fixed bank's low view: never mapped at $8000 by mode 3/UxROM
+        }
+        for &(b, pc) in banked.keys() {
+            if b != bank {
+                continue;
+            }
+            // Low-window closure from pc in this bank.
+            let mut closure = vec![pc];
+            let mut seen: BTreeSet<u16> = closure.iter().copied().collect();
+            let mut k = 0;
+            let mut ok = true;
+            while k < closure.len() {
+                let Some(blk) = banked.get(&(bank, closure[k])) else { ok = false; break };
+                for t in blk.edges.iter().filter_map(|e| e.target) {
+                    if (0x8000..0xC000).contains(&t) && seen.insert(t) {
+                        if !g.blocks.contains_key(&t) {
+                            ok = false;
+                        }
+                        closure.push(t);
+                    }
+                }
+                if blk.edges.iter().any(|e| e.target.is_none()) {
+                    ok = false; // unresolved indirect: cannot prove the closure
+                }
+                k += 1;
+                if closure.len() > MAX_CLOSURE {
+                    ok = false;
+                }
+                if !ok {
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            for other in 0..(bank_count - 1) as u8 {
+                if other == bank || banked.contains_key(&(other, pc)) || aliases.contains_key(&(other, pc)) {
+                    continue;
+                }
+                let identical = closure.iter().all(|t| {
+                    let blk = &banked[&(bank, *t)];
+                    let (lo, hi) = range(blk);
+                    prg[bank as usize * 0x4000 + lo..bank as usize * 0x4000 + hi]
+                        == prg[other as usize * 0x4000 + lo..other as usize * 0x4000 + hi]
+                });
+                if !identical {
+                    continue;
+                }
+                for &t in &closure {
+                    if !banked.contains_key(&(other, t)) {
+                        aliases.entry((other, t)).or_insert(bank);
+                        shared.insert((bank, t));
+                    }
+                }
+            }
+        }
+    }
+    // Only canonicals actually used by an alias lose their bank-stable marker.
+    let used: BTreeSet<(u8, u16)> = aliases.iter().map(|(&(_, pc), &c)| (c, pc)).collect();
+    shared.retain(|k| used.contains(k));
+    (aliases, shared)
 }
 
 /// Low-window targets reached right after a constant UxROM bank select in the

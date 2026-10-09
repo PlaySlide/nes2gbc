@@ -270,3 +270,29 @@ pub fn detect(views: &[(u8, ControlFlowGraph)], prg: &[u8]) -> Option<RamOverlay
     }
     best
 }
+
+/// $8000-$BFFF targets of a detected overlay's static transfers whose first
+/// bytes are identical in every switchable bank: such code runs correctly
+/// whichever bank is mapped, so one translation can serve them all.
+pub fn shared_low_targets(views: &[(u8, ControlFlowGraph)], prg: &[u8]) -> Vec<u16> {
+    const PROBE: usize = 16;
+    let bank_count = prg.len() / 0x4000;
+    let Some(ov) = detect(views, prg) else { return Vec::new() };
+    let mut out = BTreeSet::new();
+    for block in ov.blocks.values() {
+        for t in block.edges.iter().filter_map(|e| e.target) {
+            if !(0x8000..0xC000).contains(&t) {
+                continue;
+            }
+            let o = (t as usize) & 0x3FFF;
+            if o + PROBE > 0x4000 || bank_count < 2 {
+                continue;
+            }
+            let first = &prg[o..o + PROBE];
+            if (1..bank_count - 1).all(|b| &prg[b * 0x4000 + o..b * 0x4000 + o + PROBE] == first) {
+                out.insert(t);
+            }
+        }
+    }
+    out.into_iter().collect()
+}
