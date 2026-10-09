@@ -699,6 +699,40 @@ ELSE
     jp nes_cpu_read
 ENDC
 
+IF DEF(NES2GBC_RAM_INTERP)
+; Region-resolved PRG reads (tools/banked_static_prg_reads.py). In: HL = NES
+; address inside the named 16 KiB window; the _a entries take A = GBC bank
+; (NES bank + 1) known at translation time. Out: A = byte. Clobbers L, F.
+nes_prg_read_lo_check::
+    ; Debug variant: fault if the executing view's bank is not mapped.
+    push bc
+    ld b, a
+    ld a, [nes_prg_bank]
+    inc a
+    cp b
+    pop bc
+    jp nz, nes_unimplemented
+    jr nes_prg_read_lo_a
+nes_prg_read_lo_dyn::
+    ld a, [nes_prg_bank]
+    inc a
+nes_prg_read_lo_a::
+    PROFILE_INC nes_profile_read_prg
+    set 6, h
+nes_prg_read_hi_a::
+    res 7, h
+    ld [$2000], a
+    ld l, [hl]
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    ld a, l
+    ret
+nes_prg_read_hi_dyn::
+    ld a, [nes_prg_hi_bank]
+    inc a
+    jr nes_prg_read_hi_a
+ENDC
+
 ; 32 KiB PRG variant of nes_cpu_read_hi (tools/inline_prg_reads.py): the
 ; build knows PRG is not the mirrored 16 KiB layout, so skip that test.
 ; Same results and flags as nes_cpu_read (PRG: `or $40` -> NZ, NC).

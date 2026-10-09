@@ -128,6 +128,7 @@ generate:
 			python3 tools/repack_code_banks_final.py runtime/generated.asm --profile "$(PROFILE)" --profile-trace "$(PROFILE_TRACE)" --identity "$(REPACK_IDENTITY)" --bank-profile "$(BANK_PROFILE)"; \
 			python3 tools/dead_hram_state_global.py runtime/generated.asm; \
 			python3 tools/fast_nonram_reads.py runtime/generated.asm; \
+			python3 tools/banked_static_prg_reads.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/inline_prg_reads.py runtime/generated.asm; \
 			python3 tools/chain_indexed_hl.py runtime/generated.asm; \
 			python3 tools/dead_overflow.py runtime/generated.asm; \
