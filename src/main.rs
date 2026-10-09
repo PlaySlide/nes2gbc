@@ -229,27 +229,32 @@ fn main() -> ExitCode {
             prg_views.push(view);
         }
 
-        // Bank-switching code commonly discovers a target while executing one
-        // physical low PRG bank, then selects another bank before transferring
-        // to that same logical CPU address. A per-bank CFG rooted only at the
-        // reset vectors therefore misses perfectly valid post-switch code.
+        // Converge per-bank CFGs without assuming that every low-window
+        // address is code in every physical bank (that explodes on data and
+        // overflows the translated-code banks on real 128 KiB games):
         //
-        // Converge the low-window entry set across every physical-bank view:
-        // once an address is proven code in any bank, try it as an entry in all
-        // banks. Invalid/data incarnations stop quickly at decode diagnostics;
-        // valid incarnations expose the next generation of banked targets.
-        let mut shared_low_entries = BTreeSet::<u16>::new();
+        // * $C000-$FFFF is the same fixed bank in every view, so any fixed
+        //   block proven reachable in one view is explored in all views. This
+        //   exposes fixed-bank trampolines (`LDA #n / STA $C000 / JSR $8xxx`)
+        //   that are only reachable from some other bank's code.
+        // * A low-window target is seeded into a *specific* other bank only
+        //   when the transferring block selects that bank with a constant
+        //   UxROM write immediately before the JMP/JSR.
+        let prg_bank_mask = (bank_count.next_power_of_two() - 1) as u8;
+        let mut shared_fixed_entries = BTreeSet::<u16>::new();
+        let mut bank_seeds: Vec<BTreeSet<u16>> = vec![BTreeSet::new(); bank_count];
         let mut converged_views = Vec::new();
         let mut rounds = 0usize;
         loop {
             rounds += 1;
             converged_views.clear();
-            let mut discovered_low = shared_low_entries.clone();
-
-            let mut entries = vec![vectors.reset, vectors.nmi, vectors.irq_brk];
-            entries.extend(shared_low_entries.iter().copied());
+            let mut next_fixed = shared_fixed_entries.clone();
+            let mut next_seeds = bank_seeds.clone();
 
             for (bank, view) in prg_views.iter().enumerate() {
+                let mut entries = vec![vectors.reset, vectors.nmi, vectors.irq_brk];
+                entries.extend(shared_fixed_entries.iter().copied());
+                entries.extend(bank_seeds[bank].iter().copied());
                 let g = match cfg::discover(0, view, &entries) {
                     Ok(graph) => graph,
                     Err(err) => {
@@ -260,33 +265,36 @@ fn main() -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 };
-                for &pc in g.blocks.keys() {
-                    if (0x8000..0xC000).contains(&pc) {
-                        discovered_low.insert(pc);
+                for (&pc, block) in &g.blocks {
+                    if pc >= 0xC000 && !block.instructions.is_empty() {
+                        next_fixed.insert(pc);
                     }
                 }
-                for edge in g.blocks.values().flat_map(|block| &block.edges) {
-                    if let Some(pc) = edge.target {
-                        if (0x8000..0xC000).contains(&pc) {
-                            discovered_low.insert(pc);
+                if cart.mapper == 2 {
+                    for (target_bank, target) in banked::constant_bank_switch_targets(&g, prg_bank_mask) {
+                        if (target_bank as usize) < bank_count {
+                            next_seeds[target_bank as usize].insert(target);
                         }
                     }
                 }
                 converged_views.push((bank as u8, g));
             }
 
-            if discovered_low == shared_low_entries || rounds >= 12 {
-                shared_low_entries = discovered_low;
+            let changed = next_fixed != shared_fixed_entries || next_seeds != bank_seeds;
+            shared_fixed_entries = next_fixed;
+            bank_seeds = next_seeds;
+            if !changed || rounds >= 16 {
                 break;
             }
-            shared_low_entries = discovered_low;
         }
+        let shared_low_entries: usize = bank_seeds.iter().map(|s| s.len()).sum();
 
         switch_lo_views = converged_views;
         println!(
-            "Mapper {} mode-3 PRG views analyzed: {bank_count}; banked CFG converged in {rounds} round(s) with {} shared low-window entrie(s)",
+            "Mapper {} mode-3 PRG views analyzed: {bank_count}; banked CFG converged in {rounds} round(s) with {} shared fixed entrie(s) and {} bank-switch seed(s)",
             cart.mapper,
-            shared_low_entries.len()
+            shared_fixed_entries.len(),
+            shared_low_entries
         );
         switch_lo_views[0].1.clone()
     } else {

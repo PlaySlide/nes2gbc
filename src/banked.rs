@@ -40,7 +40,10 @@ fn complete_block(block: &BasicBlock) -> bool {
 }
 
 fn block_cost(block: &BasicBlock) -> usize {
-    64 + block.instructions.len() * 96
+    // Measured raw emitter output averages ~14 bytes per 6502 instruction
+    // (MM: 203 KiB for 14950 instructions); keep ~1.7x headroom for
+    // expanding post-passes while still fitting 128 KiB commercial games.
+    48 + block.instructions.len() * 24
 }
 
 fn assign_bank(
@@ -285,6 +288,16 @@ pub fn emit_mapper2_cfgs(
         }
     }
 
+    if std::env::var("NES2GBC_CFG_DEBUG").is_ok() {
+        let fi: usize = fixed.values().map(|b| b.instructions.len()).sum();
+        let bi: usize = banked.values().map(|b| b.instructions.len()).sum();
+        eprintln!("banked-cfg: fixed {} blocks/{} insns, banked {} blocks/{} insns", fixed.len(), fi, banked.len(), bi);
+        for (bank, _) in views {
+            let n: usize = banked.iter().filter(|((b, _), _)| b == bank).map(|(_, blk)| blk.instructions.len()).sum();
+            let k = banked.keys().filter(|(b, _)| b == bank).count();
+            eprintln!("  bank {bank}: {k} blocks, {n} insns");
+        }
+    }
     let limit = options
         .max_blocks
         .unwrap_or(fixed.len().saturating_add(banked.len()));
@@ -402,5 +415,55 @@ pub fn emit_mapper2_cfgs(
     addresses.extend(variants.keys().copied());
     emit_dispatch_tables(&mut out, &addresses);
 
+    out
+}
+
+/// Low-window targets reached right after a constant UxROM bank select in the
+/// same basic block, e.g. `LDA #6 / STA $C006 / JSR $BFF6`. Returns
+/// `(selected_bank, target)` pairs so the caller can analyze `target` in the
+/// physical bank that will actually be mapped when control arrives.
+pub fn constant_bank_switch_targets(graph: &ControlFlowGraph, bank_mask: u8) -> Vec<(u8, u16)> {
+    use crate::cpu6502::{AddressingMode, Mnemonic::*};
+    let mut out = Vec::new();
+    for block in graph.blocks.values() {
+        let (mut a, mut x, mut y): (Option<u8>, Option<u8>, Option<u8>) = (None, None, None);
+        let mut selected: Option<u8> = None;
+        for ins in &block.instructions {
+            let m = ins.def.mnemonic;
+            let mode = ins.def.mode;
+            match m {
+                Lda if mode == AddressingMode::Immediate => a = Some(ins.operand as u8),
+                Ldx if mode == AddressingMode::Immediate => x = Some(ins.operand as u8),
+                Ldy if mode == AddressingMode::Immediate => y = Some(ins.operand as u8),
+                Tax => x = a,
+                Tay => y = a,
+                Txa => a = x,
+                Tya => a = y,
+                Sta | Stx | Sty => {
+                    if mode == AddressingMode::Absolute && ins.operand >= 0x8000 {
+                        let v = match m {
+                            Sta => a,
+                            Stx => x,
+                            _ => y,
+                        };
+                        selected = v.map(|v| v & bank_mask);
+                    }
+                }
+                Clc | Sec | Cli | Sei | Cld | Sed | Clv | Nop | Pha | Php => {}
+                Jmp | Jsr if mode == AddressingMode::Absolute => {
+                    if let Some(bank) = selected {
+                        if (0x8000..0xC000).contains(&ins.operand) {
+                            out.push((bank, ins.operand));
+                        }
+                    }
+                }
+                Lda | Pla | Adc | Sbc | And | Ora | Eor => a = None,
+                Ldx | Inx | Dex | Tsx => x = None,
+                Ldy | Iny | Dey => y = None,
+                Asl | Lsr | Rol | Ror if mode == AddressingMode::Accumulator => a = None,
+                _ => {}
+            }
+        }
+    }
     out
 }
