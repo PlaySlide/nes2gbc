@@ -348,6 +348,15 @@ nes_ppu_cpu_write:
     ; NROM-256 vertical-mirroring shape, skip only a tiny (<8) reconstruction;
     ; all larger constructions and every other tested cartridge keep the exact
     ; d2303d78 authoritative rebuild path.
+IF DEF(NES2GBC_RAM_INTERP)
+    ; Banked mappers (Contra, Castlevania): scroll seams are written with
+    ; rendering off every few frames. Those writes were already published
+    ; (.nametable_sync_now / staged); only a real screen construction (64+
+    ; changed bytes) takes the LCD-off authoritative rebuild.
+    ld a, [nes_generic_hidden_change_count]
+    cp $40
+    jr c, .mask_skip_rebuild
+ENDC
     ld a, [nes_mapper]
     and a
     jr nz, .mask_do_rebuild
@@ -363,6 +372,7 @@ nes_ppu_cpu_write:
 
     ; Tiny hidden updates have already been published by .nametable_sync_now.
     ; Rebuilding all 2 KiB would only hold LCDC.7 low for about ten host frames.
+.mask_skip_rebuild:
     xor a
     ld [nes_generic_map_rebuild_dirty], a
     ld [nes_generic_hidden_change_count], a
