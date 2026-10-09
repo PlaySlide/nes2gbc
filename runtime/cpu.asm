@@ -1035,6 +1035,24 @@ ENDC
     ret
 
 .mapper1:
+IF DEF(NES2GBC_RAM_INTERP)
+    ; Four of every five MMC1 serial writes only shift one bit in (no reset,
+    ; marker bit not yet at bit 0): do that here, without the helper-bank
+    ; round trip. Same result as nes_mmc1_write_romx's .serial path.
+    bit 7, e
+    jr nz, .mapper1_helper
+    ld a, [nes_mmc1_shift]
+    bit 0, a
+    jr nz, .mapper1_helper
+    srl a
+    bit 0, e
+    jr z, .mapper1_store
+    or $10
+.mapper1_store:
+    ld [nes_mmc1_shift], a
+    ret
+.mapper1_helper:
+ENDC
     ; MMC1 is relatively cold and large. Keep ROM0 lean by running the serial
     ; register/update logic from the dedicated runtime helper bank, then restore
     ; the translated-code bank before returning to generated code.
