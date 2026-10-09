@@ -672,7 +672,7 @@ IF DEF(NES2GBC_RAM_INTERP)
     ; skip the mapper ladder. $8000-$BFFF reads nes_prg_bank, $C000-$FFFF
     ; nes_prg_hi_bank (the fixed bank for UxROM), each in GBC bank N+1.
     ; Returns Z/NC like nes_cpu_read.prg_mapper_have_bank.
-    jp z, nes_cpu_read
+    jr z, .below_8000
     PROFILE_INC nes_profile_read_prg
     res 7, h
     bit 6, h
@@ -693,6 +693,31 @@ IF DEF(NES2GBC_RAM_INTERP)
 IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_debug_bus_value], a
 ENDC
+    ret
+.below_8000:
+    ; PRG RAM $6000-$7FFF (WRAMX banks 4/5 at $D000) without nes_cpu_read's
+    ; address ladder; same result as nes_cpu_read.prg_ram (BC preserved).
+    ld a, h
+    cp $60
+    jp c, nes_cpu_read
+IF DEF(NES2GBC_DEBUG_TRACE)
+    jp nes_cpu_read
+ENDC
+    ldh a, [rSVBK]
+    push af
+    ld a, h
+    swap a
+    and $01
+    add $04
+    ldh [rSVBK], a
+    ld a, h
+    and $0F
+    or $D0
+    ld h, a
+    ld h, [hl]
+    pop af
+    ldh [rSVBK], a
+    ld a, h
     ret
 ELSE
     jp nz, nes_cpu_read.prg
