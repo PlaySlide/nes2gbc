@@ -392,6 +392,10 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
 fn reaches_dispatcher(mapper:u16,prg:&[u8],o:usize,b:u8,lo:usize,jmp_off:usize)->bool{
  let mut pc=0x8000u16.wrapping_add(o as u16);
  for _ in 0..6{
+  // Straight-line fallthrough into the dispatcher itself (Contra bank 6
+  // $B971: LDA tables,Y / STA $0A / LDA tables+1,Y / STA $0B / LDA ... /
+  // ASL / TAY / LDA ($0A),Y ... JMP ($0008)).
+  if let Ok(t)=off(mapper,prg.len(),pc){if t>=lo&&t<=jmp_off{return true}}
   let Ok(i)=dec(mapper,prg,pc)else{return false};
   use Mnemonic::*;
   match i.def.mnemonic{
