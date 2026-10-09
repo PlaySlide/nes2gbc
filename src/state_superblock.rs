@@ -1541,6 +1541,11 @@ fn emit_block_body_core(
     }
     if chain_to.is_none() {
         sync_state(out, &mut state, &mut stats);
+    } else if std::env::var("NES2GBC_TRACE_MODE").as_deref() == Ok("sync") {
+        sync_state(out, &mut state, &mut stats);
+    } else if std::env::var("NES2GBC_TRACE_MODE").as_deref() == Ok("flush") {
+        sync_state(out, &mut state, &mut stats);
+        invalidate_state(&mut state);
     }
     *state_ref = state;
     *stats_ref = stats;

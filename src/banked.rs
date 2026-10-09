@@ -703,6 +703,11 @@ pub fn emit_mapper2_cfgs(
         let mut claimed: BTreeSet<u16> = BTreeSet::new();
         for (&pc, block) in &fixed_selected {
             let Some((t, _)) = crate::state_superblock::preferred_successor(block) else { continue };
+            // A JSR's continuation is entered by the subroutine's RTS through
+            // dispatch (the canonical adapter), never by falling through.
+            if block.instructions.last().is_some_and(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Jsr) {
+                continue;
+            }
             if t < 0xC000
                 || t == pc
                 || !fixed_selected.contains_key(&t)
@@ -727,6 +732,12 @@ pub fn emit_mapper2_cfgs(
             }
         }
         chain_next.retain(|_, t| reached.contains(t));
+        if let Some(lim) = std::env::var("NES2GBC_BANKED_TRACES_RANGE").ok() {
+            let (a, b) = lim.split_once('-').unwrap();
+            let (a, b): (usize, usize) = (a.parse().unwrap(), b.parse().unwrap());
+            let keep: BTreeSet<u16> = chain_next.keys().copied().enumerate().filter(|(i, _)| *i >= a && *i < b).map(|(_, k)| k).collect();
+            chain_next.retain(|k, _| keep.contains(k));
+        }
         println!("banked-traces: chained {} fixed-bank edge(s) (fixed {}, polled {}, unique-entry fixed {})", chain_next.len(), fixed_selected.len(), fixed_polls.len(), fixed_selected.keys().filter(|p| incoming.get(p).copied().unwrap_or(0) == 1).count());
     }
     let chained: BTreeSet<u16> = chain_next.values().copied().collect();
@@ -888,7 +899,10 @@ pub fn emit_mapper2_cfgs(
     }
     for (id, a) in &adapters {
         let name = label(*id);
-        writeln!(out, "SECTION \"NES canonical banked-trace entry {name}\", ROMX, BANK[{}]", assigned[id]).unwrap();
+        let BlockId::Fixed(apc) = *id else { unreachable!() };
+        // Same section name as the NROM emitter's adapters so the final
+        // repack keeps adapter jumps (`jp nes_X_trace`) bank-correct.
+        writeln!(out, "SECTION \"NES canonical superblock entry {apc:04X}\", ROMX, BANK[{}]", assigned[id]).unwrap();
         writeln!(out, "{name}:").unwrap();
         out.push_str(a);
         writeln!(out).unwrap();
