@@ -99,15 +99,19 @@ def main(path: str) -> None:
     ignore = [False] * n      # IF 0 bodies and simple trace blocks: no effect
     barrier = [False] * n     # treated as "reads everything, no fallthrough info"
     code_sec = False
+    banked_sec = False
+    banked = [False] * n      # banked-view sections: no CFG-dump RTS return sets
     i = 0
     while i < n:
         c = codes[i]
         if c.startswith("SECTION"):
-            code_sec = ('"NES block ' in c) or ('"NES canonical superblock entry' in c)
+            code_sec = ('"NES block ' in c) or ('"NES canonical superblock entry' in c) or ('"NES mapper' in c)
+            banked_sec = '"NES mapper' in c
             in_code[i] = False
             i += 1
             continue
         in_code[i] = code_sec
+        banked[i] = banked_sec
         if c.startswith("IF "):
             depth, j, has_else = 0, i, False
             while j < n:
@@ -225,7 +229,7 @@ def main(path: str) -> None:
                     succ[i] = (t,)
                 continue
             t = resolve(tgt, i) if tgt != "hl" else None
-            if t is None and tgt == "nes_dispatch_hl" and not cond and insn_of[i] and insn_of[i][1] == "Rts":
+            if t is None and tgt == "nes_dispatch_hl" and not cond and not banked[i] and insn_of[i] and insn_of[i][1] == "Rts":
                 conts = rsets.get(insn_of[i][0])
                 ts = [resolve("nes_%04X" % c, i) for c in sorted(conts)] if conts else None
                 if ts and all(x is not None for x in ts) and private_tail(i):
