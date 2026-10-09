@@ -43,6 +43,9 @@ SAFE_CALLS = {
     "nes_controller_read",
     "nes_ppu_cpu_write.addr", "nes_ppu_cpu_write.ctrl", "nes_ppu_cpu_write.scroll",
     "nes_ppu_cpu_write.mask", "nes_ppu_cpu_write.oamaddr",
+    # Pure PRG/bus read helpers (subsets of nes_cpu_read; no HRAM CPU state).
+    "nes_cpu_read_hi", "nes_cpu_read_hi32", "nes_prg_read_lo_a", "nes_prg_read_hi_a",
+    "nes_prg_read_lo_dyn", "nes_prg_read_hi_dyn", "nes_mapper2_conflict_read_hl",
 }
 BANK_JUMPS = {"nes_jump_known_hl_a_8bit", "nes_jump_known_hl_a"}
 NEUTRAL = {"ld", "ldh", "and", "or", "xor", "add", "adc", "sub", "sbc", "cp", "inc", "dec",
