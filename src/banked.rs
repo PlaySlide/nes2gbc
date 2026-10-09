@@ -168,6 +168,8 @@ fn emit_block(
     expect: Option<&[u8]>,
     shared: bool,
     rts_guard: &[u16],
+    v_dead: &BTreeSet<u16>,
+    c_dead: &BTreeSet<u16>,
 ) {
     match id {
         BlockId::Fixed(pc) => {
@@ -220,7 +222,7 @@ fn emit_block(
     }
 
     let body_start = out.len();
-    if !crate::state_superblock::emit_block_body_local(out, &block.instructions) {
+    if !crate::state_superblock::emit_block_body_local_dead(out, &block.instructions, v_dead, c_dead) {
         writeln!(out).unwrap();
         return;
     }
@@ -424,6 +426,117 @@ fn emit_stub(
 /// block boundary. That keeps mapper correctness independent of the aggressive
 /// NROM static-edge/superblock optimizer; mapper-specific optimization can layer
 /// on after compatibility is proven.
+/// REGALLOC>=2/3 for banked builds: backward liveness of one 6502 flag over
+/// the translated fixed-bank blocks and $8000-$BFFF bank variants. Same
+/// conservative model as state_superblock::flag_dead_after (every executed
+/// NMI poll, RTS/RTI/BRK, unresolved, unselected or interpreter-bound edges
+/// read the flag), plus the bank rule: a $8000-$BFFF successor is only the
+/// same bank's variant when the source is a bank-stable, unshared variant;
+/// from fixed code or any other source it is unknown (live).
+/// Returns (node, instruction PC) pairs after which the flag is dead.
+fn banked_flag_dead(
+    fixed: &BTreeMap<u16, BasicBlock>,
+    banked: &BTreeMap<(u8, u16), BasicBlock>,
+    fixed_polls: &BTreeSet<u16>,
+    banked_polls: &BTreeSet<(u8, u16)>,
+    shared: &BTreeSet<(u8, u16)>,
+    reads: impl Fn(crate::cpu6502::Mnemonic) -> bool,
+    writes: impl Fn(crate::cpu6502::Mnemonic) -> bool,
+) -> BTreeSet<(BlockId, u16)> {
+    use crate::cpu6502::Mnemonic::*;
+    let mut nodes: Vec<(BlockId, &BasicBlock, bool)> = Vec::new();
+    for (&pc, b) in fixed {
+        nodes.push((BlockId::Fixed(pc), b, fixed_polls.contains(&pc)));
+    }
+    for (&(bank, pc), b) in banked {
+        nodes.push((BlockId::Banked(bank, pc), b, banked_polls.contains(&(bank, pc))));
+    }
+    let succ = |id: BlockId, b: &BasicBlock| -> Option<Vec<BlockId>> {
+        // None = some successor is unknown (flag live at exit).
+        let last = b.instructions.last()?;
+        if matches!(last.def.mnemonic, Rts | Rti | Brk) || b.edges.is_empty() {
+            return None;
+        }
+        let stable_bank = match id {
+            BlockId::Banked(bank, pc) if bank_stable(b) && !shared.contains(&(bank, pc)) => Some(bank),
+            _ => None,
+        };
+        let mut v = Vec::new();
+        for e in &b.edges {
+            let t = e.target?;
+            if t >= 0xC000 {
+                if !fixed.contains_key(&t) {
+                    return None;
+                }
+                v.push(BlockId::Fixed(t));
+            } else if t >= 0x8000 {
+                let bank = stable_bank?;
+                if !banked.contains_key(&(bank, t)) {
+                    return None;
+                }
+                v.push(BlockId::Banked(bank, t));
+            } else {
+                return None;
+            }
+        }
+        Some(v)
+    };
+    let succs: Vec<Option<Vec<BlockId>>> = nodes.iter().map(|(id, b, _)| succ(*id, b)).collect();
+    let index: BTreeMap<BlockId, usize> = nodes.iter().enumerate().map(|(i, (id, _, _))| (*id, i)).collect();
+    let through = |b: &BasicBlock, mut live: bool| -> bool {
+        for insn in b.instructions.iter().rev() {
+            let m = insn.def.mnemonic;
+            if writes(m) {
+                live = false;
+            }
+            if reads(m) {
+                live = true;
+            }
+        }
+        live
+    };
+    let mut live_in = vec![false; nodes.len()];
+    let live_out = |i: usize, live_in: &Vec<bool>| -> bool {
+        match &succs[i] {
+            None => true,
+            Some(v) => v.iter().any(|t| live_in[index[t]]),
+        }
+    };
+    loop {
+        let mut changed = false;
+        for i in (0..nodes.len()).rev() {
+            if live_in[i] {
+                continue;
+            }
+            let (_, b, polled) = nodes[i];
+            if through(b, live_out(i, &live_in)) || polled {
+                live_in[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut dead = BTreeSet::new();
+    for (i, (id, b, _)) in nodes.iter().enumerate() {
+        let mut live = live_out(i, &live_in);
+        for insn in b.instructions.iter().rev() {
+            if !live {
+                dead.insert((*id, insn.pc));
+            }
+            let m = insn.def.mnemonic;
+            if writes(m) {
+                live = false;
+            }
+            if reads(m) {
+                live = true;
+            }
+        }
+    }
+    dead
+}
+
 pub fn emit_mapper2_cfgs(
     views: &[(u8, ControlFlowGraph)],
     options: EmitOptions,
@@ -585,6 +698,30 @@ pub fn emit_mapper2_cfgs(
     println!("mapper2: guarded RTS continuations in {} block(s)", rts_guards.len());
     let guard_for = |id: BlockId| -> &[u16] { rts_guards.get(&id).map(|v| v.as_slice()).unwrap_or(&[]) };
 
+    let level = crate::state_superblock::regalloc_level();
+    let v_dead = if level >= 2 {
+        use crate::cpu6502::Mnemonic::*;
+        banked_flag_dead(&fixed_selected, &banked_selected, &fixed_polls, &banked_polls, &shared_canon,
+            |m| matches!(m, Bvc | Bvs | Php | Brk),
+            |m| matches!(m, Adc | Sbc | Bit | Clv | Plp | Rti))
+    } else {
+        BTreeSet::new()
+    };
+    let c_dead = if level >= 3 {
+        use crate::cpu6502::Mnemonic::*;
+        banked_flag_dead(&fixed_selected, &banked_selected, &fixed_polls, &banked_polls, &shared_canon,
+            |m| matches!(m, Adc | Sbc | Rol | Ror | Bcc | Bcs | Php | Brk),
+            |m| matches!(m, Adc | Sbc | Cmp | Cpx | Cpy | Asl | Lsr | Rol | Ror | Clc | Sec | Plp | Rti))
+    } else {
+        BTreeSet::new()
+    };
+    if level >= 2 {
+        println!("banked-regalloc: V dead after {} instruction(s), C dead after {}", v_dead.len(), c_dead.len());
+    }
+    let dead_for = |id: BlockId, set: &BTreeSet<(BlockId, u16)>| -> BTreeSet<u16> {
+        set.range((id, 0)..=(id, 0xFFFF)).map(|&(_, pc)| pc).collect()
+    };
+
     let mut out = String::new();
     writeln!(out, "; Generated by nes2gbc mapper-2 banked emitter").unwrap();
     writeln!(out, "; Correctness-first UxROM basic-block dispatch").unwrap();
@@ -610,6 +747,8 @@ pub fn emit_mapper2_cfgs(
             None,
             false,
             guard_for(BlockId::Fixed(pc)),
+            &dead_for(BlockId::Fixed(pc), &v_dead),
+            &dead_for(BlockId::Fixed(pc), &c_dead),
         );
     }
     for (&(bank, pc), block) in &banked_selected {
@@ -623,6 +762,8 @@ pub fn emit_mapper2_cfgs(
             None,
             shared_canon.contains(&(bank, pc)),
             guard_for(BlockId::Banked(bank, pc)),
+            &dead_for(BlockId::Banked(bank, pc), &v_dead),
+            &dead_for(BlockId::Banked(bank, pc), &c_dead),
         );
     }
     if let Some(ov) = overlay {
@@ -639,6 +780,8 @@ pub fn emit_mapper2_cfgs(
                 Some(&ov.bytes[start..start + len]),
                 false,
                 &[],
+                &BTreeSet::new(),
+                &BTreeSet::new(),
             );
         }
         let entries: BTreeSet<u16> = ov.blocks.keys().copied().collect();

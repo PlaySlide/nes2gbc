@@ -15,7 +15,7 @@ const NES_RAM_BASE: u16 = 0xC000;
 
 /// Compiler register-allocation level, from the NES2GBC_REGALLOC environment
 /// variable (Makefile `REGALLOC=`). 0 keeps the previous emission exactly.
-fn regalloc_level() -> u32 {
+pub(crate) fn regalloc_level() -> u32 {
     use std::sync::OnceLock;
     static LEVEL: OnceLock<u32> = OnceLock::new();
     *LEVEL.get_or_init(|| {
@@ -1411,6 +1411,18 @@ pub fn emit_block_body_local(
     out: &mut String,
     instructions: &[crate::cpu6502::DecodedInstruction],
 ) -> bool {
+    emit_block_body_local_dead(out, instructions, &BTreeSet::new(), &BTreeSet::new())
+}
+
+/// As emit_block_body_local, with REGALLOC flag-liveness facts: `v_dead` /
+/// `c_dead` hold the PCs of instructions after which V / C are dead on every
+/// path (computed by the caller over its own CFG model).
+pub fn emit_block_body_local_dead(
+    out: &mut String,
+    instructions: &[crate::cpu6502::DecodedInstruction],
+    v_dead: &BTreeSet<u16>,
+    c_dead: &BTreeSet<u16>,
+) -> bool {
     let mut state = TraceState::default();
     let mut stats = StateStats::default();
     let mut pending: Vec<IrOp> = Vec::new();
@@ -1427,7 +1439,11 @@ pub fn emit_block_body_local(
                         pending.clear();
                     }
                     out.push_str(&comment);
+                    state.v_dead = v_dead.contains(&instruction.pc);
+                    state.c_dead = c_dead.contains(&instruction.pc);
                     emit_fast_op(out, &ops[0], &mut state, &mut stats);
+                    state.v_dead = false;
+                    state.c_dead = false;
                 } else {
                     out.push_str(&comment);
                     pending.extend(ops);
