@@ -249,9 +249,16 @@ nes_ppu_cpu_write:
     ld a, b
     and $28
     jr z, .ctrl_bg_check
+IF DEF(NES2GBC_RAM_INTERP)
+    ; Banked mappers (Contra flips these bits twice per frame): invalidate
+    ; and let the commit project once, exactly like a direct $2004 write.
+    xor a
+    ldh [nes_oam_shadow_ready], a
+ELSE
     push bc
     call nes_video_build_oam_shadow
     pop bc
+ENDC
     ld a, $01
     ld [nes_oam_dirty], a
 
