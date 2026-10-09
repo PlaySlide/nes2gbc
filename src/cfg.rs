@@ -106,10 +106,15 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
      &&prg[k]==0xB1&&prg[k+1]==base
      &&prg[k+2]==0x85&&prg[k+3]==base.wrapping_add(1)
      &&prg[k+4]==0x86&&prg[k+5]==base
-     &&prg[k+6]==0x6C&&prg[k+7]==base&&prg[k+8]==0x00
     {
-     let delta=(k+6-start)as u16;
-     return Some((entry.wrapping_add(delta),base as u16))
+     // Konami (Castlevania $CA6D) restores the caller's X/Y with
+     // LDY zp / LDX zp between the pointer store and the JMP.
+     let mut m=k+6;
+     while m+1<end&&(prg[m]==0xA4||prg[m]==0xA6)&&prg[m+1]!=base&&prg[m+1]!=base.wrapping_add(1){m+=2}
+     if m+2<end&&prg[m]==0x6C&&prg[m+1]==base&&prg[m+2]==0x00{
+      let delta=(m-start)as u16;
+      return Some((entry.wrapping_add(delta),base as u16))
+     }
     }
     k+=1;
    }
