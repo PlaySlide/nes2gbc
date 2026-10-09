@@ -3,8 +3,6 @@ use std::fmt::Write;
 
 use crate::{
     cfg::{BasicBlock, ControlFlowGraph, EdgeKind},
-    ir,
-    lr35902,
     recompile::EmitOptions,
 };
 
@@ -213,30 +211,9 @@ fn emit_block(
         emit_poll(out, block.start);
     }
 
-    for instruction in &block.instructions {
-        writeln!(
-            out,
-            "    ; ${:04X}: ${:02X} {:?} {:?}",
-            instruction.pc,
-            instruction.opcode,
-            instruction.def.mnemonic,
-            instruction.def.mode
-        )
-        .unwrap();
-
-        match ir::lower_instruction(*instruction) {
-            Ok(ops) => out.push_str(&lr35902::emit_ops(&ops)),
-            Err(err) => {
-                writeln!(out, "    ; TODO {err}").unwrap();
-                writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
-                writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
-                writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
-                writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
-                writeln!(out, "    jp nes_unimplemented").unwrap();
-                writeln!(out).unwrap();
-                return;
-            }
-        }
+    if !crate::state_superblock::emit_block_body_local(out, &block.instructions) {
+        writeln!(out).unwrap();
+        return;
     }
 
     if let Some(last) = block.instructions.last() {

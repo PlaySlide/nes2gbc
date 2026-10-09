@@ -1402,6 +1402,61 @@ fn emit_barrier_ops(
     stats.barriers += 1;
 }
 
+/// Emit one basic block's instructions with block-local A/X/Y residency
+/// (A in host A, X in B, Y in C). Nothing is resident on entry and every
+/// dirty register is published before control ops, barriers and the block
+/// end, so callers keep canonical HRAM state at every block boundary.
+/// Returns false when an instruction faulted (the fault tail was emitted).
+pub fn emit_block_body_local(
+    out: &mut String,
+    instructions: &[crate::cpu6502::DecodedInstruction],
+) -> bool {
+    let mut state = TraceState::default();
+    let mut stats = StateStats::default();
+    let mut pending: Vec<IrOp> = Vec::new();
+    for instruction in instructions {
+        let comment = format!(
+            "    ; ${:04X}: ${:02X} {:?} {:?}\n",
+            instruction.pc, instruction.opcode, instruction.def.mnemonic, instruction.def.mode
+        );
+        match ir::lower_instruction(*instruction) {
+            Ok(ops) => {
+                if ops.len() == 1 && fast_op_supported(&ops[0]) {
+                    if !pending.is_empty() {
+                        emit_barrier_ops(out, &pending, &mut state, &mut stats);
+                        pending.clear();
+                    }
+                    out.push_str(&comment);
+                    emit_fast_op(out, &ops[0], &mut state, &mut stats);
+                } else {
+                    out.push_str(&comment);
+                    pending.extend(ops);
+                }
+            }
+            Err(err) => {
+                if !pending.is_empty() {
+                    emit_barrier_ops(out, &pending, &mut state, &mut stats);
+                    pending.clear();
+                }
+                sync_state(out, &mut state, &mut stats);
+                out.push_str(&comment);
+                writeln!(out, "    ; TODO {err}").unwrap();
+                writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
+                writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
+                writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
+                writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
+                writeln!(out, "    jp nes_unimplemented").unwrap();
+                return false;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        emit_barrier_ops(out, &pending, &mut state, &mut stats);
+    }
+    sync_state(out, &mut state, &mut stats);
+    true
+}
+
 pub fn emit_cfg_with_interrupts(
     graph: &ControlFlowGraph,
     options: EmitOptions,
