@@ -340,7 +340,7 @@ struct SuperblockPlan {
     disabled_for_unresolved_indirect: bool,
 }
 
-fn preferred_successor(block: &crate::cfg::BasicBlock) -> Option<(u16, bool)> {
+pub(crate) fn preferred_successor(block: &crate::cfg::BasicBlock) -> Option<(u16, bool)> {
     let last = block.instructions.last()?;
     if last.def.mnemonic == crate::cpu6502::Mnemonic::Jmp {
         let target = block
@@ -1423,10 +1423,78 @@ pub fn emit_block_body_local_dead(
     v_dead: &BTreeSet<u16>,
     c_dead: &BTreeSet<u16>,
 ) -> bool {
-    let mut state = TraceState::default();
-    let mut stats = StateStats::default();
+    let mut trace = LocalTrace::default();
+    emit_block_body_chained(out, instructions, v_dead, c_dead, &mut trace, None)
+}
+
+/// Register residency carried between textually chained banked blocks.
+#[derive(Debug, Default)]
+pub struct LocalTrace {
+    state: TraceState,
+    stats: StateStats,
+}
+
+impl LocalTrace {
+    /// Start a chained successor: block-local carry facts are dropped and the
+    /// canonical-entry adapter that establishes the current residency from
+    /// HRAM is returned (loads only, ends before the jump).
+    pub fn enter_chained(&mut self) -> String {
+        self.state.carry = None;
+        let mut a = String::new();
+        if self.state.x_b {
+            a.push_str("    ldh a, [nes_x]\n    ld b, a ; canonical adapter X\n");
+        }
+        if self.state.y_c {
+            a.push_str("    ldh a, [nes_y]\n    ld c, a ; canonical adapter Y\n");
+        }
+        if self.state.a_live {
+            a.push_str("    ldh a, [nes_a] ; canonical adapter A\n");
+        }
+        a
+    }
+    pub fn a_live(&self) -> bool {
+        self.state.a_live
+    }
+}
+
+/// Body emission with caller-owned residency. `chain_to = Some(pc)` means the
+/// block continues textually into the translation of `pc`: dirty registers
+/// stay resident (not published) and a final `JMP pc` is elided. Otherwise
+/// all state is published at the end exactly like emit_block_body_local.
+pub fn emit_block_body_chained(
+    out: &mut String,
+    instructions: &[crate::cpu6502::DecodedInstruction],
+    v_dead: &BTreeSet<u16>,
+    c_dead: &BTreeSet<u16>,
+    trace: &mut LocalTrace,
+    chain_to: Option<u16>,
+) -> bool {
+    emit_block_body_core(out, instructions, v_dead, c_dead, &mut trace.state, &mut trace.stats, chain_to)
+}
+
+fn emit_block_body_core(
+    out: &mut String,
+    instructions: &[crate::cpu6502::DecodedInstruction],
+    v_dead: &BTreeSet<u16>,
+    c_dead: &BTreeSet<u16>,
+    state_ref: &mut TraceState,
+    stats_ref: &mut StateStats,
+    chain_to: Option<u16>,
+) -> bool {
+    let mut state = *state_ref;
+    let mut stats = std::mem::take(stats_ref);
     let mut pending: Vec<IrOp> = Vec::new();
-    for instruction in instructions {
+    for (i, instruction) in instructions.iter().enumerate() {
+        if let Some(t) = chain_to {
+            if i + 1 == instructions.len()
+                && instruction.def.mnemonic == crate::cpu6502::Mnemonic::Jmp
+                && instruction.def.mode == crate::cpu6502::AddressingMode::Absolute
+                && instruction.operand == t
+            {
+                writeln!(out, "    ; ${:04X}: JMP ${t:04X} elided (banked trace)", instruction.pc).unwrap();
+                break;
+            }
+        }
         let comment = format!(
             "    ; ${:04X}: ${:02X} {:?} {:?}\n",
             instruction.pc, instruction.opcode, instruction.def.mnemonic, instruction.def.mode
@@ -1462,6 +1530,8 @@ pub fn emit_block_body_local_dead(
                 writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
                 writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
                 writeln!(out, "    jp nes_unimplemented").unwrap();
+                *state_ref = state;
+                *stats_ref = stats;
                 return false;
             }
         }
@@ -1469,7 +1539,11 @@ pub fn emit_block_body_local_dead(
     if !pending.is_empty() {
         emit_barrier_ops(out, &pending, &mut state, &mut stats);
     }
-    sync_state(out, &mut state, &mut stats);
+    if chain_to.is_none() {
+        sync_state(out, &mut state, &mut stats);
+    }
+    *state_ref = state;
+    *stats_ref = stats;
     true
 }
 

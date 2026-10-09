@@ -170,7 +170,34 @@ fn emit_block(
     rts_guard: &[u16],
     v_dead: &BTreeSet<u16>,
     c_dead: &BTreeSet<u16>,
-) {
+    trace: &mut crate::state_superblock::LocalTrace,
+    continuing: bool,
+    chain_to: Option<u16>,
+) -> Option<String> {
+    let mut adapter = None;
+    if continuing {
+        // Textual continuation of the previous block's trace: no section,
+        // a `_trace` label carrying resident registers, and a canonical
+        // entry adapter for every other way in (dispatch, guards, stubs).
+        let loads = trace.enter_chained();
+        let name = label(id);
+        adapter = Some(format!("{loads}    jp {name}_trace\n"));
+        writeln!(out, "{name}_trace:").unwrap();
+        writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
+        let a = trace.a_live();
+        if a {
+            writeln!(out, "    push af").unwrap();
+        }
+        writeln!(out, "    push bc").unwrap();
+        writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
+        writeln!(out, "    call nes_profile_trace_pc").unwrap();
+        writeln!(out, "    pop bc").unwrap();
+        if a {
+            writeln!(out, "    pop af").unwrap();
+        }
+        writeln!(out, "ENDC").unwrap();
+    } else {
+    *trace = Default::default();
     match id {
         BlockId::Fixed(pc) => {
             writeln!(out, "SECTION \"NES block {pc:04X}\", ROMX, BANK[{host_bank}]").unwrap();
@@ -220,11 +247,15 @@ fn emit_block(
     if do_poll {
         emit_poll(out, block.start);
     }
+    }
 
     let body_start = out.len();
-    if !crate::state_superblock::emit_block_body_local_dead(out, &block.instructions, v_dead, c_dead) {
+    if !crate::state_superblock::emit_block_body_chained(out, &block.instructions, v_dead, c_dead, trace, chain_to) {
         writeln!(out).unwrap();
-        return;
+        return adapter;
+    }
+    if chain_to.is_some() {
+        return adapter;
     }
     if !rts_guard.is_empty() {
         // Guarded RTS continuations: HL holds the architectural return PC
@@ -266,6 +297,7 @@ fn emit_block(
         }
     }
     writeln!(out).unwrap();
+    adapter
 }
 
 /// Conservatively: may any instruction of the block store to $6000-$7FFF?
@@ -550,8 +582,27 @@ pub fn emit_mapper2_cfgs(
     let mut fixed_polls = BTreeSet::new();
     let mut banked_polls = BTreeSet::new();
 
+    // Fixed-bank ($C000+) poll points mirror the NROM rule (vectors, PHA
+    // continuations, harvested jump-table targets, backward-edge targets).
+    // Every fixed block is a discovery seed in every view, so the plain
+    // entry-point rule would poll at every fixed block.
+    let vec_at = |o: usize| u16::from_le_bytes([prg[prg.len() - o], prg[prg.len() - o + 1]]);
+    let vectors = [vec_at(6), vec_at(4), vec_at(2), options.reset];
+    let poll_all_fixed = std::env::var("NES2GBC_BANKED_FIXED_POLL_ALL").is_ok();
     for (bank, graph) in views {
-        let polls = poll_points(graph);
+        let mut polls = poll_points(graph);
+        if !poll_all_fixed {
+            let mut fixed_points: BTreeSet<u16> = vectors.iter().copied().collect();
+            fixed_points.extend(graph.dynamic_entries.iter().copied());
+            for (&start, block) in &graph.blocks {
+                for t in block.edges.iter().filter_map(|e| e.target) {
+                    if t <= start {
+                        fixed_points.insert(t);
+                    }
+                }
+            }
+            polls.retain(|&pc| pc < 0xC000 || fixed_points.contains(&pc));
+        }
         for (&pc, block) in &graph.blocks {
             // Cross-bank convergence intentionally probes addresses that may be
             // data in some physical banks. CFG records a failed probe as an
@@ -629,17 +680,89 @@ pub fn emit_mapper2_cfgs(
         );
     }
 
+    // Fixed-bank traces: P -> B where B is P's fallthrough/JMP successor,
+    // a translated fixed block with exactly one static predecessor, not an
+    // entry point and not an NMI poll point. B is emitted textually after P
+    // in the same section with A/X/Y residency carried across; every other
+    // entry to B goes through a canonical adapter.
+    let mut chain_next: BTreeMap<u16, u16> = BTreeMap::new();
+    if !options.debug_trace && std::env::var("NES2GBC_BANKED_TRACES").map(|v| v == "1").unwrap_or(false) {
+        let mut incoming: BTreeMap<u16, usize> = BTreeMap::new();
+        let mut count = |b: &BasicBlock| {
+            for t in b.edges.iter().filter_map(|e| e.target) {
+                *incoming.entry(t).or_default() += 1;
+            }
+        };
+        fixed_selected.values().for_each(&mut count);
+        banked_selected.values().for_each(&mut count);
+        if let Some(ov) = overlay {
+            ov.blocks.values().for_each(&mut count);
+        }
+        let mut entries: BTreeSet<u16> = BTreeSet::new();
+        entries.insert(options.reset);
+        let mut claimed: BTreeSet<u16> = BTreeSet::new();
+        for (&pc, block) in &fixed_selected {
+            let Some((t, _)) = crate::state_superblock::preferred_successor(block) else { continue };
+            if t < 0xC000
+                || t == pc
+                || !fixed_selected.contains_key(&t)
+                || incoming.get(&t).copied().unwrap_or(0) != 1
+                || entries.contains(&t)
+                || fixed_polls.contains(&t)
+                || claimed.contains(&t)
+            {
+                continue;
+            }
+            claimed.insert(t);
+            chain_next.insert(pc, t);
+        }
+        // Break cycles (a ring of unique-entry blocks would have no head).
+        let heads: Vec<u16> = fixed_selected.keys().copied().filter(|pc| !claimed.contains(pc)).collect();
+        let mut reached: BTreeSet<u16> = BTreeSet::new();
+        for h in heads {
+            let mut c = h;
+            while let Some(&n) = chain_next.get(&c) {
+                reached.insert(n);
+                c = n;
+            }
+        }
+        chain_next.retain(|_, t| reached.contains(t));
+        println!("banked-traces: chained {} fixed-bank edge(s) (fixed {}, polled {}, unique-entry fixed {})", chain_next.len(), fixed_selected.len(), fixed_polls.len(), fixed_selected.keys().filter(|p| incoming.get(p).copied().unwrap_or(0) == 1).count());
+    }
+    let chained: BTreeSet<u16> = chain_next.values().copied().collect();
+    let mut fixed_order: Vec<u16> = Vec::new();
+    for &pc in fixed_selected.keys() {
+        if chained.contains(&pc) {
+            continue;
+        }
+        let mut c = pc;
+        fixed_order.push(c);
+        while let Some(&n) = chain_next.get(&c) {
+            fixed_order.push(n);
+            c = n;
+        }
+    }
+
     let mut assigned = BTreeMap::new();
     let mut host_bank = CODE_BANK_START;
     let mut used = 0usize;
-    for (&pc, block) in &fixed_selected {
-        assign_bank(
-            &mut assigned,
-            BlockId::Fixed(pc),
-            block_cost(block),
-            &mut host_bank,
-            &mut used,
-        );
+    {
+        let mut i = 0;
+        while i < fixed_order.len() {
+            let head = fixed_order[i];
+            let mut cost = block_cost(&fixed_selected[&head]);
+            let mut j = i + 1;
+            while j < fixed_order.len() && chained.contains(&fixed_order[j]) {
+                cost += block_cost(&fixed_selected[&fixed_order[j]]);
+                j += 1;
+            }
+            assign_bank(&mut assigned, BlockId::Fixed(head), cost, &mut host_bank, &mut used);
+            let hb = assigned[&BlockId::Fixed(head)];
+            for k in i + 1..j {
+                assigned.insert(BlockId::Fixed(fixed_order[k]), hb);
+            }
+            i = j;
+        }
     }
     for (&(bank, pc), block) in &banked_selected {
         assign_bank(
@@ -736,8 +859,14 @@ pub fn emit_mapper2_cfgs(
     writeln!(out, "    jp nes_dispatch_hl").unwrap();
     writeln!(out).unwrap();
 
-    for (&pc, block) in &fixed_selected {
-        emit_block(
+    let mut trace = crate::state_superblock::LocalTrace::default();
+    let mut adapters: Vec<(BlockId, String)> = Vec::new();
+    let mut prev_chain: Option<u16> = None;
+    for &pc in &fixed_order {
+        let block = &fixed_selected[&pc];
+        let continuing = prev_chain == Some(pc);
+        prev_chain = chain_next.get(&pc).copied();
+        let adapter = emit_block(
             &mut out,
             BlockId::Fixed(pc),
             block,
@@ -749,7 +878,22 @@ pub fn emit_mapper2_cfgs(
             guard_for(BlockId::Fixed(pc)),
             &dead_for(BlockId::Fixed(pc), &v_dead),
             &dead_for(BlockId::Fixed(pc), &c_dead),
+            &mut trace,
+            continuing,
+            prev_chain,
         );
+        if let Some(a) = adapter {
+            adapters.push((BlockId::Fixed(pc), a));
+        }
+    }
+    for (id, a) in &adapters {
+        let name = label(*id);
+        writeln!(out, "SECTION \"NES canonical banked-trace entry {name}\", ROMX, BANK[{}]", assigned[id]).unwrap();
+        writeln!(out, "{name}:").unwrap();
+        out.push_str(a);
+        writeln!(out).unwrap();
+    }
+    {
     }
     for (&(bank, pc), block) in &banked_selected {
         emit_block(
@@ -764,6 +908,9 @@ pub fn emit_mapper2_cfgs(
             guard_for(BlockId::Banked(bank, pc)),
             &dead_for(BlockId::Banked(bank, pc), &v_dead),
             &dead_for(BlockId::Banked(bank, pc), &c_dead),
+            &mut crate::state_superblock::LocalTrace::default(),
+            false,
+            None,
         );
     }
     if let Some(ov) = overlay {
@@ -782,6 +929,9 @@ pub fn emit_mapper2_cfgs(
                 &[],
                 &BTreeSet::new(),
                 &BTreeSet::new(),
+                &mut crate::state_superblock::LocalTrace::default(),
+                false,
+                None,
             );
         }
         let entries: BTreeSet<u16> = ov.blocks.keys().copied().collect();

@@ -5,7 +5,7 @@ use crate::cpu6502::{self,AddressingMode,DecodeError,DecodedInstruction,Mnemonic
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]pub struct Edge{pub kind:EdgeKind,pub target:Option<u16>}
 #[derive(Debug,Clone,PartialEq,Eq)]pub struct BasicBlock{pub start:u16,pub instructions:Vec<DecodedInstruction>,pub edges:Vec<Edge>}
 #[derive(Debug,Clone,PartialEq,Eq)]pub struct AnalysisDiagnostic{pub pc:u16,pub error:DecodeError}
-#[derive(Debug,Clone,PartialEq,Eq)]pub struct ControlFlowGraph{pub blocks:BTreeMap<u16,BasicBlock>,pub entry_points:Vec<u16>,pub diagnostics:Vec<AnalysisDiagnostic>}
+#[derive(Debug,Clone,PartialEq,Eq)]pub struct ControlFlowGraph{pub blocks:BTreeMap<u16,BasicBlock>,pub entry_points:Vec<u16>,pub dynamic_entries:Vec<u16>,pub diagnostics:Vec<AnalysisDiagnostic>}
 #[derive(Debug,Clone,PartialEq,Eq)]pub enum AnalysisError{UnsupportedMapper(u16),UnsupportedPrgSize(usize),UnmappedAddress(u16),Decode(DecodeError)}
 impl fmt::Display for AnalysisError{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{match self{
 Self::UnsupportedMapper(m)=>write!(f,"CFG discovery currently supports mapper 0 and 3, not mapper {m}"),
@@ -741,7 +741,7 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
   }
   if !added{break}
  }
- let mut ep=entries.to_vec();ep.extend(continuations);ep.extend(harvested);ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,diagnostics})
+ let mut dynamic_entries=continuations.clone();dynamic_entries.extend(harvested.iter().copied());dynamic_entries.sort_unstable();dynamic_entries.dedup();let mut ep=entries.to_vec();ep.extend(continuations);ep.extend(harvested);ep.sort_unstable();ep.dedup();Ok(ControlFlowGraph{blocks,entry_points:ep,dynamic_entries,diagnostics})
 }
 #[cfg(test)]
 mod tests {
