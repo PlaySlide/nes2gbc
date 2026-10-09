@@ -189,6 +189,29 @@ def main(path: str) -> None:
     use = [0] * n
     kill = [0] * n
     store_var = [None] * n
+    # NMI-poll-aware edges (see module docstring note): a delivered NMI
+    # materializes and pushes P at the poll; the handler's RTI restores it to
+    # the interrupted block, which resumes at the same PC as the poll's
+    # fallthrough. So flags at the poll are live iff live at the fallthrough
+    # or read by the handler before it defines them; RTI itself only defines
+    # flags (nes_rti_pop_hl -> nes_set_p_from_a). Disabled if the program
+    # contains TSX (stack inspection could read the pushed P byte).
+    NMI_FLAGS = (BIT["nes_z_shadow"] | BIT["nes_n_shadow"] | BIT["nes_c_shadow"])
+    nmi_h = None
+    if (any(l.startswith('SECTION "NES mapper') for l in lines)  # banked builds only
+            and not any(x and x[1] == "Tsx" for x in insn_of)):
+        for k, ck in enumerate(codes):
+            if ck == "nes_nmi_entry:":
+                for k2 in range(k + 1, min(n, k + 6)):
+                    mk = re.match(r"^ld hl, ([A-Za-z_][A-Za-z0-9_]*)$", codes[k2])
+                    if mk:
+                        nmi_h = glob_at.get(mk.group(1))
+                        if nmi_h is not None and not in_code[nmi_h]:
+                            nmi_h = None
+                        break
+                break
+    nmi_edges = 0
+
     for i, c in enumerate(codes):
         if not in_code[i]:
             use[i] = ALL
@@ -199,6 +222,19 @@ def main(path: str) -> None:
         if barrier[i]:
             use[i] = ALL
             continue
+        if nmi_h is not None:
+            if c == "call nes_poll_nmi_hl":
+                succ[i] = (i + 1,)
+                continue
+            if (c == "jp nz, nes_nmi_entry" and i >= 2
+                    and codes[i - 1] == "and a" and codes[i - 2] == "call nes_poll_nmi_hl"):
+                succ[i] = (i + 1, nmi_h)
+                nmi_edges += 1
+                continue
+            if c == "call nes_rti_pop_hl":
+                kill[i] = NMI_FLAGS
+                succ[i] = (i + 1,)
+                continue
         m = STORE_RE.match(c)
         if m:
             store_var[i] = m.group(1)
@@ -289,7 +325,7 @@ def main(path: str) -> None:
             stats[v] += 1
     p.write_text("".join(l for k, l in enumerate(lines) if k not in remove))
     print("dead-hram-global: removed " + ", ".join(f"{c} {v}" for v, c in stats.items() if c) +
-          f" ({len(remove)} stores; {rts_edges} RTS fallbacks with proven return sets)")
+          f" ({len(remove)} stores; {rts_edges} RTS fallbacks with proven return sets; {nmi_edges} NMI-poll edges)")
 
 
 if __name__ == "__main__":

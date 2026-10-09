@@ -31,7 +31,7 @@ BIT = {"V": 1, "nes_p": 1}
 ALL = 1
 STORE_RE = re.compile(r"(?!)")  # V is only defined by whole overflow sequences
 MENTION_RE = re.compile(r"\b(nes_p)\b")
-V_READERS = {"Bvs", "Bvc", "Php", "Brk", "Plp", "Rti"}
+V_READERS = {"Bvs", "Bvc", "Php", "Brk", "Plp", "Rti"}  # Rti dropped below when NMI-aware
 MATH = {"ld a, d", "xor e", "cpl", "ld h, a", "xor l", "xor c", "xor b", "and h"}
 
 
@@ -233,6 +233,28 @@ def main(path: str) -> None:
     use = [0] * n
     kill = [0] * n
     store_var = [None] * n
+    # NMI-poll-aware edges (see module docstring note): a delivered NMI
+    # materializes and pushes P at the poll; the handler's RTI restores it to
+    # the interrupted block, which resumes at the same PC as the poll's
+    # fallthrough. So flags at the poll are live iff live at the fallthrough
+    # or read by the handler before it defines them; RTI itself only defines
+    # flags (nes_rti_pop_hl -> nes_set_p_from_a). Disabled if the program
+    # contains TSX (stack inspection could read the pushed P byte).
+    NMI_FLAGS = 1
+    nmi_h = None
+    if not any(x and x[1] == "Tsx" for x in insn_of):
+        for k, ck in enumerate(codes):
+            if ck == "nes_nmi_entry:":
+                for k2 in range(k + 1, min(n, k + 6)):
+                    mk = re.match(r"^ld hl, ([A-Za-z_][A-Za-z0-9_]*)$", codes[k2])
+                    if mk:
+                        nmi_h = glob_at.get(mk.group(1))
+                        if nmi_h is not None and not in_code[nmi_h]:
+                            nmi_h = None
+                        break
+                break
+    nmi_edges = 0
+
     for i, c in enumerate(codes):
         if not in_code[i]:
             use[i] = ALL
@@ -243,12 +265,25 @@ def main(path: str) -> None:
         if barrier[i]:
             use[i] = ALL
             continue
+        if nmi_h is not None:
+            if c == "call nes_poll_nmi_hl":
+                succ[i] = (i + 1,)
+                continue
+            if (c == "jp nz, nes_nmi_entry" and i >= 2
+                    and codes[i - 1] == "and a" and codes[i - 2] == "call nes_poll_nmi_hl"):
+                succ[i] = (i + 1, nmi_h)
+                nmi_edges += 1
+                continue
+            if c == "call nes_rti_pop_hl":
+                kill[i] = NMI_FLAGS
+                succ[i] = (i + 1,)
+                continue
         if i in in_seq:
             succ[i] = (i + 1,)
             if i in seq_start:
                 kill[i] = 1
             continue
-        if insn_of[i] and insn_of[i][1] in V_READERS:
+        if insn_of[i] and insn_of[i][1] in V_READERS and not (nmi_h is not None and insn_of[i][1] == "Rti"):
             use[i] = ALL
         m = STORE_RE.match(c)
         if m:
@@ -345,7 +380,7 @@ def main(path: str) -> None:
         removed += 1
     p.write_text("".join(lines))
     print(f"dead-overflow-global: removed {removed} of {len(seqs)} V sequences "
-          f"({kept_live} V possibly observed, {kept_shape} kept for A/shape)")
+          f"({kept_live} V possibly observed, {kept_shape} kept for A/shape; {nmi_edges} NMI-poll edges)")
 
 
 if __name__ == "__main__":
