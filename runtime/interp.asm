@@ -6,6 +6,10 @@ nes_ipc_lo: ds 1 ; interpreted 6502 PC
 nes_ipc_hi: ds 1
 nes_iea_lo: ds 1 ; effective address of the current instruction
 nes_iea_hi: ds 1
+nes_interp_may_exit: ds 1 ; 1 after a control transfer: try translated code at PC >= $8000
+nes_interp_rom_entries: ds 2 ; diagnostic: untranslated ROM PCs handed to the interpreter
+nes_interp_rom_last_lo: ds 1 ; diagnostic: last such PC
+nes_interp_rom_last_hi: ds 1
 
 SECTION "NES RAM interpreter entry", ROM0
 ; Input HL = NES PC below $8000. Enter the banked interpreter with the
@@ -19,17 +23,48 @@ nes_interp_enter:
     ld [$3000], a
     jp nes_interp_run
 
+; Translated code has no entry for this ROM PC (no dispatch-table entry, or
+; no translation for the currently mapped PRG bank): interpret it instead of
+; faulting. nes_dispatch_hl.cache_miss left the PC in nes_dispatch_cache_pc.
+nes_interp_enter_cached_pc:
+    ld a, [nes_dispatch_cache_pc_hi]
+    ld h, a
+    ld a, [nes_dispatch_cache_pc_lo]
+    ld l, a
+; Input HL = untranslated NES ROM PC.
+nes_interp_enter_rom:
+    ld a, l
+    ld [nes_interp_rom_last_lo], a
+    ld a, h
+    ld [nes_interp_rom_last_hi], a
+    ld a, [nes_interp_rom_entries]
+    add 1
+    ld [nes_interp_rom_entries], a
+    ld a, [nes_interp_rom_entries + 1]
+    adc 0
+    ld [nes_interp_rom_entries + 1], a
+    jr nes_interp_enter
+
 SECTION "NES RAM interpreter", ROMX, BANK[255]
 nes_interp_run:
     ld a, l
     ld [nes_ipc_lo], a
     ld a, h
     ld [nes_ipc_hi], a
+    ; Execute at least one instruction before trying translated code again,
+    ; so an untranslated ROM PC always makes progress.
+    xor a
+    ld [nes_interp_may_exit], a
 nes_interp_next:
     ld a, [nes_ipc_hi]
     cp $80
     jr c, .fetch
-    ; Back in PRG ROM: continue in translated code.
+    ld a, [nes_interp_may_exit]
+    and a
+    jr z, .fetch
+    ; PRG ROM after a control transfer: continue in translated code. If
+    ; this PC has no translation, dispatch re-enters the interpreter.
+    ld a, [nes_ipc_hi]
     ld h, a
     ld a, [nes_ipc_lo]
     ld l, a
@@ -183,6 +218,8 @@ nes_interp_store_ea:
 ; Taken control transfer to HL: poll for a pending NMI exactly like a
 ; translated loop head, then continue at HL.
 nes_interp_goto_hl:
+    ld a, $01
+    ld [nes_interp_may_exit], a
     ld a, l
     ld [nes_ipc_lo], a
     ld a, h

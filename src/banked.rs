@@ -231,7 +231,14 @@ fn emit_stub(
         writeln!(out, "    cp ${bank:02X}").unwrap();
         writeln!(out, "    jp z, .m2_b{bank:02X}").unwrap();
     }
+    // No translation for the mapped bank: interpret from this PC (the
+    // runtime interpreter re-enters translated code at the next transfer).
+    writeln!(out, "IF DEF(NES2GBC_RAM_INTERP)").unwrap();
+    writeln!(out, "    ld hl, ${pc:04X}").unwrap();
+    writeln!(out, "    jp nes_interp_enter_rom").unwrap();
+    writeln!(out, "ELSE").unwrap();
     writeln!(out, "    jp nes_unimplemented").unwrap();
+    writeln!(out, "ENDC").unwrap();
 
     for &(bank, target_bank) in variants {
         let target = label(BlockId::Banked(bank, pc));

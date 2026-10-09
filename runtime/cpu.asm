@@ -243,7 +243,11 @@ ENDC
 
     ld a, [hli]
     and a
+IF DEF(NES2GBC_RAM_INTERP)
+    jp z, nes_interp_enter_cached_pc
+ELSE
     jp z, nes_unimplemented
+ENDC
     ld b, a
 
     ; Skip reserved high-bank byte.
