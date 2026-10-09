@@ -667,8 +667,37 @@ nes_cpu_read_joy_hl::
 ; else takes the generic ladder. Same results and flags as nes_cpu_read.
 nes_cpu_read_hi::
     bit 7, h
+IF DEF(NES2GBC_RAM_INTERP)
+    ; Banked mappers (1/2; RAM_INTERP is defined only for them): PRG reads
+    ; skip the mapper ladder. $8000-$BFFF reads nes_prg_bank, $C000-$FFFF
+    ; nes_prg_hi_bank (the fixed bank for UxROM), each in GBC bank N+1.
+    ; Returns Z/NC like nes_cpu_read.prg_mapper_have_bank.
+    jp z, nes_cpu_read
+    PROFILE_INC nes_profile_read_prg
+    res 7, h
+    bit 6, h
+    jr nz, .hi
+    set 6, h
+    ld a, [nes_prg_bank]
+    jr .have
+.hi:
+    ld a, [nes_prg_hi_bank]
+.have:
+    inc a
+    ld [$2000], a
+    ld l, [hl]
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    xor a
+    ld a, l
+IF DEF(NES2GBC_DEBUG_TRACE)
+    ld [nes_debug_bus_value], a
+ENDC
+    ret
+ELSE
     jp nz, nes_cpu_read.prg
     jp nes_cpu_read
+ENDC
 
 ; 32 KiB PRG variant of nes_cpu_read_hi (tools/inline_prg_reads.py): the
 ; build knows PRG is not the mirrored 16 KiB layout, so skip that test.
