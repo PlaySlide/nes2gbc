@@ -343,7 +343,11 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
        for i in 0..MAX_WORD_TABLE_ENTRIES{
         let Ok(x)=off(mapper,prg.len(),tt.wrapping_add(i*2))else{break};
         if x+1>=prg.len(){break}
-        let sub=u16::from_le_bytes([prg[x],prg[x+1]]);
+        let mut sub=u16::from_le_bytes([prg[x],prg[x+1]]);
+        // A sub-table may be addressed one word early when the state index
+        // starts at 1 (Contra $E6A8[0] = $7FFF, read as ($7FFF),Y with
+        // Y >= 2): its first reachable word is in PRG.
+        if (0x7F00..0x8000).contains(&sub){sub=sub.wrapping_add(2*((0x8000-sub+1)/2))}
         if sub<0x8000{break}
         if !tables.contains(&sub){tables.push(sub)}
        }
