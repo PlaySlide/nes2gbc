@@ -94,11 +94,36 @@ nes_interp_fetch:
     ld [nes_ipc_hi], a
     dec hl
     ; fall through
-; A = NES bus byte at HL.
+; A = NES bus byte at HL. Internal RAM and cartridge PRG RAM (where
+; RAM-resident code lives) are read inline; everything else takes the
+; generic bus.
 nes_interp_read_hl:
     ld a, h
     cp $20
+    jr c, .ram
+    cp $60
+    jp c, nes_cpu_read
+    cp $80
     jp nc, nes_cpu_read
+    ; $6000-$6FFF -> WRAMX bank 4, $7000-$7FFF -> bank 5, at $D000.
+    and $10
+    swap a
+    add $04
+    ld e, a
+    ld a, h
+    and $0F
+    or $D0
+    ld h, a
+    ldh a, [rSVBK]
+    ld d, a
+    ld a, e
+    ldh [rSVBK], a
+    ld e, [hl]
+    ld a, d
+    ldh [rSVBK], a
+    ld a, e
+    ret
+.ram:
     and $07
     or $C0
     ld h, a
