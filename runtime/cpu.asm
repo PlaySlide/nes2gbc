@@ -1791,7 +1791,13 @@ ENDC
     ldh a, [nes_oam_shadow_ready]
     and a
     jr nz, .oam_ok
+IF DEF(NES2GBC_RAM_INTERP) && DEF(NES2GBC_FAST_OAM_PROJECTOR)
+    ; Banked games (Contra) re-project here every frame after a PPUCTRL
+    ; sprite-size change; the generated register projector is equivalent.
+    call nes_video_build_oam_shadow_fast
+ELSE
     call nes_video_build_oam_shadow
+ENDC
 .oam_ok:
     ; Only a dirty snapshot is ever DMA'd (paced publish or inherited flag).
     ; Hand it the live projected page instead of copying 160 bytes.

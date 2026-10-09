@@ -326,6 +326,13 @@ def main() -> int:
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     rewritten = optimize(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
+    if any("\nnes_video_build_oam_shadow_fast:\n" in line for line in lines):
+        # Let the runtime's banked-mapper paths use the register projector
+        # too (only referenced under NES2GBC_RAM_INTERP; NROM output unchanged).
+        cfg = args.asm.parent / "generated_config.inc"
+        text = cfg.read_text() if cfg.exists() else ""
+        if "NES2GBC_FAST_OAM_PROJECTOR" not in text:
+            cfg.write_text(text + "DEF NES2GBC_FAST_OAM_PROJECTOR EQU 1 ; tools/fast_oam_dma_generated.py\n")
     print(
         f"oam-dma-fast: redirected {rewritten} generated $4014 call site(s) to "
         "exact 16-byte-unrolled internal-RAM DMA + register projector"
