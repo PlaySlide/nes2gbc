@@ -133,6 +133,7 @@ generate:
 			python3 tools/chain_indexed_hl.py runtime/generated.asm; \
 			python3 tools/dead_overflow.py runtime/generated.asm; \
 			python3 tools/dead_overflow_global.py runtime/generated.asm; \
+			python3 tools/fuse_mmc1_serial_writes.py runtime/generated.asm; \
 			python3 tools/final_peephole.py runtime/generated.asm; \
 			python3 tools/cheap_carry_materialize.py runtime/generated.asm; \
 			python3 tools/sbc_carry_capture.py runtime/generated.asm; \

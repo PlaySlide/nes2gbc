@@ -733,6 +733,34 @@ nes_prg_read_hi_dyn::
     jr nes_prg_read_hi_a
 ENDC
 
+IF DEF(NES2GBC_RAM_INTERP)
+; MMC1 five-write serial load (tools/fuse_mmc1_serial_writes.py):
+;   STA reg / 4x (LSR A / STA reg). In: A = value, H = register address high.
+; Performs the five writes in order through nes_cpu_write's mapper-1 path.
+; Out: A = E = value >> 4, host carry = value bit 3 (the last LSR's carry).
+; Clobbers BC/DE/HL.
+nes_mmc1_serial_write5::
+    ld d, a
+    ld a, 5
+.loop:
+    push af
+    push de
+    push hl
+    ld e, d
+    call nes_cpu_write.mapper1
+    pop hl
+    pop de
+    pop af ; flags: carry of the last srl d
+    dec a ; keeps carry
+    jr z, .done
+    srl d
+    jr .loop
+.done:
+    ld a, d
+    ld e, d
+    ret
+ENDC
+
 ; 32 KiB PRG variant of nes_cpu_read_hi (tools/inline_prg_reads.py): the
 ; build knows PRG is not the mirrored 16 KiB layout, so skip that test.
 ; Same results and flags as nes_cpu_read (PRG: `or $40` -> NZ, NC).
