@@ -741,6 +741,33 @@ IF DEF(NES2GBC_RAM_INTERP)
 ; Clobbers BC/DE/HL.
 nes_mmc1_serial_write5::
     ld d, a
+    ; Fast path: serial register empty ($10) and no reset bit. The first four
+    ; writes then leave $01 | (value & $0F) << 1; only the fifth commits.
+    bit 7, a
+    jr nz, .slow
+    ld a, [nes_mmc1_shift]
+    cp $10
+    jr nz, .slow
+    ld a, d
+    and $0F
+    add a
+    inc a
+    ld [nes_mmc1_shift], a
+    ld a, d
+    swap a
+    and $0F
+    ld e, a
+    push de
+    call nes_cpu_write.mapper1
+    pop de
+    ld a, d
+    srl a
+    srl a
+    srl a
+    srl a ; carry = value bit 3
+    ld e, a
+    ret
+.slow:
     ld a, 5
 .loop:
     push af
