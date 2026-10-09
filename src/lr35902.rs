@@ -851,7 +851,10 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         writeln!(out, "    call nes_controller_read").unwrap();
                     }
                     0x4017 => {
-                        writeln!(out, "    ld a, $01").unwrap();
+                        // No controller 2: must match nes_cpu_read's `xor a`.
+                        // A constant $01 makes games that OR both ports
+                        // (Contra) see every button held.
+                        writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
                     }
                     _ => {
                         writeln!(out, "    xor a").unwrap();
