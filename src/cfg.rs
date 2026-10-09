@@ -135,6 +135,13 @@ fn inline_jsr_dispatcher(mapper:u16,prg:&[u8],entry:u16)->Option<(u16,u16)>{
   {
    high=Some(k);break
   }
+  // Konami (Contra $C857) restores the caller's Y between the high-byte
+  // load and its store: LDA (base),Y / LDY zp / STA ptr+1 / JMP (ptr).
+  if k+5<end&&prg[k]==0xB1&&prg[k+1]==base&&prg[k+2]==0xA4
+   &&prg[k+4]==0x85&&prg[k+5]==pointer.wrapping_add(1)
+  {
+   high=Some(k+2);break
+  }
   k+=1;
  }
  let high_i=high?;
