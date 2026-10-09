@@ -2078,23 +2078,43 @@ nes_mmc1_write_romx:
 
     ld a, c
     and $1F
+    ld b, a
+    ld a, [nes_mmc1_prg]
+    cp b
+    ret z ; unchanged register: mapping already applied
+    ld a, b
     ld [nes_mmc1_prg], a
     jp nes_mmc1_apply
 
 .control:
     ld a, c
     and $1F
+    ld b, a
+    ld a, [nes_mmc1_control]
+    cp b
+    ret z ; unchanged register: mapping already applied
+    ld a, b
     ld [nes_mmc1_control], a
     jp nes_mmc1_apply
 
 .chr0:
     ld a, c
     and $1F
+    ld b, a
+    ld a, [nes_mmc1_chr0]
+    cp b
+    ret z ; unchanged register: mapping already applied
+    ld a, b
     ld [nes_mmc1_chr0], a
     jp nes_mmc1_apply
 
 .chr1:
     ld a, c
     and $1F
+    ld b, a
+    ld a, [nes_mmc1_chr1]
+    cp b
+    ret z ; unchanged register: mapping already applied
+    ld a, b
     ld [nes_mmc1_chr1], a
     jp nes_mmc1_apply
