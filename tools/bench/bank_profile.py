@@ -30,11 +30,16 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--nmis", type=int, default=1000)
     ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--make-var", action="append", default=[], help="extra make variable for the identity build")
+    ap.add_argument("--fc", default=None, help="hex NES-RAM frame counter: count NES frames by it and key --press on it instead of the SMB latch schedule")
+    ap.add_argument("--press", default="", help="btn@frame:dur,... keyed on --fc frames")
+    ap.add_argument("--window", default=None, help="A-B NES frames (with --fc) to count jumps over")
     a = ap.parse_args()
     out = a.out or os.path.join(ROOT, "profiles", os.path.splitext(os.path.basename(a.rom))[0] + ".bankprof")
     if not a.skip_build:
-        subprocess.run(["make", "generate", f"ROM={a.rom}", "REPACK_IDENTITY=1", "BANK_PROFILE="],
-                       cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+        env = dict(os.environ, NES2GBC_REPACK_KEEP_TRAMPOLINES="1")
+        subprocess.run(["make", "generate", f"ROM={a.rom}", "REPACK_IDENTITY=1", "BANK_PROFILE="] + a.make_var,
+                       cwd=ROOT, check=True, stdout=subprocess.DEVNULL, env=env)
         subprocess.run(["make", "-B", "-C", "runtime"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
     asm = open(os.path.join(ROOT, "runtime", "generated.asm")).read().splitlines()
     codes = [l.split(";", 1)[0].strip() for l in asm]
@@ -77,13 +82,40 @@ def main():
             pb.button_event_now(W(BTN[b][1]))
         st["p"] = want
 
+    st["on"] = a.fc is None
+
     def on_jump(_):
-        cnt[(pb.memory[cur], reg.A, reg.HL)] += 1
-    for s, f in ((nmi_label, on_nmi), ("nes_controller_latch", on_latch), ("nes_jump_known_hl_a_8bit", on_jump)):
+        if st["on"]:
+            cnt[(pb.memory[cur], reg.A, reg.HL)] += 1
+    hooks = [("nes_jump_known_hl_a_8bit", on_jump)]
+    if "nes_jump_known_hl_a" in syms and syms["nes_jump_known_hl_a"] != syms["nes_jump_known_hl_a_8bit"]:
+        hooks.append(("nes_jump_known_hl_a", on_jump))
+    if a.fc is None:
+        hooks += [(nmi_label, on_nmi), ("nes_controller_latch", on_latch)]
+    for s, f in hooks:
         b, ad = syms[s]
         pb.hook_register(b, ad, f, None)
-    while st["nmi"] < a.nmis:
-        pb.tick(1, False)
+    if a.fc is None:
+        while st["nmi"] < a.nmis:
+            pb.tick(1, False)
+    else:
+        fc = 0xC000 + int(a.fc, 16)
+        lo, hi = (int(x) for x in a.window.split("-"))
+        a.nmis = hi - lo
+        pr = []
+        for q in filter(None, a.press.split(",")):
+            btn, rest = q.split("@"); f0, d = rest.split(":"); pr.append((btn, int(f0), int(d)))
+        nf, last, held = 0, pb.memory[fc], set()
+        while nf < hi:
+            w = {b for b, f0, d in pr if f0 <= nf < f0 + d}
+            for b in w - held: pb.button_press(b)
+            for b in held - w: pb.button_release(b)
+            held = w
+            pb.tick(1, False)
+            v = pb.memory[fc]; dd = (v - last) & 255; last = v
+            if dd:
+                nf += min(dd, 4)
+                st["on"] = nf >= lo
     pb.stop(save=False)
     agg = collections.Counter()
     unresolved = 0

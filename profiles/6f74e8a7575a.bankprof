@@ -1,0 +1,1561 @@
+# nes2gbc cross-bank jump profile: 6f74e8a7575a.nes, 1000 NMIs, jumps per NES frame
+123.523 NES block C027 nes_C02B
+123.523 NES block C02B nes_C02B
+32.000 NES block D478 nes_D47A
+32.000 NES block D47A nes_D47A
+31.748 NES block CD91 nes_CD96
+29.739 NES block D16E nes_D177
+29.000 NES mapper2 b05 block 998A nes_m2_b05_9992
+29.000 NES mapper2 b05 block 9992 nes_m2_b05_98F2
+28.038 NES block CD96 nes_CDA2
+27.633 NES block CDA2 nes_CDA9
+23.360 NES mapper2 b04 block 96DF nes_m2_b04_96E8
+23.288 NES mapper2 b04 block 9270 nes_m2_b04_9278
+23.288 NES mapper2 b04 block 9281 nes_96C0
+23.288 NES mapper2 dispatch stub 9270 nes_m2_b04_9270
+23.288 NES mapper2 dispatch stub 928D nes_m2_b04_928D
+23.288 NES mapper2 dispatch stub 96C0 nes_m2_b04_96C0
+23.287 NES mapper2 b04 block 9278 nes_m2_b04_9281
+22.808 NES mapper2 b04 block 929E nes_m2_b04_92A8
+21.000 NES block D41A nes_D432
+20.764 NES block CDAB nes_CDB0
+20.764 NES mapper2 b04 block 96E8 nes_96FD
+20.764 NES mapper2 dispatch stub 96FD nes_m2_b04_96FD
+20.038 NES block CDB0 nes_CDB4
+18.099 NES mapper2 b04 block 9422 nes_m2_b04_9426
+18.099 NES mapper2 b04 block 96FD nes_m2_b04_9707
+18.099 NES mapper2 b04 block 9707 nes_m2_b04_92F6
+17.722 NES mapper2 b04 block 9386 nes_m2_b04_938B
+17.722 NES mapper2 b04 block 938B nes_m2_b04_9399
+17.722 NES mapper2 b04 block 93F2 nes_m2_b04_9404
+17.466 NES mapper2 b04 block 92A8 nes_m2_b04_92AC
+17.466 NES mapper2 b04 block 92AC nes_m2_b04_9256
+16.000 NES block D14E nes_D16E
+16.000 NES block D161 nes_D16E
+16.000 NES block D46A nes_D46C
+16.000 NES block D46C nes_D474
+16.000 NES block D471 nes_D474
+16.000 NES block D474 nes_D46C
+15.874 NES block CD8E nes_CD91
+15.874 NES block CDDE nes_CD91
+15.244 NES mapper2 b04 block 94EF nes_m2_b04_94FE
+14.364 NES mapper2 b05 block 98EA nes_m2_b05_98FB
+14.364 NES mapper2 b05 block 98F2 nes_m2_b05_98FB
+14.000 NES block D40F nes_D41A
+14.000 NES block D432 nes_D43A
+14.000 NES block D43F nes_D414
+13.085 NES mapper2 dispatch stub 9547 nes_m2_b04_9547
+12.980 NES mapper2 b04 block 9974 nes_m2_b04_996D
+12.935 NES mapper2 b04 block 93DF nes_m2_b04_93E5
+12.884 NES mapper2 b04 block 92F6 nes_m2_b04_9300
+12.884 NES mapper2 b04 block 9335 nes_m2_b04_933B
+12.884 NES mapper2 b04 block 933B nes_m2_b04_9344
+12.884 NES mapper2 b04 block 937C nes_9386
+12.884 NES mapper2 dispatch stub 9386 nes_m2_b04_9386
+12.682 NES block CDB6 nes_CDBD
+11.783 NES mapper2 b04 block 9344 nes_m2_b04_9349
+11.644 NES mapper2 b04 block 928D nes_m2_b04_929E
+11.644 NES mapper2 b04 block 9290 nes_m2_b04_929E
+11.644 NES mapper2 b04 block 96C0 nes_m2_b04_96CF
+11.644 NES mapper2 b04 block 96C4 nes_m2_b04_96CF
+11.621 NES block CDBF nes_CDC4
+11.619 NES block CDC4 nes_CDC8
+11.390 NES mapper2 b04 block 9246 nes_9270
+11.390 NES mapper2 b04 block 9256 nes_9270
+10.382 NES block CDA2 nes_CDAB
+10.382 NES block CDA9 nes_CDAB
+9.949 NES mapper2 b04 block 942C nes_m2_b04_9437
+9.533 NES mapper2 b04 block 9376 nes_m2_b04_937A
+9.074 NES mapper2 b04 block 93DF nes_m2_b04_93F2
+9.074 NES mapper2 b04 block 93E5 nes_m2_b04_93F2
+9.074 NES mapper2 b04 block 9422 nes_m2_b04_942C
+9.074 NES mapper2 b04 block 9426 nes_m2_b04_942C
+9.074 NES mapper2 b04 block 94B3 nes_m2_b04_94EF
+9.074 NES mapper2 b04 block 94D6 nes_m2_b04_94EF
+9.050 NES mapper2 b04 block 92F6 nes_m2_b04_9302
+9.050 NES mapper2 b04 block 9300 nes_m2_b04_9302
+9.050 NES mapper2 b04 block 9404 nes_m2_b04_9422
+9.050 NES mapper2 b04 block 9408 nes_m2_b04_9422
+9.008 NES block CD8A nes_CD8E
+9.000 NES block CCB7 nes_CD8A
+8.199 NES mapper2 b04 block 942C nes_m2_b04_9434
+8.000 NES block D14A nes_D14E
+8.000 NES block D151 nes_D14E
+8.000 NES block D15C nes_D161
+8.000 NES block D164 nes_D161
+8.000 NES block D597 nes_D599
+8.000 NES block D599 nes_D599
+7.944 NES mapper2 dispatch stub A1CD nes_m2_b05_A1CD
+7.871 NES mapper2 b04 block 9437 nes_m2_b04_9440
+7.871 NES mapper2 dispatch stub 94B3 nes_m2_b04_94B3
+7.856 NES block C9C4 nes_C9C9
+7.763 NES mapper2 b04 block 96CF nes_m2_b04_96DF
+7.763 NES mapper2 b04 block 96D6 nes_m2_b04_96DF
+7.763 NES mapper2 b04 block 96DC nes_m2_b04_96DF
+7.697 NES block D273 nes_D27A
+7.670 NES block CDAB nes_CDB6
+7.670 NES block CDB4 nes_CDB6
+7.080 NES block D3FF nes_D403
+7.000 NES block D37E nes_D41A
+7.000 NES block D3EC nes_D3FF
+7.000 NES block D414 nes_D3FF
+7.000 NES block D41A nes_D43F
+7.000 NES block D432 nes_D43F
+7.000 NES block D43A nes_D43F
+7.000 NES block D43F nes_D38B
+6.944 NES mapper2 b05 block A1CF nes_m2_b05_A1CA
+6.543 NES mapper2 b04 block 9541 nes_9547
+6.543 NES mapper2 b04 block 9547 nes_9547
+6.351 NES mapper2 b04 block 9349 nes_m2_b04_9376
+6.351 NES mapper2 b04 block 9368 nes_m2_b04_9376
+6.059 NES block D25F nes_D273
+6.059 NES block D265 nes_D273
+6.059 NES block D269 nes_D29D
+6.059 NES block D27A nes_D283
+6.059 NES block D280 nes_D283
+6.059 NES block D286 nes_D290
+6.059 NES block D28C nes_D290
+6.059 NES block D290 nes_D29D
+6.049 NES mapper2 b04 block 9399 nes_m2_b04_93DF
+6.049 NES mapper2 b04 block 93D5 nes_m2_b04_93DF
+6.049 NES mapper2 b04 block 93DD nes_m2_b04_93DF
+6.009 NES mapper2 b04 block 942B nes_928D
+6.009 NES mapper2 b04 block 94FE nes_928D
+6.009 NES mapper2 b04 block 94FF nes_928D
+5.822 NES block D54C nes_9000
+5.822 NES mapper2 b04 block 9000 nes_m2_b04_923F
+5.822 NES mapper2 b04 block 923F nes_m2_b04_9246
+5.822 NES mapper2 b04 block 92A8 nes_m2_b04_92C3
+5.822 NES mapper2 b04 block 92ED nes_D554
+5.822 NES mapper2 dispatch stub 9000 nes_m2_b04_9000
+5.811 NES block CDB6 nes_CDBF
+5.811 NES block CDBD nes_CDBF
+5.439 NES mapper2 b05 block 9CF3 nes_m2_b05_9CEE
+5.333 NES block D177 nes_D151
+5.333 NES block D177 nes_D164
+5.333 NES block D2A3 nes_D151
+5.333 NES block D2A3 nes_D164
+5.333 NES block D2B2 nes_D151
+5.333 NES block D2B2 nes_D164
+5.330 NES block CDCA nes_CDCE
+5.326 NES block CCBC nes_CCC0
+5.248 NES block D283 nes_D286
+5.192 NES mapper2 b04 block 9960 nes_m2_b04_9974
+5.192 NES mapper2 b04 block 996D nes_m2_b04_9974
+5.192 NES mapper2 b04 block 9972 nes_m2_b04_9974
+5.138 NES mapper2 b04 block 9434 nes_m2_b04_94B3
+5.138 NES mapper2 b04 block 943D nes_m2_b04_94B3
+5.000 NES mapper2 b05 block 98FB nes_m2_b05_998A
+5.000 NES mapper2 b05 block 9908 nes_m2_b05_998A
+5.000 NES mapper2 b05 block 9958 nes_m2_b05_998A
+5.000 NES mapper2 b05 block 9972 nes_m2_b05_998A
+5.000 NES mapper2 b05 block 9981 nes_m2_b05_998A
+5.000 NES mapper2 b05 block 99FC nes_m2_b05_998A
+4.822 NES block D4A8 nes_D4B1
+4.744 NES mapper2 b04 block 94B3 nes_m2_b04_94D6
+4.667 NES block D403 nes_D40F
+4.667 NES block D409 nes_D40F
+4.667 NES block D40D nes_D40F
+4.422 NES block D273 nes_D280
+4.295 NES mapper2 b04 block 9371 nes_m2_b04_937C
+4.295 NES mapper2 b04 block 9376 nes_m2_b04_937C
+4.295 NES mapper2 b04 block 937A nes_m2_b04_937C
+4.239 NES block D242 nes_D265
+4.239 NES block D263 nes_D265
+4.192 NES block C9BE nes_C9C4
+4.192 NES block C9C2 nes_C9C4
+4.118 NES mapper2 b04 block 9440 nes_9460
+4.118 NES mapper2 dispatch stub 9460 nes_m2_b04_9460
+4.040 NES block D233 nes_D242
+4.040 NES block D239 nes_D242
+4.040 NES block D29D nes_D242
+3.968 NES mapper2 b05 block A1CD nes_m2_b05_A1CF
+3.968 NES mapper2 b05 block A1EB nes_m2_b05_A1CF
+3.753 NES mapper2 b04 block 9440 nes_9458
+3.753 NES mapper2 b04 block 9458 nes_m2_b04_9460
+3.753 NES mapper2 dispatch stub 9458 nes_m2_b04_9458
+3.710 NES block CD96 nes_CD9D
+3.678 NES block CD9D nes_CD9F
+3.674 NES block CCBC nes_CCC1
+3.642 NES block D242 nes_D25F
+3.500 NES block D374 nes_D37E
+3.500 NES block D38B nes_D37E
+3.500 NES mapper2 b05 block A261 nes_m2_b05_A269
+3.500 NES mapper2 b05 block A269 nes_m2_b05_A269
+3.495 NES mapper2 b04 block 9460 nes_9486
+3.495 NES mapper2 dispatch stub 9486 nes_m2_b04_9486
+3.460 NES block D3FF nes_D407
+3.460 NES block D403 nes_D407
+3.460 NES block D407 nes_D40D
+3.460 NES block D409 nes_D40D
+3.436 NES block D283 nes_D28C
+3.436 NES block D28A nes_D28C
+3.288 NES block D7B2 nes_D7B6
+3.288 NES block D7BE nes_D7C2
+3.288 NES block D7C2 nes_D7D0
+3.275 NES block CD10 nes_CD16
+3.017 NES mapper2 b04 block 9302 nes_m2_b04_9335
+3.017 NES mapper2 b04 block 931F nes_m2_b04_9335
+3.017 NES mapper2 b04 block 9321 nes_m2_b04_9335
+3.017 NES mapper2 b04 block 9329 nes_m2_b04_9335
+3.017 NES mapper2 b04 block 932E nes_m2_b04_9335
+3.017 NES mapper2 b04 block 9332 nes_m2_b04_9335
+3.000 NES block C8B2 nes_C8BD
+3.000 NES block CB7E nes_CB80
+3.000 NES block CB8B nes_CB80
+3.000 NES block CCC0 nes_CB8B
+3.000 NES block CD45 nes_CB8B
+3.000 NES block CDCE nes_CCBC
+3.000 NES block CDDB nes_CCBC
+3.000 NES block CDE5 nes_CCBC
+3.000 NES mapper2 dispatch stub A2A3 nes_m2_b05_A2A3
+2.954 NES mapper2 b04 block 9712 nes_m2_b04_9941
+2.954 NES mapper2 b04 block 9941 nes_9715
+2.954 NES mapper2 dispatch stub 9715 nes_m2_b04_9715
+2.911 NES block D4B1 nes_D54C
+2.911 NES block D51D nes_D54C
+2.911 NES block D554 nes_D56E
+2.911 NES block D56A nes_D56E
+2.911 NES mapper2 b04 block 92E7 nes_m2_b04_92ED
+2.911 NES mapper2 b04 block 92EB nes_m2_b04_92ED
+2.904 NES mapper2 b04 block 94EF nes_m2_b04_94FF
+2.865 NES mapper2 dispatch stub 9712 nes_m2_b04_9712
+2.842 NES block CD91 nes_CDDE
+2.842 NES block CD9D nes_CDDE
+2.842 NES block CDA9 nes_CDDE
+2.842 NES block CDB0 nes_CDDE
+2.842 NES block CDB4 nes_CDDE
+2.842 NES block CDBD nes_CDDE
+2.842 NES block CDC4 nes_CDDE
+2.842 NES block CDC8 nes_CDDE
+2.736 NES mapper2 b05 block 9CE7 nes_m2_b05_9CF3
+2.736 NES mapper2 b05 block 9CEE nes_m2_b05_9CF3
+2.673 NES mapper2 b04 block 9715 nes_m2_b04_971C
+2.665 NES block CDBF nes_CDCA
+2.665 NES block CDC8 nes_CDCA
+2.665 NES mapper2 b04 block 96FD nes_m2_b04_9706
+2.653 NES mapper2 b04 block 971C nes_m2_b04_972B
+2.648 NES block C9C9 nes_A1CD
+2.648 NES block CA29 nes_A1CD
+2.648 NES block CA2B nes_A1CD
+2.648 NES mapper2 b05 block A1B2 nes_C9BE
+2.648 NES mapper2 b05 block A1C2 nes_C9BE
+2.648 NES mapper2 b05 block A1CA nes_C9BE
+2.617 NES mapper2 b04 block 9522 nes_9531
+2.617 NES mapper2 dispatch stub 9531 nes_m2_b04_9531
+2.617 NES mapper2 dispatch stub 9541 nes_m2_b04_9541
+2.617 NES mapper2 dispatch stub 954D nes_m2_b04_954D
+2.607 NES mapper2 b04 block 9335 nes_m2_b04_9386
+2.607 NES mapper2 b04 block 933B nes_m2_b04_9386
+2.596 NES mapper2 b04 block 96E8 nes_970A
+2.596 NES mapper2 b04 block 970A nes_9712
+2.596 NES mapper2 b04 block 9974 nes_m2_b04_9977
+2.596 NES mapper2 dispatch stub 970A nes_m2_b04_970A
+2.581 NES mapper2 b04 block 972B nes_m2_b04_9732
+2.581 NES mapper2 b04 block 9732 nes_m2_b04_9960
+2.581 NES mapper2 b04 block 9977 nes_9740
+2.581 NES mapper2 dispatch stub 9740 nes_m2_b04_9740
+2.577 NES mapper2 b04 block 9740 nes_m2_b04_975E
+2.577 NES mapper2 dispatch stub 979E nes_m2_b04_979E
+2.517 NES mapper2 b04 block 954D nes_97AB
+2.517 NES mapper2 b04 block 979E nes_m2_b04_97A4
+2.517 NES mapper2 b04 block 97A4 nes_m2_b04_9522
+2.517 NES mapper2 b04 block 97AB nes_m2_b04_9508
+2.517 NES mapper2 dispatch stub 97AB nes_m2_b04_97AB
+2.504 NES block C39C nes_C3A8
+2.504 NES block C3A6 nes_C3A8
+2.284 NES block CCD8 nes_CD0F
+2.261 NES block D16E nes_D178
+2.261 NES block D208 nes_D328
+2.261 NES block D328 nes_D32E
+2.261 NES mapper2 b05 block 9CBE nes_m2_b05_9CC2
+2.239 NES mapper2 b04 block 975E nes_m2_b04_9767
+2.096 NES block D790 nes_D79C
+2.096 NES block D7D6 nes_D79C
+2.078 NES mapper2 b04 block 9437 nes_m2_b04_943D
+2.028 NES mapper2 b04 block 9486 nes_9493
+2.028 NES mapper2 dispatch stub 9493 nes_m2_b04_9493
+2.010 NES mapper2 b04 block 98B5 nes_98BF
+2.010 NES mapper2 b04 block 98BF nes_m2_b04_98C6
+2.010 NES mapper2 dispatch stub 98BF nes_m2_b04_98BF
+2.000 NES block CB72 nes_CB7E
+2.000 NES block CB8B nes_CB90
+2.000 NES block CB90 nes_D790
+2.000 NES block D414 nes_D419
+2.000 NES block D599 nes_D5A7
+2.000 NES block D7D9 nes_CB93
+2.000 NES mapper2 b04 block 9531 nes_m2_b04_953B
+1.970 NES mapper2 b04 block 9789 nes_979B
+1.970 NES mapper2 dispatch stub 979B nes_m2_b04_979B
+1.968 NES mapper2 b04 block 9460 nes_94B3
+1.968 NES mapper2 b04 block 949F nes_94B3
+1.968 NES mapper2 b04 block 94A6 nes_94B3
+1.968 NES mapper2 b04 block 94AD nes_94B3
+1.837 NES block CCD8 nes_CD10
+1.837 NES block CD0F nes_CD10
+1.837 NES block CD10 nes_CD18
+1.837 NES block CD16 nes_CD18
+1.837 NES block CD18 nes_CD45
+1.837 NES block CD43 nes_CD45
+1.790 NES mapper2 b04 block 9508 nes_m2_b04_9514
+1.772 NES block D7E7 nes_D7EB
+1.644 NES block D79C nes_D7B2
+1.644 NES block D7B0 nes_D7B2
+1.644 NES block D7B6 nes_D7BE
+1.644 NES block D7BA nes_D7BE
+1.633 NES block D2F8 nes_D30F
+1.511 NES mapper2 b04 block 9767 nes_m2_b04_9772
+1.506 NES mapper2 b05 block 9DEF nes_m2_b05_9DF1
+1.500 NES block D7E1 nes_D7E7
+1.500 NES block D801 nes_D7E7
+1.472 NES block C8B2 nes_C8BB
+1.472 NES block C8BD nes_C8BB
+1.467 NES mapper2 b04 block 9486 nes_94AD
+1.467 NES mapper2 dispatch stub 94AD nes_m2_b04_94AD
+1.456 NES mapper2 b04 block 92C3 nes_m2_b04_92E7
+1.456 NES mapper2 b04 block 92C9 nes_m2_b04_92E7
+1.456 NES mapper2 b04 block 92CD nes_m2_b04_92E7
+1.456 NES mapper2 b04 block 92E3 nes_m2_b04_92E7
+1.439 NES mapper2 b04 block 9493 nes_94A6
+1.439 NES mapper2 dispatch stub 94A6 nes_m2_b04_94A6
+1.333 NES mapper2 b04 block 96CE nes_928D
+1.333 NES mapper2 b04 block 9706 nes_928D
+1.308 NES mapper2 b04 block 9522 nes_9541
+1.308 NES mapper2 b04 block 9531 nes_m2_b04_953D
+1.308 NES mapper2 b04 block 953B nes_m2_b04_953D
+1.308 NES mapper2 b04 block 953D nes_9541
+1.308 NES mapper2 b04 block 9541 nes_954D
+1.308 NES mapper2 b04 block 9547 nes_954D
+1.286 NES block CB80 nes_CCB7
+1.286 NES block CBAD nes_CCB7
+1.286 NES block CBBF nes_CCB7
+1.286 NES block CC14 nes_CCB7
+1.286 NES block CC3E nes_CCB7
+1.286 NES block CC74 nes_CCB7
+1.286 NES block CC91 nes_CCB7
+1.261 NES block D178 nes_D184
+1.261 NES block D1CB nes_D1D4
+1.228 NES block D7F1 nes_D7F5
+1.225 NES block CCC1 nes_CCD8
+1.225 NES block CCD0 nes_CCD8
+1.225 NES block CCD4 nes_CCD8
+1.224 NES block D7F5 nes_D7F9
+1.131 NES block D1E9 nes_D2F8
+1.131 NES block D23F nes_D2A3
+1.131 NES block D29D nes_D2A3
+1.131 NES block D2D6 nes_D2F8
+1.131 NES block D30F nes_D327
+1.131 NES block D324 nes_D327
+1.131 NES block D332 nes_D233
+1.131 NES block D369 nes_D233
+1.131 NES mapper2 b05 block 9CA1 nes_m2_b05_9CBE
+1.131 NES mapper2 b05 block 9CBA nes_m2_b05_9CBE
+1.131 NES mapper2 b05 block 9CC2 nes_m2_b05_9CE5
+1.131 NES mapper2 b05 block 9CC4 nes_m2_b05_9CE5
+1.101 NES mapper2 b04 block 9344 nes_m2_b04_9351
+1.101 NES mapper2 b04 block 9351 nes_9361
+1.101 NES mapper2 b04 block 9361 nes_m2_b04_9368
+1.101 NES mapper2 dispatch stub 9361 nes_m2_b04_9361
+1.025 NES mapper2 dispatch stub AAD1 nes_m2_b05_AAD1
+1.005 NES mapper2 b04 block 979B nes_m2_b04_98B5
+1.005 NES mapper2 b04 block 98AF nes_m2_b04_98B5
+1.002 NES block CB6F nes_C39C
+1.002 NES block CC0F nes_C39C
+1.002 NES block CC2D nes_C39C
+1.002 NES block CD72 nes_C39C
+1.002 NES block CDE8 nes_C39C
+1.000 NES block C01B nes_C01F
+1.000 NES block C02B nes_C02F
+1.000 NES block C02F nes_C03A
+1.000 NES block C03A nes_C03E
+1.000 NES block C03E nes_D58D
+1.000 NES block C059 nes_91CC
+1.000 NES block C3B3 nes_9D08
+1.000 NES block C8BB nes_A2A3
+1.000 NES block C987 nes_A2A3
+1.000 NES block C9BC nes_A2A3
+1.000 NES block CBDE nes_CB6F
+1.000 NES block CC30 nes_CC38
+1.000 NES block CC38 nes_CC3E
+1.000 NES block CC50 nes_CC3E
+1.000 NES block CC50 nes_CC56
+1.000 NES block CC56 nes_D7E1
+1.000 NES block CCC0 nes_CC50
+1.000 NES block CD45 nes_CC50
+1.000 NES block D131 nes_D478
+1.000 NES block D178 nes_D181
+1.000 NES block D181 nes_D2AB
+1.000 NES block D233 nes_D239
+1.000 NES block D2AB nes_D2B3
+1.000 NES block D2B3 nes_D2D6
+1.000 NES block D2D9 nes_D2DE
+1.000 NES block D36E nes_D374
+1.000 NES block D38B nes_D395
+1.000 NES block D395 nes_D399
+1.000 NES block D399 nes_D3EC
+1.000 NES block D419 nes_D3B2
+1.000 NES block D419 nes_D3D3
+1.000 NES block D474 nes_D477
+1.000 NES block D477 nes_91C5
+1.000 NES block D47A nes_D484
+1.000 NES block D495 nes_D4B7
+1.000 NES block D4A8 nes_D4B4
+1.000 NES block D4B4 nes_D495
+1.000 NES block D4B7 nes_D673
+1.000 NES block D58D nes_D597
+1.000 NES block D5A7 nes_D597
+1.000 NES block D5A7 nes_D5AA
+1.000 NES block D5AA nes_C045
+1.000 NES block D7BA nes_D7D9
+1.000 NES block D7D6 nes_D7D9
+1.000 NES block D7EF nes_D801
+1.000 NES block D7F9 nes_D801
+1.000 NES block D7FF nes_D801
+1.000 NES block D801 nes_D804
+1.000 NES block D804 nes_D809
+1.000 NES block D819 nes_CC59
+1.000 NES block D896 nes_D89B
+1.000 NES block D89B nes_D8A9
+1.000 NES block D8A9 nes_D8B0
+1.000 NES block D8B0 nes_D8B6
+1.000 NES block DB8C nes_DB92
+1.000 NES mapper2 b05 block 915E nes_m2_b05_9165
+1.000 NES mapper2 b05 block 9187 nes_CD72
+1.000 NES mapper2 b05 block 918A nes_m2_b05_94A8
+1.000 NES mapper2 b05 block 919A nes_m2_b05_91A7
+1.000 NES mapper2 b05 block 91A7 nes_m2_b05_A35C
+1.000 NES mapper2 b05 block 91AA nes_DB8C
+1.000 NES mapper2 b05 block 91B3 nes_m2_b05_A18B
+1.000 NES mapper2 b05 block 91B6 nes_m2_b05_A261
+1.000 NES mapper2 b05 block 91B9 nes_m2_b05_98EA
+1.000 NES mapper2 b05 block 91BC nes_D896
+1.000 NES mapper2 b05 block 91BF nes_D131
+1.000 NES mapper2 b05 block 91C2 nes_D46A
+1.000 NES mapper2 b05 block 988F nes_m2_b05_989E
+1.000 NES mapper2 b05 block 989E nes_m2_b05_98A7
+1.000 NES mapper2 b05 block 98D8 nes_BE76
+1.000 NES mapper2 b05 block 98FE nes_m2_b05_9905
+1.000 NES mapper2 b05 block 9905 nes_m2_b05_AA29
+1.000 NES mapper2 b05 block 998A nes_m2_b05_9995
+1.000 NES mapper2 b05 block 9995 nes_91BC
+1.000 NES mapper2 b05 block 9BC9 nes_m2_b05_9BDD
+1.000 NES mapper2 b05 block 9C8E nes_CC2D
+1.000 NES mapper2 b05 block 9D08 nes_m2_b05_9D0C
+1.000 NES mapper2 b05 block 9D0C nes_m2_b05_9D72
+1.000 NES mapper2 b05 block A29C nes_m2_b05_A29E
+1.000 NES mapper2 b05 block A2A3 nes_m2_b05_A29E
+1.000 NES mapper2 b05 block A2A3 nes_m2_b05_A2AA
+1.000 NES mapper2 b05 block AB5F nes_m2_b05_BE49
+1.000 NES mapper2 b05 block BE49 nes_m2_b05_BE5B
+1.000 NES mapper2 b05 block BE5B nes_m2_b05_BE63
+1.000 NES mapper2 b05 block BE73 nes_m2_b05_98D8
+1.000 NES mapper2 b05 block BE76 nes_m2_b05_BE86
+1.000 NES mapper2 b05 block BE86 nes_m2_b05_BE8B
+1.000 NES mapper2 b05 block BE8B nes_m2_b05_BE92
+1.000 NES mapper2 b05 block BE92 nes_m2_b05_9CA1
+1.000 NES mapper2 b05 block BE95 nes_m2_b05_BE97
+1.000 NES mapper2 dispatch stub 918A nes_m2_b05_918A
+1.000 NES mapper2 dispatch stub 918D nes_m2_b05_918D
+1.000 NES mapper2 dispatch stub 91AA nes_m2_b05_91AA
+1.000 NES mapper2 dispatch stub 91AD nes_m2_b05_91AD
+1.000 NES mapper2 dispatch stub 91B6 nes_m2_b05_91B6
+1.000 NES mapper2 dispatch stub 91B9 nes_m2_b05_91B9
+1.000 NES mapper2 dispatch stub 91BC nes_m2_b05_91BC
+1.000 NES mapper2 dispatch stub 91BF nes_m2_b05_91BF
+1.000 NES mapper2 dispatch stub 91C2 nes_m2_b05_91C2
+1.000 NES mapper2 dispatch stub 91C5 nes_m2_b05_91C5
+1.000 NES mapper2 dispatch stub 91CC nes_m2_b05_91CC
+1.000 NES mapper2 dispatch stub 9908 nes_m2_b05_9908
+1.000 NES mapper2 dispatch stub 9BC9 nes_m2_b05_9BC9
+1.000 NES mapper2 dispatch stub 9CA0 nes_m2_b05_9CA0
+1.000 NES mapper2 dispatch stub 9D08 nes_m2_b05_9D08
+1.000 NES mapper2 dispatch stub A298 nes_m2_b05_A298
+1.000 NES mapper2 dispatch stub AB62 nes_m2_b05_AB62
+1.000 NES mapper2 dispatch stub BE76 nes_m2_b05_BE76
+1.000 NES mapper2 dispatch stub BE95 nes_m2_b05_BE95
+0.992 NES block D673 nes_D677
+0.992 NES mapper2 b05 block A1CF nes_m2_b05_A1D5
+0.976 NES mapper2 b05 block 98B3 nes_m2_b05_98D1
+0.943 NES mapper2 b05 block A35C nes_m2_b05_A360
+0.943 NES mapper2 b05 block A360 nes_m2_b05_A369
+0.943 NES mapper2 b05 block A369 nes_91AA
+0.942 NES mapper2 b05 block 9DF1 nes_m2_b05_9E16
+0.942 NES mapper2 b05 block 9E16 nes_m2_b05_9E1A
+0.942 NES mapper2 b05 block 9E1A nes_m2_b05_9E1C
+0.942 NES mapper2 dispatch stub 9E59 nes_m2_b05_9E59
+0.940 NES block CBF4 nes_CC0C
+0.940 NES mapper2 b05 block 9CA0 nes_9C36
+0.940 NES mapper2 dispatch stub 9C36 nes_m2_b05_9C36
+0.939 NES block D8D3 nes_D8D9
+0.939 NES block D8D9 nes_D8DB
+0.937 NES block D8B6 nes_D8BF
+0.937 NES block D8BF nes_D989
+0.937 NES block D8DB nes_D8E3
+0.937 NES block D8FC nes_D989
+0.937 NES block D904 nes_D90A
+0.937 NES block D989 nes_D8D1
+0.919 NES block CD8A nes_CDE5
+0.919 NES block CD9F nes_CDE5
+0.919 NES block CDD4 nes_CDE5
+0.919 NES block CDDE nes_CDE5
+0.904 NES block D79C nes_D7A0
+0.904 NES block D7AC nes_D7B0
+0.904 NES mapper2 b05 block 9E59 nes_m2_b05_9E5B
+0.886 NES mapper2 b05 block 9C36 nes_m2_b05_9C38
+0.886 NES mapper2 b05 block 9C38 nes_m2_b05_9C3E
+0.859 NES mapper2 b04 block 9763 nes_m2_b04_9789
+0.859 NES mapper2 b04 block 976D nes_m2_b04_9789
+0.859 NES mapper2 b04 block 9772 nes_m2_b04_9789
+0.859 NES mapper2 b04 block 9789 nes_979E
+0.859 NES mapper2 b04 block 98C4 nes_979E
+0.859 NES mapper2 b04 block 98C6 nes_979E
+0.822 NES block D7AC nes_D7D6
+0.822 NES block D7C6 nes_D7D6
+0.822 NES block D7D0 nes_D7D6
+0.822 NES block D7D4 nes_D7D6
+0.809 NES mapper2 b05 block 91AD nes_m2_b05_91B1
+0.781 NES mapper2 b04 block 9508 nes_m2_b04_950E
+0.768 NES mapper2 b05 block 94F9 nes_m2_b05_9505
+0.768 NES mapper2 b05 block 9518 nes_m2_b05_987B
+0.768 NES mapper2 b05 block 9520 nes_m2_b05_9CE7
+0.768 NES mapper2 b05 block 9523 nes_m2_b05_9529
+0.768 NES mapper2 b05 block 9529 nes_m2_b05_9DEF
+0.768 NES mapper2 b05 block 952C nes_m2_b05_9532
+0.768 NES mapper2 b05 block 9532 nes_m2_b05_988F
+0.768 NES mapper2 b05 block 9535 nes_CBDE
+0.768 NES mapper2 b05 block 987B nes_951B
+0.768 NES mapper2 b05 block 98D8 nes_9535
+0.768 NES mapper2 dispatch stub 951B nes_m2_b05_951B
+0.768 NES mapper2 dispatch stub 9523 nes_m2_b05_9523
+0.768 NES mapper2 dispatch stub 952C nes_m2_b05_952C
+0.768 NES mapper2 dispatch stub 9535 nes_m2_b05_9535
+0.768 NES mapper2 dispatch stub 9538 nes_m2_b05_9538
+0.760 NES mapper2 b05 block 94A8 nes_m2_b05_94BB
+0.760 NES mapper2 b05 block 94BB nes_m2_b05_94C4
+0.760 NES mapper2 b05 block 94C4 nes_m2_b05_94CB
+0.757 NES mapper2 b05 block 9E6D nes_m2_b05_9E6F
+0.756 NES mapper2 b05 block 9543 nes_m2_b05_9571
+0.756 NES mapper2 b05 block 9571 nes_m2_b05_9634
+0.756 NES mapper2 dispatch stub 9574 nes_m2_b05_9574
+0.756 NES mapper2 dispatch stub 9578 nes_m2_b05_9578
+0.754 NES block D1EC nes_D208
+0.754 NES block D2DE nes_D208
+0.754 NES block D2EB nes_D208
+0.734 NES mapper2 b05 block 9578 nes_m2_b05_9585
+0.732 NES mapper2 b05 block 958D nes_m2_b05_959B
+0.732 NES mapper2 b05 block 95B8 nes_m2_b05_95C3
+0.730 NES mapper2 b05 block 9601 nes_m2_b05_9608
+0.728 NES mapper2 b04 block 9767 nes_m2_b04_976D
+0.699 NES mapper2 b05 block 9E6F nes_m2_b05_9E88
+0.699 NES mapper2 b05 block 9E88 nes_m2_b05_9E93
+0.635 NES mapper2 b05 block 98EA nes_m2_b05_98FE
+0.635 NES mapper2 b05 block 98F2 nes_m2_b05_98FE
+0.630 NES block D1D1 nes_D1EC
+0.630 NES block D327 nes_D1EC
+0.630 NES mapper2 b05 block 996D nes_m2_b05_9CA1
+0.630 NES mapper2 b05 block 9BC4 nes_m2_b05_9CA1
+0.625 NES block CB93 nes_C3B3
+0.625 NES block CBCF nes_C3B3
+0.625 NES block CBD7 nes_C3B3
+0.625 NES block CC2A nes_C3B3
+0.625 NES block CC59 nes_C3B3
+0.625 NES block CCA9 nes_C3B3
+0.625 NES block CCB0 nes_C3B3
+0.625 NES block CD85 nes_C3B3
+0.614 NES block D7E7 nes_D7F1
+0.614 NES block D7EF nes_D7F1
+0.592 NES block D7EB nes_D7FF
+0.592 NES block D7F5 nes_D7FF
+0.592 NES block D7FD nes_D7FF
+0.589 NES mapper2 b04 block 9493 nes_949F
+0.589 NES mapper2 dispatch stub 949F nes_m2_b04_949F
+0.564 NES mapper2 b05 block 9DF1 nes_m2_b05_9E0A
+0.564 NES mapper2 b05 block 9E0A nes_m2_b05_9E15
+0.528 NES block C9C4 nes_C9CB
+0.528 NES block C9CB nes_C9D2
+0.528 NES block C9D2 nes_C9D9
+0.528 NES block C9EE nes_C9FA
+0.512 NES mapper2 b05 block 9541 nes_m2_b05_9543
+0.509 NES mapper2 b05 block BE63 nes_m2_b05_BE6A
+0.509 NES mapper2 b05 block BE6A nes_m2_b05_9DEF
+0.509 NES mapper2 b05 block BE6D nes_m2_b05_BE73
+0.509 NES mapper2 dispatch stub BE6D nes_m2_b05_BE6D
+0.508 NES mapper2 b04 block 926D nes_m2_b04_9579
+0.508 NES mapper2 dispatch stub 926D nes_m2_b04_926D
+0.500 NES block C01B nes_C027
+0.500 NES block C01F nes_C027
+0.500 NES block C033 nes_C04B
+0.500 NES block C03A nes_C059
+0.500 NES block C045 nes_C04B
+0.500 NES block C04B nes_C059
+0.500 NES block CC06 nes_CC0F
+0.500 NES block CC0C nes_CC0F
+0.500 NES block CC17 nes_CC2A
+0.500 NES block CC28 nes_CC2A
+0.500 NES block CCC0 nes_CC17
+0.500 NES block CD45 nes_CC17
+0.500 NES block CD75 nes_CD77
+0.500 NES block CD77 nes_CD85
+0.500 NES block CD7E nes_CD77
+0.500 NES block CD7E nes_CD85
+0.500 NES block D141 nes_D147
+0.500 NES block D141 nes_D15C
+0.500 NES block D147 nes_D36E
+0.500 NES block D151 nes_D159
+0.500 NES block D164 nes_D168
+0.500 NES block D168 nes_D36E
+0.500 NES block D2D3 nes_D2D9
+0.500 NES block D327 nes_D2D9
+0.500 NES block D3B2 nes_D3C2
+0.500 NES block D3BE nes_D3C2
+0.500 NES block D3BE nes_D3C4
+0.500 NES block D3C2 nes_D3C4
+0.500 NES block D3C4 nes_D3EC
+0.500 NES block D3D3 nes_D3E9
+0.500 NES block D3D7 nes_D3EC
+0.500 NES block D3E9 nes_D14A
+0.500 NES block D3E9 nes_D16B
+0.500 NES block D419 nes_D3E9
+0.500 NES block D4C7 nes_D4CE
+0.500 NES block D4D5 nes_D4E7
+0.500 NES block D4DF nes_D4E7
+0.500 NES block D646 nes_D4CE
+0.500 NES block D91E nes_C3B3
+0.500 NES block D986 nes_C3B3
+0.500 NES block DB92 nes_91AD
+0.500 NES block DBAE nes_91AD
+0.500 NES mapper2 b05 block 9155 nes_m2_b05_915E
+0.500 NES mapper2 b05 block 9165 nes_m2_b05_9187
+0.500 NES mapper2 b05 block 9180 nes_m2_b05_9187
+0.500 NES mapper2 b05 block 918D nes_m2_b05_919A
+0.500 NES mapper2 b05 block 9191 nes_m2_b05_919A
+0.500 NES mapper2 b05 block 91AD nes_m2_b05_91B3
+0.500 NES mapper2 b05 block 91B1 nes_m2_b05_91B3
+0.500 NES mapper2 b05 block 91C5 nes_m2_b05_91C9
+0.500 NES mapper2 b05 block 91CC nes_m2_b05_915E
+0.500 NES mapper2 b05 block 9254 nes_m2_b05_91C9
+0.500 NES mapper2 b05 block 98A7 nes_m2_b05_98B3
+0.500 NES mapper2 b05 block 98AD nes_m2_b05_98B3
+0.500 NES mapper2 b05 block 9BE8 nes_m2_b05_9BF7
+0.500 NES mapper2 b05 block 9BEF nes_m2_b05_9BF7
+0.500 NES mapper2 b05 block 9C01 nes_m2_b05_9C8E
+0.500 NES mapper2 b05 block 9C31 nes_m2_b05_9C8E
+0.500 NES mapper2 b05 block 9CE3 nes_9BC9
+0.500 NES mapper2 b05 block 9CE3 nes_BE95
+0.500 NES mapper2 b05 block 9CE5 nes_9BC9
+0.500 NES mapper2 b05 block 9CE5 nes_BE95
+0.500 NES mapper2 b05 block 9D00 nes_C55D
+0.500 NES mapper2 b05 block 9D03 nes_C55D
+0.500 NES mapper2 b05 block 9D72 nes_m2_b05_9DD4
+0.500 NES mapper2 b05 block 9D79 nes_m2_b05_9DD4
+0.500 NES mapper2 b05 block A1D5 nes_91B6
+0.500 NES mapper2 b05 block A251 nes_91B6
+0.500 NES mapper2 b05 block A261 nes_m2_b05_A277
+0.500 NES mapper2 b05 block A269 nes_m2_b05_A277
+0.500 NES mapper2 b05 block A298 nes_C8B2
+0.500 NES mapper2 b05 block A29E nes_C8B2
+0.500 NES mapper2 b05 block A2B1 nes_C8B2
+0.500 NES mapper2 b05 block A2E2 nes_C8B2
+0.500 NES mapper2 b05 block A318 nes_C8B2
+0.500 NES mapper2 b05 block A31A nes_C8B2
+0.500 NES mapper2 b05 block BEAF nes_AB62
+0.500 NES mapper2 b05 block BEC0 nes_AB62
+0.494 NES mapper2 b05 block 9634 nes_m2_b05_9664
+0.494 NES mapper2 b05 block 965F nes_m2_b05_9664
+0.494 NES mapper2 b05 block 9664 nes_m2_b05_9684
+0.494 NES mapper2 b05 block 9681 nes_m2_b05_9684
+0.491 NES mapper2 b05 block BE63 nes_m2_b05_BE70
+0.491 NES mapper2 b05 block BE70 nes_m2_b05_9E6D
+0.491 NES mapper2 dispatch stub BE73 nes_m2_b05_BE73
+0.480 NES mapper2 b04 block 929E nes_m2_b04_92A2
+0.480 NES mapper2 b04 block 92A2 nes_m2_b04_92A8
+0.471 NES mapper2 b05 block 9E0A nes_m2_b05_9E30
+0.471 NES mapper2 b05 block 9E2C nes_m2_b05_9E30
+0.471 NES mapper2 b05 block 9E30 nes_m2_b05_9E3F
+0.471 NES mapper2 b05 block 9E37 nes_m2_b05_9E3F
+0.471 NES mapper2 b05 block 9E59 nes_m2_b05_9E6C
+0.471 NES mapper2 b05 block 9E5B nes_m2_b05_9E6C
+0.469 NES block D8D1 nes_D8D3
+0.469 NES block D8F8 nes_D8D3
+0.469 NES block D90A nes_D91E
+0.469 NES block D913 nes_D91E
+0.469 NES block D916 nes_D904
+0.469 NES block D989 nes_D904
+0.452 NES block D7A0 nes_D7AC
+0.452 NES block D7A6 nes_D7AC
+0.440 NES block C975 nes_C97C
+0.426 NES mapper2 b04 block 93F2 nes_m2_b04_93FD
+0.426 NES mapper2 b04 block 9416 nes_9422
+0.426 NES mapper2 b04 block 9579 nes_m2_b04_9580
+0.426 NES mapper2 b04 block 9580 nes_m2_b04_958A
+0.426 NES mapper2 b04 block 9595 nes_m2_b04_9399
+0.426 NES mapper2 dispatch stub 9422 nes_m2_b04_9422
+0.420 NES block D1C1 nes_D1CB
+0.420 NES block D1C5 nes_D1CB
+0.420 NES block D1C9 nes_D1CB
+0.420 NES block D1D4 nes_D1E9
+0.420 NES block D1DF nes_D1E9
+0.420 NES block D1E4 nes_D1E9
+0.416 NES mapper2 b05 block AB15 nes_m2_b05_AB30
+0.409 NES block D239 nes_D23F
+0.405 NES mapper2 b05 block AAD1 nes_m2_b05_AB15
+0.405 NES mapper2 b05 block AB08 nes_m2_b05_AB15
+0.405 NES mapper2 b05 block AB1C nes_m2_b05_AB48
+0.405 NES mapper2 b05 block AB37 nes_m2_b05_AB48
+0.402 NES mapper2 b04 block 9392 nes_m2_b04_9408
+0.402 NES mapper2 b04 block 93FD nes_m2_b04_9408
+0.400 NES mapper2 b05 block AB30 nes_m2_b05_AB37
+0.394 NES mapper2 b05 block AB15 nes_m2_b05_AB1C
+0.384 NES mapper2 b05 block 94E7 nes_m2_b05_94F9
+0.384 NES mapper2 b05 block 94EB nes_m2_b05_94F9
+0.384 NES mapper2 b05 block 94F9 nes_m2_b05_9520
+0.384 NES mapper2 b05 block 9505 nes_m2_b05_9518
+0.384 NES mapper2 b05 block 950B nes_m2_b05_9518
+0.384 NES mapper2 b05 block 951B nes_m2_b05_9520
+0.384 NES mapper2 b05 block 9548 nes_m2_b05_9BC4
+0.384 NES mapper2 b05 block 9574 nes_m2_b05_9BC4
+0.384 NES mapper2 b05 block 9E15 nes_952C
+0.384 NES mapper2 b05 block 9E6C nes_952C
+0.378 NES mapper2 b05 block 9684 nes_9574
+0.378 NES mapper2 b05 block 9690 nes_9574
+0.377 NES mapper2 b04 block 9386 nes_m2_b04_9392
+0.377 NES mapper2 b04 block 9426 nes_m2_b04_942B
+0.367 NES mapper2 b05 block 959B nes_m2_b05_95B8
+0.367 NES mapper2 b05 block 95A2 nes_m2_b05_95B8
+0.366 NES mapper2 b05 block 9585 nes_m2_b05_958D
+0.366 NES mapper2 b05 block 9586 nes_m2_b05_958D
+0.366 NES mapper2 b05 block 95C3 nes_m2_b05_9601
+0.366 NES mapper2 b05 block 95F7 nes_m2_b05_9601
+0.340 NES block D314 nes_D31D
+0.338 NES mapper2 b04 block 975E nes_m2_b04_9763
+0.336 NES block C551 nes_C564
+0.336 NES block C556 nes_C564
+0.336 NES block C55D nes_C564
+0.333 NES block D159 nes_C3B3
+0.333 NES block D16B nes_C3B3
+0.333 NES block D2A6 nes_C3B3
+0.333 NES block D4CE nes_D4D5
+0.333 NES block D5C8 nes_D4D5
+0.333 NES block D605 nes_D4D5
+0.333 NES block D677 nes_D6FD
+0.333 NES block D6D9 nes_D6FD
+0.333 NES block D6EF nes_D6FD
+0.333 NES block D6FD nes_D4C7
+0.333 NES block D74B nes_D4C7
+0.333 NES block D761 nes_D4C7
+0.333 NES mapper2 b05 block 9BCF nes_m2_b05_9BE8
+0.333 NES mapper2 b05 block 9BDD nes_m2_b05_9BE8
+0.333 NES mapper2 b05 block 9BE1 nes_m2_b05_9BE8
+0.333 NES mapper2 b05 block AADD nes_m2_b05_AB5F
+0.333 NES mapper2 b05 block AB48 nes_m2_b05_AB5F
+0.333 NES mapper2 b05 block AB4D nes_m2_b05_AB5F
+0.333 NES mapper2 b05 block BE86 nes_m2_b05_BEAF
+0.333 NES mapper2 b05 block BE97 nes_m2_b05_BEAF
+0.333 NES mapper2 b05 block BEA6 nes_m2_b05_BEAF
+0.330 NES mapper2 b04 block 9413 nes_m2_b04_9415
+0.323 NES block D32E nes_D332
+0.323 NES block D337 nes_D332
+0.323 NES block D33E nes_D332
+0.323 NES block D342 nes_D332
+0.323 NES block D349 nes_D332
+0.323 NES block D35E nes_D332
+0.323 NES block D362 nes_D332
+0.322 NES mapper2 b05 block 9CE7 nes_m2_b05_9D00
+0.322 NES mapper2 b05 block 9CEE nes_m2_b05_9D00
+0.322 NES mapper2 b05 block 9CFC nes_m2_b05_9D00
+0.315 NES block D184 nes_D1C9
+0.315 NES block D1B1 nes_D1C9
+0.315 NES block D1B5 nes_D1C9
+0.315 NES block D1C5 nes_D1C9
+0.314 NES block D2F8 nes_D314
+0.314 NES block D30F nes_D314
+0.314 NES block D31D nes_D324
+0.314 NES block D322 nes_D324
+0.314 NES mapper2 b05 block 9E1C nes_m2_b05_9E2C
+0.314 NES mapper2 b05 block 9E1E nes_m2_b05_9E2C
+0.314 NES mapper2 b05 block 9E22 nes_m2_b05_9E2C
+0.313 NES mapper2 b05 block 9BF7 nes_m2_b05_9C31
+0.313 NES mapper2 b05 block 9BFA nes_m2_b05_9C31
+0.313 NES mapper2 b05 block 9C13 nes_m2_b05_9C31
+0.312 NES block D8D9 nes_D8FC
+0.312 NES block D8E3 nes_D8FC
+0.312 NES block D8F8 nes_D8FC
+0.298 NES mapper2 b04 block 958A nes_m2_b04_9593
+0.281 NES mapper2 b04 block 9715 nes_m2_b04_9719
+0.281 NES mapper2 b04 block 9719 nes_m2_b04_97CC
+0.281 NES mapper2 b04 block 97CC nes_m2_b04_9562
+0.276 NES mapper2 b04 block 96AC nes_95A1
+0.276 NES mapper2 dispatch stub 95A1 nes_m2_b04_95A1
+0.271 NES mapper2 b05 block 98FE nes_m2_b05_990B
+0.271 NES mapper2 b05 block 990B nes_m2_b05_9910
+0.264 NES block C9D9 nes_C9EE
+0.264 NES block C9E6 nes_C9EE
+0.263 NES mapper2 b05 block 98D8 nes_9946
+0.263 NES mapper2 dispatch stub 9946 nes_m2_b05_9946
+0.263 NES mapper2 dispatch stub 998A nes_m2_b05_998A
+0.261 NES mapper2 b05 block 9946 nes_m2_b05_9958
+0.261 NES mapper2 b05 block 9958 nes_m2_b05_995D
+0.261 NES mapper2 b05 block 995D nes_m2_b05_9966
+0.261 NES mapper2 b05 block 9966 nes_m2_b05_996D
+0.261 NES mapper2 b05 block 9970 nes_m2_b05_9972
+0.261 NES mapper2 dispatch stub 9970 nes_m2_b05_9970
+0.256 NES mapper2 b05 block 9538 nes_m2_b05_9543
+0.256 NES mapper2 b05 block 9DBE nes_9523
+0.256 NES mapper2 b05 block 9DCF nes_9523
+0.256 NES mapper2 b05 block 9DD4 nes_9523
+0.255 NES mapper2 b05 block 9E15 nes_BE6D
+0.255 NES mapper2 b05 block 9E6C nes_BE6D
+0.254 NES mapper2 b04 block 9246 nes_926D
+0.254 NES mapper2 b04 block 9256 nes_926D
+0.250 NES block D4E7 nes_D51D
+0.250 NES block D508 nes_D51D
+0.250 NES block D50F nes_D51D
+0.250 NES block D513 nes_D51D
+0.250 NES mapper2 b05 block 913B nes_C01B
+0.250 NES mapper2 b05 block 913F nes_C01B
+0.250 NES mapper2 b05 block 91C9 nes_C01B
+0.250 NES mapper2 b05 block 9290 nes_C01B
+0.250 NES mapper2 b05 block 9E3F nes_CB6F
+0.250 NES mapper2 b05 block 9E42 nes_CB6F
+0.250 NES mapper2 b05 block 9EBF nes_CB6F
+0.250 NES mapper2 b05 block 9EC2 nes_CB6F
+0.250 NES mapper2 b05 block A18B nes_m2_b05_A1C2
+0.250 NES mapper2 b05 block A1AC nes_m2_b05_A1C2
+0.250 NES mapper2 b05 block A1AD nes_m2_b05_A1C2
+0.250 NES mapper2 b05 block A1B7 nes_m2_b05_A1C2
+0.246 NES mapper2 b05 block 98AD nes_m2_b05_98D8
+0.246 NES mapper2 b05 block 98C2 nes_m2_b05_98D8
+0.246 NES mapper2 b05 block 98CE nes_m2_b05_98D8
+0.246 NES mapper2 b05 block 98D1 nes_m2_b05_98D8
+0.246 NES mapper2 b05 block 9943 nes_m2_b05_98D8
+0.245 NES mapper2 b05 block 9E93 nes_BE73
+0.245 NES mapper2 b05 block 9EF6 nes_BE73
+0.240 NES mapper2 b05 block 94A8 nes_m2_b05_94B8
+0.240 NES mapper2 b05 block 94B8 nes_m2_b05_96DB
+0.240 NES mapper2 b05 block 96DB nes_m2_b05_974A
+0.240 NES mapper2 b05 block 97B5 nes_m2_b05_97BC
+0.240 NES mapper2 b05 block 97BC nes_96F0
+0.240 NES mapper2 dispatch stub 96F0 nes_m2_b05_96F0
+0.232 NES mapper2 b05 block 96F0 nes_m2_b05_96F5
+0.232 NES mapper2 b05 block 96F5 nes_m2_b05_9CE7
+0.232 NES mapper2 b05 block 96F8 nes_m2_b05_9701
+0.232 NES mapper2 b05 block 9701 nes_m2_b05_970F
+0.232 NES mapper2 b05 block 9722 nes_m2_b05_9634
+0.232 NES mapper2 b05 block 98D8 nes_971F
+0.232 NES mapper2 dispatch stub 96F8 nes_m2_b05_96F8
+0.232 NES mapper2 dispatch stub 971F nes_m2_b05_971F
+0.232 NES mapper2 dispatch stub 9722 nes_m2_b05_9722
+0.232 NES mapper2 dispatch stub 9725 nes_m2_b05_9725
+0.232 NES mapper2 dispatch stub 9729 nes_m2_b05_9729
+0.226 NES block D7A6 nes_D7BA
+0.226 NES block D7B0 nes_D7BA
+0.226 NES block D7B2 nes_D7BA
+0.226 NES block D7B6 nes_D7BA
+0.222 NES mapper2 b04 block 95A1 nes_m2_b04_95A4
+0.222 NES mapper2 b04 block 95A4 nes_m2_b04_95CE
+0.222 NES mapper2 b04 block 95CE nes_m2_b04_9562
+0.222 NES mapper2 b05 block 9C0D nes_m2_b05_9C4D
+0.222 NES mapper2 b05 block 9C13 nes_m2_b05_9C4D
+0.222 NES mapper2 b05 block 9C38 nes_m2_b05_9C4D
+0.222 NES mapper2 b05 block 9C3E nes_m2_b05_9C4D
+0.220 NES block C96D nes_C975
+0.220 NES block C975 nes_C981
+0.220 NES block C97F nes_C981
+0.220 NES block C981 nes_C975
+0.216 NES mapper2 b05 block 991C nes_m2_b05_9923
+0.213 NES mapper2 b04 block 9404 nes_m2_b04_9413
+0.213 NES mapper2 b04 block 9408 nes_m2_b04_9413
+0.213 NES mapper2 b04 block 9413 nes_m2_b04_9416
+0.213 NES mapper2 b04 block 9415 nes_m2_b04_9416
+0.213 NES mapper2 b04 block 958A nes_m2_b04_9595
+0.213 NES mapper2 b04 block 9593 nes_m2_b04_9595
+0.208 NES mapper2 b05 block 992D nes_m2_b05_9940
+0.208 NES mapper2 b05 block 9940 nes_m2_b05_9E6D
+0.208 NES mapper2 dispatch stub 9943 nes_m2_b05_9943
+0.205 NES mapper2 b05 block AAD1 nes_m2_b05_AAD6
+0.205 NES mapper2 dispatch stub AAD9 nes_m2_b05_AAD9
+0.202 NES block C3FD nes_C3B3
+0.202 NES block C439 nes_C3B3
+0.202 NES block C4DD nes_C3B3
+0.202 NES block C512 nes_C3B3
+0.202 NES block C564 nes_C3B3
+0.200 NES block D804 nes_D819
+0.200 NES block D809 nes_D819
+0.200 NES block D80C nes_D819
+0.200 NES block D811 nes_D819
+0.200 NES block D817 nes_D819
+0.198 NES mapper2 b05 block A18B nes_m2_b05_A1AC
+0.196 NES mapper2 b04 block 91BA nes_m2_b04_91C4
+0.196 NES mapper2 b04 block 91C4 nes_m2_b04_91C4
+0.192 NES mapper2 b04 block 92E7 nes_m2_b04_92EB
+0.190 NES mapper2 b05 block AAD9 nes_m2_b05_AADD
+0.190 NES mapper2 dispatch stub 98F2 nes_m2_b05_98F2
+0.189 NES mapper2 b05 block 9BD6 nes_9578
+0.189 NES mapper2 b05 block 9BD8 nes_9578
+0.189 NES mapper2 b05 block 9C4D nes_9578
+0.189 NES mapper2 b05 block 9C82 nes_9578
+0.181 NES mapper2 b04 block 9368 nes_m2_b04_9371
+0.174 NES mapper2 b05 block 9713 nes_m2_b05_9DEF
+0.174 NES mapper2 b05 block 9716 nes_m2_b05_971C
+0.174 NES mapper2 dispatch stub 9716 nes_m2_b05_9716
+0.171 NES mapper2 b04 block 9913 nes_m2_b04_9909
+0.171 NES mapper2 dispatch stub 9913 nes_m2_b04_9913
+0.167 NES mapper2 b05 block 9613 nes_918D
+0.167 NES mapper2 b05 block 961E nes_918D
+0.167 NES mapper2 b05 block 9633 nes_918D
+0.167 NES mapper2 b05 block 972F nes_918D
+0.167 NES mapper2 b05 block 9853 nes_918D
+0.167 NES mapper2 b05 block 9865 nes_918D
+0.167 NES mapper2 b05 block 9556 nes_m2_b05_9633
+0.167 NES mapper2 b05 block 95F2 nes_m2_b05_9633
+0.167 NES mapper2 b05 block 95F7 nes_m2_b05_9633
+0.167 NES mapper2 b05 block 9608 nes_m2_b05_9633
+0.159 NES mapper2 dispatch stub A1CF nes_m2_b05_A1CF
+0.152 NES mapper2 b04 block 96AC nes_9653
+0.152 NES mapper2 b05 block 94BB nes_m2_b05_94E7
+0.152 NES mapper2 b05 block 94CB nes_m2_b05_94E7
+0.152 NES mapper2 b05 block 94D1 nes_m2_b05_94E7
+0.152 NES mapper2 b05 block 94D7 nes_m2_b05_94E7
+0.152 NES mapper2 b05 block 94DD nes_m2_b05_94E7
+0.152 NES mapper2 dispatch stub 9653 nes_m2_b04_9653
+0.150 NES mapper2 b05 block 99A4 nes_m2_b05_999F
+0.147 NES block C8F9 nes_C9C2
+0.147 NES block C97C nes_C9C2
+0.147 NES block C9BE nes_C9C2
+0.147 NES block C9C9 nes_C97F
+0.147 NES block CA29 nes_C97F
+0.147 NES block CA2B nes_C97F
+0.144 NES block D314 nes_D322
+0.144 NES block D31D nes_D322
+0.144 NES mapper2 b04 block 96CF nes_m2_b04_96D6
+0.136 NES mapper2 b05 block 9910 nes_m2_b05_991C
+0.136 NES mapper2 b05 block 99F1 nes_m2_b05_991C
+0.133 NES block C9FA nes_CA04
+0.133 NES block CA04 nes_CA13
+0.133 NES block CA13 nes_CA1A
+0.133 NES block CA1A nes_CA1E
+0.132 NES mapper2 b05 block 991C nes_m2_b05_992D
+0.132 NES mapper2 b05 block 9923 nes_m2_b05_992D
+0.131 NES mapper2 b05 block 9CE3 nes_9970
+0.131 NES mapper2 b05 block 9CE5 nes_9970
+0.130 NES mapper2 dispatch stub 959E nes_m2_b04_959E
+0.125 NES mapper2 dispatch stub 98D8 nes_m2_b05_98D8
+0.124 NES mapper2 dispatch stub 988F nes_m2_b05_988F
+0.120 NES block C5AC nes_C5B8
+0.120 NES block C5B8 nes_C5C9
+0.120 NES block C5C5 nes_C5C9
+0.120 NES block C5C9 nes_C5B8
+0.116 NES mapper2 b05 block 9684 nes_9725
+0.116 NES mapper2 b05 block 9690 nes_9725
+0.116 NES mapper2 b05 block 971C nes_m2_b05_988F
+0.116 NES mapper2 b05 block 971F nes_CBDE
+0.116 NES mapper2 b05 block 9725 nes_m2_b05_9BC4
+0.116 NES mapper2 b05 block 9729 nes_m2_b05_972F
+0.116 NES mapper2 b05 block 972C nes_m2_b05_972F
+0.116 NES mapper2 b05 block 974A nes_m2_b05_9796
+0.116 NES mapper2 b05 block 978A nes_m2_b05_9796
+0.116 NES mapper2 b05 block 97BD nes_m2_b05_988F
+0.116 NES mapper2 b05 block 9841 nes_CBDE
+0.116 NES mapper2 b05 block 984E nes_m2_b05_9BC4
+0.114 NES mapper2 b04 block 9653 nes_9650
+0.114 NES mapper2 dispatch stub 9650 nes_m2_b04_9650
+0.113 NES block CA1E nes_CA20
+0.112 NES block D809 nes_D80C
+0.111 NES mapper2 b04 block 942B nes_9270
+0.111 NES mapper2 b04 block 94FE nes_9270
+0.111 NES mapper2 b04 block 94FF nes_9270
+0.111 NES mapper2 b04 block 950E nes_9270
+0.109 NES block F63B nes_F653
+0.104 NES mapper2 b05 block 9E93 nes_9943
+0.104 NES mapper2 b05 block 9EF6 nes_9943
+0.102 NES block F653 nes_AAD9
+0.102 NES block F65D nes_AAD9
+0.102 NES mapper2 b05 block AAD6 nes_F63B
+0.102 NES mapper2 b05 block ABC8 nes_F63B
+0.096 NES block F63B nes_F65D
+0.087 NES mapper2 b05 block 970D nes_m2_b05_9713
+0.087 NES mapper2 b05 block 970F nes_m2_b05_9713
+0.087 NES mapper2 b05 block 9E15 nes_9716
+0.087 NES mapper2 b05 block 9E6C nes_9716
+0.086 NES mapper2 b04 block 98F8 nes_9913
+0.086 NES mapper2 b04 block 9909 nes_9913
+0.083 NES mapper2 b05 block A1CD nes_m2_b05_A1D6
+0.083 NES mapper2 b05 block A1D6 nes_m2_b05_A1DD
+0.083 NES mapper2 b05 block A1DD nes_m2_b05_A1E4
+0.082 NES mapper2 b04 block 9579 nes_m2_b04_957D
+0.077 NES mapper2 b05 block 9DBE nes_96F8
+0.077 NES mapper2 b05 block 9DCF nes_96F8
+0.077 NES mapper2 b05 block 9DD4 nes_96F8
+0.076 NES mapper2 b05 block 9996 nes_m2_b05_99A4
+0.076 NES mapper2 b05 block 999F nes_m2_b05_99A4
+0.072 NES mapper2 b04 block 96D6 nes_m2_b04_96DC
+0.072 NES mapper2 b04 block 972B nes_m2_b04_972F
+0.072 NES mapper2 b04 block 972F nes_m2_b04_97C1
+0.072 NES mapper2 dispatch stub 96DF nes_m2_b04_96DF
+0.070 NES mapper2 b04 block 9941 nes_9824
+0.070 NES mapper2 dispatch stub 9821 nes_m2_b04_9821
+0.070 NES mapper2 dispatch stub 9824 nes_m2_b04_9824
+0.066 NES mapper2 b05 block 9608 nes_m2_b05_960C
+0.065 NES mapper2 b04 block 95EA nes_959E
+0.065 NES mapper2 b04 block 9614 nes_959E
+0.064 NES block D6AF nes_D6BB
+0.064 NES block D6BB nes_D6BB
+0.064 NES block C9CB nes_CA2B
+0.064 NES block C9EE nes_CA2B
+0.064 NES block C9FA nes_CA2B
+0.064 NES block CA04 nes_CA2B
+0.064 NES block CA13 nes_CA2B
+0.064 NES block CA1E nes_CA2B
+0.064 NES block CA20 nes_CA2B
+0.063 NES block D8B6 nes_D8BC
+0.063 NES block D8BC nes_D921
+0.062 NES mapper2 b05 block 9C65 nes_m2_b05_9C74
+0.060 NES block CBF4 nes_CC06
+0.060 NES mapper2 b04 block 979E nes_m2_b04_97A3
+0.060 NES mapper2 b05 block 9CA0 nes_9C0B
+0.060 NES mapper2 dispatch stub 9840 nes_m2_b04_9840
+0.060 NES mapper2 dispatch stub 9844 nes_m2_b04_9844
+0.060 NES mapper2 dispatch stub 9C0B nes_m2_b05_9C0B
+0.059 NES mapper2 dispatch stub 9869 nes_m2_b04_9869
+0.059 NES mapper2 dispatch stub 986C nes_m2_b04_986C
+0.058 NES mapper2 b04 block 9941 nes_980A
+0.058 NES mapper2 b05 block 9719 nes_m2_b05_9E6D
+0.058 NES mapper2 b05 block 9BD6 nes_9729
+0.058 NES mapper2 b05 block 9BD8 nes_9729
+0.058 NES mapper2 b05 block 9C4D nes_9729
+0.058 NES mapper2 b05 block 9C82 nes_9729
+0.058 NES mapper2 b05 block 9E6F nes_m2_b05_9E94
+0.058 NES mapper2 b05 block 9E94 nes_m2_b05_9E98
+0.058 NES mapper2 dispatch stub 971C nes_m2_b05_971C
+0.058 NES mapper2 dispatch stub 9807 nes_m2_b04_9807
+0.058 NES mapper2 dispatch stub 980A nes_m2_b04_980A
+0.058 NES mapper2 dispatch stub 9ED9 nes_m2_b05_9ED9
+0.057 NES mapper2 b05 block A35C nes_m2_b05_A36A
+0.057 NES mapper2 dispatch stub 9912 nes_m2_b04_9912
+0.057 NES mapper2 dispatch stub A709 nes_m2_b05_A709
+0.056 NES mapper2 b04 block 980A nes_m2_b04_9810
+0.056 NES mapper2 b05 block 9C59 nes_m2_b05_9C65
+0.056 NES mapper2 b05 block 9C5E nes_m2_b05_9C65
+0.056 NES mapper2 b05 block 9C5E nes_m2_b05_9C82
+0.056 NES mapper2 b05 block 9C7F nes_m2_b05_9C82
+0.055 NES block C8BD nes_C8D1
+0.055 NES block C91E nes_C96D
+0.055 NES block C981 nes_C987
+0.055 NES mapper2 b05 block 992D nes_m2_b05_993A
+0.055 NES mapper2 b05 block 993A nes_m2_b05_9DEF
+0.055 NES mapper2 b05 block 993D nes_m2_b05_9943
+0.055 NES mapper2 dispatch stub 993D nes_m2_b05_993D
+0.054 NES block D80C nes_D811
+0.054 NES mapper2 b04 block 954D nes_95CB
+0.054 NES mapper2 b04 block 95A1 nes_m2_b04_95A7
+0.054 NES mapper2 b04 block 95A7 nes_m2_b04_95B4
+0.054 NES mapper2 b04 block 95BB nes_9522
+0.054 NES mapper2 b04 block 95CB nes_m2_b04_9508
+0.054 NES mapper2 b04 block 96AC nes_95BB
+0.054 NES mapper2 b04 block 96AC nes_95EA
+0.054 NES mapper2 dispatch stub 9522 nes_m2_b04_9522
+0.054 NES mapper2 dispatch stub 95BB nes_m2_b04_95BB
+0.054 NES mapper2 dispatch stub 95CB nes_m2_b04_95CB
+0.054 NES mapper2 dispatch stub 95E7 nes_m2_b04_95E7
+0.054 NES mapper2 dispatch stub 95EA nes_m2_b04_95EA
+0.053 NES mapper2 b04 block 959E nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 95AE nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 95B4 nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 95DF nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 95E7 nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 95F1 nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 9601 nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 961B nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 9627 nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 962A nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 964C nes_m2_b04_96AC
+0.053 NES mapper2 b04 block 9650 nes_m2_b04_96AC
+0.048 NES block C549 nes_C54E
+0.048 NES mapper2 b04 block 9219 nes_9112
+0.048 NES mapper2 b05 block 9796 nes_m2_b05_97B5
+0.048 NES mapper2 b05 block 979A nes_m2_b05_97B5
+0.048 NES mapper2 b05 block 97A3 nes_m2_b05_97B5
+0.048 NES mapper2 b05 block 97A7 nes_m2_b05_97B5
+0.048 NES mapper2 b05 block 97AB nes_m2_b05_97B5
+0.048 NES mapper2 dispatch stub 9112 nes_m2_b04_9112
+0.046 NES mapper2 dispatch stub 9601 nes_m2_b04_9601
+0.046 NES mapper2 dispatch stub 9604 nes_m2_b04_9604
+0.045 NES mapper2 b05 block 960C nes_m2_b05_9633
+0.045 NES mapper2 b05 block 9629 nes_m2_b05_9633
+0.045 NES mapper2 dispatch stub 9CA1 nes_m2_b05_9CA1
+0.044 NES block CD18 nes_CD39
+0.044 NES block CD39 nes_CD3D
+0.042 NES block CA1A nes_CA29
+0.042 NES block CA20 nes_CA29
+0.040 NES mapper2 b04 block 989C nes_9941
+0.040 NES mapper2 b04 block 98A4 nes_98AF
+0.040 NES mapper2 dispatch stub 9899 nes_m2_b04_9899
+0.040 NES mapper2 dispatch stub 989C nes_m2_b04_989C
+0.040 NES mapper2 dispatch stub 98A4 nes_m2_b04_98A4
+0.040 NES mapper2 dispatch stub 98AF nes_m2_b04_98AF
+0.040 NES mapper2 dispatch stub 98B2 nes_m2_b04_98B2
+0.040 NES mapper2 dispatch stub 9941 nes_m2_b04_9941
+0.038 NES mapper2 b04 block 97C1 nes_9712
+0.038 NES mapper2 b04 block 97E6 nes_9712
+0.038 NES mapper2 b04 block 97F0 nes_9712
+0.038 NES mapper2 b04 block 981A nes_9712
+0.038 NES mapper2 b04 block 9844 nes_9712
+0.038 NES mapper2 b04 block 9850 nes_9712
+0.038 NES mapper2 b04 block 986C nes_9712
+0.038 NES mapper2 b04 block 9653 nes_965F
+0.038 NES mapper2 dispatch stub 964C nes_m2_b04_964C
+0.038 NES mapper2 dispatch stub 965F nes_m2_b04_965F
+0.037 NES mapper2 b05 block 9BE1 nes_m2_b05_9C59
+0.037 NES mapper2 b05 block 9C0B nes_m2_b05_9C59
+0.037 NES mapper2 b05 block 9C36 nes_m2_b05_9C59
+0.037 NES mapper2 b05 block 9C65 nes_m2_b05_9C7F
+0.037 NES mapper2 b05 block 9C74 nes_m2_b05_9C7F
+0.037 NES mapper2 b05 block 9C78 nes_m2_b05_9C7F
+0.036 NES mapper2 b04 block 97E3 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 97ED nes_m2_b04_9941
+0.036 NES mapper2 b04 block 97F7 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 9807 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 9821 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 983D nes_m2_b04_9941
+0.036 NES mapper2 b04 block 9840 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 9869 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 9886 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 9899 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 98D3 nes_m2_b04_9941
+0.036 NES mapper2 b04 block 9112 nes_m2_b04_90FF
+0.036 NES mapper2 b04 block 9824 nes_m2_b04_983D
+0.035 NES mapper2 b04 block 98B2 nes_m2_b04_9712
+0.035 NES mapper2 b04 block 98EA nes_m2_b04_9712
+0.034 NES mapper2 b04 block 9824 nes_m2_b04_9827
+0.034 NES mapper2 b05 block 9CF3 nes_m2_b05_9CF6
+0.034 NES mapper2 b05 block 9CF6 nes_m2_b05_9CFC
+0.034 NES mapper2 dispatch stub A1CA nes_m2_b05_A1CA
+0.033 NES mapper2 b05 block 98D1 nes_m2_b05_98D5
+0.033 NES mapper2 b05 block 98D5 nes_m2_b05_9F9E
+0.032 NES block D6BB nes_D6C6
+0.032 NES mapper2 b04 block 98ED nes_m2_b04_98F0
+0.032 NES block D921 nes_D929
+0.032 NES block D955 nes_D929
+0.032 NES block D95A nes_D967
+0.032 NES block D982 nes_D967
+0.031 NES mapper2 dispatch stub 9634 nes_m2_b05_9634
+0.030 NES block C5B8 nes_C5C5
+0.030 NES block D1D4 nes_D1D9
+0.030 NES block D9C9 nes_D9CD
+0.030 NES mapper2 b04 block 9604 nes_m2_b04_960A
+0.030 NES mapper2 b05 block 9BF7 nes_m2_b05_9C01
+0.030 NES mapper2 b05 block 9BFA nes_m2_b05_9C01
+0.030 NES mapper2 dispatch stub 95F1 nes_m2_b04_95F1
+0.030 NES mapper2 dispatch stub 95F4 nes_m2_b04_95F4
+0.030 NES mapper2 dispatch stub 98EA nes_m2_b05_98EA
+0.029 NES mapper2 b04 block 957D nes_m2_b04_959E
+0.029 NES mapper2 b04 block 95E2 nes_m2_b04_959E
+0.029 NES mapper2 b04 block 962F nes_m2_b04_959E
+0.029 NES mapper2 b04 block 9638 nes_m2_b04_959E
+0.029 NES mapper2 b04 block 965F nes_m2_b04_959E
+0.029 NES mapper2 b04 block 98D6 nes_m2_b04_98D8
+0.029 NES mapper2 b04 block 98D8 nes_98E7
+0.029 NES mapper2 b04 block 98E7 nes_m2_b04_98ED
+0.029 NES mapper2 b05 block 970D nes_m2_b05_9719
+0.029 NES mapper2 b05 block 970F nes_m2_b05_9719
+0.029 NES mapper2 b05 block 9E93 nes_971C
+0.029 NES mapper2 b05 block 9E98 nes_m2_b05_9E9E
+0.029 NES mapper2 b05 block 9E9C nes_m2_b05_9E9E
+0.029 NES mapper2 b05 block 9E9C nes_m2_b05_9EAC
+0.029 NES mapper2 b05 block 9E9E nes_m2_b05_9EAC
+0.029 NES mapper2 b05 block 9EB0 nes_m2_b05_9EBF
+0.029 NES mapper2 b05 block 9EB7 nes_m2_b05_9EBF
+0.029 NES mapper2 b05 block 9ED9 nes_m2_b05_9EF6
+0.029 NES mapper2 b05 block 9EDB nes_m2_b05_9EF6
+0.029 NES mapper2 b05 block 9EF6 nes_971C
+0.029 NES mapper2 dispatch stub 98D3 nes_m2_b04_98D3
+0.029 NES mapper2 dispatch stub 98D6 nes_m2_b04_98D6
+0.029 NES mapper2 dispatch stub 98E7 nes_m2_b04_98E7
+0.029 NES mapper2 dispatch stub 98EA nes_m2_b04_98EA
+0.029 NES mapper2 b04 block 98F8 nes_9912
+0.029 NES mapper2 b04 block 9909 nes_9912
+0.028 NES block C53D nes_C549
+0.028 NES block C54E nes_C549
+0.028 NES block D1D9 nes_D1DF
+0.028 NES mapper2 b04 block 91CB nes_9107
+0.028 NES mapper2 b04 block 920F nes_m2_b04_9213
+0.028 NES mapper2 b04 block 969B nes_m2_b04_98ED
+0.028 NES mapper2 b04 block 9912 nes_96A5
+0.028 NES mapper2 dispatch stub 9107 nes_m2_b04_9107
+0.028 NES mapper2 dispatch stub 9662 nes_m2_b04_9662
+0.028 NES mapper2 dispatch stub 96A5 nes_m2_b04_96A5
+0.028 NES mapper2 b05 block A1D6 nes_m2_b05_A1EB
+0.028 NES mapper2 b05 block A1DD nes_m2_b05_A1EB
+0.028 NES mapper2 b05 block A1E4 nes_m2_b05_A1EB
+0.028 NES mapper2 b05 block 9E15 nes_993D
+0.028 NES mapper2 b05 block 9E6C nes_993D
+0.026 NES block D967 nes_D96B
+0.026 NES block D971 nes_D977
+0.026 NES block D977 nes_D979
+0.026 NES block D989 nes_D971
+0.026 NES mapper2 b05 block A712 nes_m2_b05_A70B
+0.025 NES mapper2 b04 block 95F4 nes_m2_b04_9614
+0.025 NES mapper2 b04 block 9604 nes_m2_b04_9614
+0.025 NES mapper2 b04 block 960A nes_m2_b04_9614
+0.025 NES mapper2 b05 block 9F8A nes_m2_b05_9F93
+0.025 NES mapper2 dispatch stub 9DEF nes_m2_b05_9DEF
+0.024 NES block D6CE nes_D6D3
+0.024 NES mapper2 b04 block 942B nes_96DF
+0.024 NES mapper2 b04 block 94FE nes_96DF
+0.024 NES mapper2 b04 block 94FF nes_96DF
+0.024 NES mapper2 b04 block 9827 nes_m2_b04_9833
+0.024 NES mapper2 b04 block 9833 nes_983D
+0.024 NES mapper2 b05 block 98B3 nes_m2_b05_98C2
+0.024 NES mapper2 b05 block 98C2 nes_m2_b05_98C9
+0.024 NES mapper2 b05 block 98C9 nes_m2_b05_9F6D
+0.024 NES mapper2 b05 block 9F9D nes_98CE
+0.024 NES mapper2 dispatch stub 983D nes_m2_b04_983D
+0.024 NES mapper2 dispatch stub 98CE nes_m2_b05_98CE
+0.023 NES mapper2 b04 block 9554 nes_m2_b04_9522
+0.023 NES mapper2 b04 block 96A5 nes_m2_b04_9522
+0.023 NES mapper2 b04 block 97FA nes_m2_b04_981A
+0.023 NES mapper2 b04 block 980A nes_m2_b04_981A
+0.023 NES mapper2 b04 block 9810 nes_m2_b04_981A
+0.022 NES block CD39 nes_CD43
+0.022 NES block CD3D nes_CD43
+0.022 NES mapper2 b04 block 96AC nes_95E2
+0.022 NES mapper2 b05 block 9578 nes_m2_b05_957A
+0.022 NES mapper2 dispatch stub 95DF nes_m2_b04_95DF
+0.022 NES mapper2 dispatch stub 95E2 nes_m2_b04_95E2
+0.021 NES block D929 nes_D95A
+0.021 NES block D932 nes_D95A
+0.021 NES block D93A nes_D95A
+0.021 NES mapper2 dispatch stub BE49 nes_m2_b05_BE49
+0.020 NES mapper2 b04 block 971C nes_m2_b04_9720
+0.020 NES mapper2 b04 block 9720 nes_m2_b04_9712
+0.020 NES mapper2 b04 block 9727 nes_m2_b04_97AE
+0.020 NES mapper2 dispatch stub 9727 nes_m2_b04_9727
+0.019 NES mapper2 b05 block 9E88 nes_m2_b05_9EB0
+0.019 NES mapper2 b05 block 9EA2 nes_m2_b05_9EB0
+0.019 NES mapper2 b05 block 9EAC nes_m2_b05_9EB0
+0.019 NES mapper2 b04 block 9740 nes_m2_b04_9748
+0.019 NES mapper2 b04 block 98ED nes_m2_b04_98F8
+0.019 NES mapper2 b04 block 98F0 nes_m2_b04_98F8
+0.019 NES mapper2 b04 block 98F2 nes_m2_b04_98F8
+0.019 NES mapper2 b05 block 9F88 nes_m2_b05_9F9D
+0.019 NES mapper2 b05 block 9F99 nes_m2_b05_9F9D
+0.019 NES mapper2 b05 block 9FB3 nes_m2_b05_9F9D
+0.019 NES mapper2 b05 block A709 nes_m2_b05_A71D
+0.019 NES mapper2 b05 block A70B nes_m2_b05_A71D
+0.019 NES mapper2 b05 block A717 nes_m2_b05_A71D
+0.018 NES block C8D1 nes_C91E
+0.018 NES block C8F5 nes_C91E
+0.018 NES block C8FE nes_C91E
+0.018 NES mapper2 b04 block 954D nes_955C
+0.018 NES mapper2 b04 block 9748 nes_975B
+0.018 NES mapper2 dispatch stub 955C nes_m2_b04_955C
+0.018 NES mapper2 dispatch stub 975B nes_m2_b04_975B
+0.017 NES mapper2 b05 block 9CF6 nes_m2_b05_9D03
+0.017 NES mapper2 b05 block 9CFC nes_m2_b05_9D03
+0.017 NES mapper2 dispatch stub A269 nes_m2_b05_A269
+0.017 NES mapper2 b05 block 9F6D nes_m2_b05_9F88
+0.017 NES mapper2 b05 block 9F82 nes_m2_b05_9F88
+0.017 NES mapper2 b05 block 9F93 nes_m2_b05_9F99
+0.017 NES mapper2 b05 block 9F97 nes_m2_b05_9F99
+0.017 NES mapper2 b05 block 9F9D nes_98D8
+0.017 NES mapper2 b05 block 9F9E nes_m2_b05_9FB3
+0.017 NES mapper2 b05 block 9FD4 nes_m2_b05_9FB3
+0.017 NES mapper2 b05 block 9FDA nes_98D8
+0.016 NES block CEDB nes_CEDF
+0.016 NES block CEDF nes_CEDF
+0.016 NES block CEDF nes_CEFD
+0.016 NES block D6C6 nes_D6CE
+0.016 NES block D6CC nes_D6CE
+0.016 NES block D9C6 nes_D9C9
+0.016 NES block D9CD nes_D9C9
+0.016 NES mapper2 b04 block 909B nes_m2_b04_920F
+0.016 NES mapper2 b04 block 90C7 nes_m2_b04_910F
+0.016 NES mapper2 b04 block 90FF nes_m2_b04_910F
+0.016 NES mapper2 b04 block 9107 nes_m2_b04_910F
+0.016 NES mapper2 b04 block 910F nes_m2_b04_920F
+0.016 NES mapper2 b04 block 9158 nes_m2_b04_920F
+0.016 NES mapper2 b05 block AB30 nes_m2_b05_AB34
+0.016 NES mapper2 b05 block AB48 nes_m2_b05_AB4D
+0.016 NES mapper2 b05 block AB63 nes_AB37
+0.016 NES mapper2 dispatch stub 9CEE nes_m2_b05_9CEE
+0.016 NES mapper2 dispatch stub AB37 nes_m2_b05_AB37
+0.015 NES mapper2 b05 block AB05 nes_m2_b05_AB63
+0.015 NES mapper2 b05 block AB34 nes_m2_b05_AB63
+0.015 NES block C5C9 nes_C5CC
+0.015 NES block C5CC nes_AAF6
+0.015 NES mapper2 b04 block 9889 nes_m2_b04_988F
+0.015 NES mapper2 b04 block 988F nes_m2_b04_9960
+0.015 NES mapper2 b04 block 9896 nes_m2_b04_9740
+0.015 NES mapper2 b04 block 9977 nes_9896
+0.015 NES mapper2 b05 block AAD9 nes_m2_b05_AAE0
+0.015 NES mapper2 b05 block AAEE nes_C5AC
+0.015 NES mapper2 b05 block AAF6 nes_m2_b05_AB05
+0.015 NES mapper2 b05 block AB63 nes_AB08
+0.015 NES mapper2 dispatch stub 9886 nes_m2_b04_9886
+0.015 NES mapper2 dispatch stub 9889 nes_m2_b04_9889
+0.015 NES mapper2 dispatch stub 9896 nes_m2_b04_9896
+0.015 NES mapper2 dispatch stub AAF6 nes_m2_b05_AAF6
+0.015 NES mapper2 dispatch stub AB08 nes_m2_b05_AB08
+0.015 NES mapper2 b04 block 98D8 nes_98EA
+0.015 NES mapper2 b04 block 9912 nes_98EA
+0.014 NES mapper2 b04 block 90C7 nes_m2_b04_9104
+0.014 NES mapper2 b04 block 90FF nes_m2_b04_9104
+0.014 NES mapper2 b04 block 91BA nes_m2_b04_91CB
+0.014 NES mapper2 b04 block 91C4 nes_m2_b04_91CB
+0.014 NES mapper2 b04 block 9662 nes_m2_b04_969B
+0.014 NES mapper2 b04 block 9691 nes_m2_b04_969B
+0.014 NES mapper2 b05 block A709 nes_m2_b05_A712
+0.014 NES mapper2 b05 block A70B nes_m2_b05_A712
+0.014 NES mapper2 dispatch stub 91C9 nes_m2_b05_91C9
+0.014 NES mapper2 dispatch stub 9BC4 nes_m2_b05_9BC4
+0.013 NES mapper2 b04 block 98A4 nes_98B2
+0.013 NES mapper2 b04 block 98C4 nes_98B2
+0.013 NES mapper2 b04 block 98C6 nes_98B2
+0.013 NES block D92F nes_D989
+0.013 NES block D96B nes_D989
+0.013 NES mapper2 b04 block 9514 nes_9270
+0.013 NES mapper2 b04 block 955C nes_9270
+0.013 NES mapper2 b04 block 9589 nes_9270
+0.013 NES block D967 nes_D986
+0.013 NES block D971 nes_D986
+0.013 NES block D979 nes_D986
+0.013 NES block D980 nes_D986
+0.013 NES block D982 nes_D986
+0.012 NES block C477 nes_C47D
+0.012 NES block D554 nes_D558
+0.012 NES block D558 nes_D55F
+0.012 NES block D567 nes_9003
+0.012 NES mapper2 b04 block 9003 nes_m2_b04_900A
+0.012 NES mapper2 b04 block 900A nes_m2_b04_9011
+0.012 NES mapper2 b04 block 9011 nes_m2_b04_9020
+0.012 NES mapper2 b04 block 9020 nes_m2_b04_902F
+0.012 NES mapper2 b04 block 902F nes_m2_b04_90BC
+0.012 NES mapper2 b04 block 90BC nes_m2_b04_90C7
+0.012 NES mapper2 b04 block 9112 nes_m2_b04_911D
+0.012 NES mapper2 b04 block 9193 nes_m2_b04_9219
+0.012 NES mapper2 b04 block 91A3 nes_m2_b04_9219
+0.012 NES mapper2 b04 block 920F nes_m2_b04_9219
+0.012 NES mapper2 b04 block 9213 nes_m2_b04_9219
+0.012 NES mapper2 b04 block 9221 nes_9120
+0.012 NES mapper2 b04 block 9399 nes_m2_b04_93A1
+0.012 NES mapper2 b05 block 9543 nes_m2_b05_9548
+0.012 NES mapper2 dispatch stub 9003 nes_m2_b04_9003
+0.012 NES mapper2 dispatch stub 9120 nes_m2_b04_9120
+0.012 NES mapper2 dispatch stub 954B nes_m2_b05_954B
+0.011 NES mapper2 b05 block 957A nes_m2_b05_9582
+0.011 NES mapper2 b05 block 957D nes_m2_b05_9582
+0.011 NES mapper2 b05 block 9F6D nes_m2_b05_9F8A
+0.011 NES mapper2 b05 block 9F82 nes_m2_b05_9F8A
+0.011 NES mapper2 b05 block 9F88 nes_m2_b05_9F8A
+0.011 NES block D694 nes_D6AF
+0.011 NES block D6AB nes_D6AF
+0.011 NES block D6D3 nes_D6AF
+0.011 NES mapper2 b05 block 9553 nes_m2_b05_9629
+0.011 NES mapper2 b05 block 956E nes_m2_b05_9629
+0.011 NES mapper2 b05 block 9582 nes_m2_b05_9629
+0.010 NES mapper2 b04 block 9827 nes_m2_b04_9850
+0.010 NES mapper2 b04 block 9941 nes_97FA
+0.010 NES mapper2 b05 block 954B nes_m2_b05_954D
+0.010 NES mapper2 b05 block 954D nes_m2_b05_9553
+0.010 NES mapper2 b05 block 99EB nes_m2_b05_99FC
+0.010 NES mapper2 dispatch stub 97F7 nes_m2_b04_97F7
+0.010 NES mapper2 dispatch stub 97FA nes_m2_b04_97FA
+0.010 NES mapper2 dispatch stub 99EB nes_m2_b05_99EB
+0.009 NES mapper2 b04 block 9098 nes_m2_b04_91BA
+0.009 NES mapper2 b04 block 9104 nes_m2_b04_91BA
+0.009 NES mapper2 b04 block 9152 nes_m2_b04_91BA
+0.009 NES mapper2 b04 block 95B1 nes_m2_b04_9554
+0.009 NES mapper2 b04 block 975B nes_m2_b04_9554
+0.009 NES mapper2 b05 block 9F99 nes_m2_b05_9F82
+0.009 NES mapper2 dispatch stub 9E6D nes_m2_b05_9E6D
+0.009 NES mapper2 b04 block 9960 nes_m2_b04_9972
+0.009 NES mapper2 b04 block 996D nes_m2_b04_9972
+0.008 NES block C549 nes_C556
+0.008 NES block C578 nes_C584
+0.008 NES block CDEB nes_CE9A
+0.008 NES block CE9A nes_CEA4
+0.008 NES block CEA8 nes_CDF0
+0.008 NES block CED7 nes_CEDB
+0.008 NES block CEFD nes_CEDB
+0.008 NES block CEFD nes_CF05
+0.008 NES block CF05 nes_CE89
+0.008 NES block CF06 nes_CE8C
+0.008 NES block D673 nes_D67A
+0.008 NES block D67A nes_D681
+0.008 NES block D6CE nes_D6D9
+0.008 NES block F533 nes_976B
+0.008 NES block F67B nes_F6B5
+0.008 NES block F6B8 nes_9772
+0.008 NES mapper2 b04 block 93A1 nes_m2_b04_93A7
+0.008 NES mapper2 b04 block 93A7 nes_m2_b04_93D5
+0.008 NES mapper2 b05 block 9505 nes_m2_b05_950B
+0.008 NES mapper2 b05 block 9730 nes_m2_b05_94E7
+0.008 NES mapper2 b05 block 974A nes_m2_b05_974F
+0.008 NES mapper2 b05 block 974F nes_m2_b05_975B
+0.008 NES mapper2 b05 block 975B nes_m2_b05_975F
+0.008 NES mapper2 b05 block 975F nes_C576
+0.008 NES mapper2 b05 block 9764 nes_m2_b05_9766
+0.008 NES mapper2 b05 block 9766 nes_F533
+0.008 NES mapper2 b05 block 976B nes_F67B
+0.008 NES mapper2 b05 block 9772 nes_C53D
+0.008 NES mapper2 b05 block 97A3 nes_m2_b05_97A7
+0.008 NES mapper2 b05 block 97A7 nes_m2_b05_97AB
+0.008 NES mapper2 b05 block 9923 nes_m2_b05_9928
+0.008 NES mapper2 b05 block 9F8A nes_m2_b05_9F90
+0.008 NES mapper2 b05 block A1EB nes_m2_b05_A1EF
+0.008 NES mapper2 b05 block A22D nes_m2_b05_A231
+0.008 NES mapper2 b05 block A23D nes_m2_b05_A248
+0.008 NES mapper2 b05 block A248 nes_m2_b05_A251
+0.008 NES mapper2 dispatch stub 9764 nes_m2_b05_9764
+0.008 NES mapper2 dispatch stub 976B nes_m2_b05_976B
+0.008 NES mapper2 dispatch stub 9772 nes_m2_b05_9772
+0.008 NES mapper2 dispatch stub 9785 nes_m2_b05_9785
+0.008 NES mapper2 dispatch stub 978A nes_m2_b05_978A
+0.008 NES mapper2 dispatch stub 9F93 nes_m2_b05_9F93
+0.008 NES mapper2 dispatch stub A29E nes_m2_b05_A29E
+0.007 NES mapper2 b05 block AAE0 nes_m2_b05_AAEE
+0.007 NES mapper2 b05 block AAEA nes_m2_b05_AAEE
+0.007 NES mapper2 b05 block 960C nes_m2_b05_9613
+0.007 NES mapper2 dispatch stub 991C nes_m2_b05_991C
+0.007 NES mapper2 b04 block 9514 nes_9727
+0.007 NES mapper2 b04 block 955C nes_9727
+0.007 NES mapper2 b04 block 975A nes_9727
+0.006 NES block C477 nes_C482
+0.006 NES block C47D nes_C482
+0.006 NES block D558 nes_D563
+0.006 NES block D55F nes_D563
+0.006 NES block D563 nes_D567
+0.006 NES block D565 nes_D567
+0.006 NES block D979 nes_D980
+0.006 NES mapper2 b04 block 90A7 nes_m2_b04_9221
+0.006 NES mapper2 b04 block 911D nes_m2_b04_9221
+0.006 NES mapper2 b04 block 98F0 nes_m2_b04_98F2
+0.006 NES mapper2 b04 block 98F2 nes_m2_b04_98F2
+0.005 NES mapper2 b04 block 9662 nes_m2_b04_9688
+0.005 NES mapper2 b04 block 9688 nes_m2_b04_922A
+0.005 NES mapper2 dispatch stub 9691 nes_m2_b04_9691
+0.004 NES block C576 nes_C578
+0.004 NES block C57D nes_C578
+0.004 NES block C582 nes_9764
+0.004 NES block C584 nes_9764
+0.004 NES block CDF0 nes_CD8A
+0.004 NES block CE12 nes_CE58
+0.004 NES block CE53 nes_CE58
+0.004 NES block CE70 nes_CED7
+0.004 NES block CE89 nes_CF06
+0.004 NES block CE9A nes_CEA8
+0.004 NES block CEA4 nes_CEA8
+0.004 NES block CF9C nes_CD8A
+0.004 NES block D0CA nes_CED7
+0.004 NES block D0DE nes_CF06
+0.004 NES block D681 nes_D694
+0.004 NES block D6EF nes_D694
+0.004 NES block F67B nes_F6B8
+0.004 NES block F6B5 nes_F6B8
+0.004 NES mapper2 b04 block 93A1 nes_m2_b04_93AA
+0.004 NES mapper2 b04 block 93AA nes_93B9
+0.004 NES mapper2 b04 block 93B9 nes_m2_b04_93C2
+0.004 NES mapper2 b04 block 93C2 nes_93C8
+0.004 NES mapper2 b04 block 961E nes_m2_b04_9621
+0.004 NES mapper2 b05 block 96F0 nes_m2_b05_9730
+0.004 NES mapper2 b05 block 9756 nes_C477
+0.004 NES mapper2 b05 block 9785 nes_C477
+0.004 NES mapper2 b05 block 978A nes_m2_b05_97A3
+0.004 NES mapper2 b05 block 979A nes_m2_b05_97A3
+0.004 NES mapper2 b05 block 986E nes_m2_b05_9730
+0.004 NES mapper2 b05 block 9F90 nes_CDE8
+0.004 NES mapper2 b05 block 9FCB nes_CDE8
+0.004 NES mapper2 b05 block A1EF nes_m2_b05_A22D
+0.004 NES mapper2 b05 block A226 nes_m2_b05_A22D
+0.004 NES mapper2 b05 block A226 nes_m2_b05_A238
+0.004 NES mapper2 b05 block A231 nes_m2_b05_A238
+0.004 NES mapper2 dispatch stub 93B9 nes_m2_b04_93B9
+0.004 NES mapper2 dispatch stub 93C8 nes_m2_b04_93C8
+0.004 NES mapper2 dispatch stub 93CC nes_m2_b04_93CC
+0.004 NES mapper2 dispatch stub 93D5 nes_m2_b04_93D5
+0.004 NES mapper2 dispatch stub 961B nes_m2_b04_961B
+0.004 NES mapper2 dispatch stub 961E nes_m2_b04_961E
+0.003 NES mapper2 b05 block 9996 nes_m2_b05_99AB
+0.003 NES mapper2 b05 block 999F nes_m2_b05_99AB
+0.003 NES mapper2 b05 block 99A9 nes_m2_b05_99AB
+0.003 NES mapper2 b04 block 922A nes_m2_b04_922E
+0.003 NES mapper2 b05 block 9BD6 nes_954B
+0.003 NES mapper2 b05 block 9BD8 nes_954B
+0.003 NES mapper2 b05 block 9C4D nes_954B
+0.003 NES mapper2 b05 block 9C82 nes_954B
+0.003 NES mapper2 dispatch stub 9DF1 nes_m2_b05_9DF1
+0.003 NES mapper2 dispatch stub 9FB3 nes_m2_b05_9FB3
+0.003 NES block CDCE nes_CE12
+0.003 NES block CDDB nes_CE12
+0.003 NES block CDE5 nes_CE12
+0.003 NES block CE2C nes_CE70
+0.003 NES block CE53 nes_CE70
+0.003 NES block CE58 nes_CE70
+0.003 NES block CE8C nes_C3B3
+0.003 NES block D057 nes_C3B3
+0.003 NES block D106 nes_C3B3
+0.003 NES mapper2 b05 block A1B9 nes_m2_b05_A23D
+0.003 NES mapper2 b05 block A211 nes_m2_b05_A23D
+0.003 NES mapper2 b05 block A238 nes_m2_b05_A23D
+0.003 NES mapper2 b04 block 922E nes_9691
+0.003 NES mapper2 b04 block 9239 nes_9691
+0.002 NES block D8E5 nes_D9AD
+0.002 NES block D9AD nes_D9BB
+0.002 NES block D9BB nes_D9C6
+0.002 NES mapper2 b04 block 922A nes_m2_b04_9239
+0.002 NES mapper2 b04 block 93BB nes_93CC
+0.002 NES mapper2 b04 block 93C2 nes_93D5
+0.002 NES mapper2 b04 block 93C8 nes_93CC
+0.002 NES mapper2 b04 block 93CC nes_93D5
+0.002 NES mapper2 b04 block 9621 nes_m2_b04_9625
+0.002 NES mapper2 b04 block 9621 nes_m2_b04_9638
+0.002 NES mapper2 b05 block 9538 nes_m2_b05_953E
+0.002 NES mapper2 b05 block 953E nes_m2_b05_A71E
+0.002 NES mapper2 b05 block 954B nes_m2_b05_9556
+0.002 NES mapper2 b05 block 95B8 nes_m2_b05_961E
+0.002 NES mapper2 b05 block 9601 nes_m2_b05_9613
+0.002 NES mapper2 b05 block 9917 nes_m2_b05_9996
+0.002 NES mapper2 b05 block 9928 nes_m2_b05_9996
+0.002 NES mapper2 b05 block 9946 nes_m2_b05_9953
+0.002 NES mapper2 b05 block 9953 nes_m2_b05_9996
+0.002 NES mapper2 b05 block 9961 nes_m2_b05_9996
+0.002 NES mapper2 b05 block 9985 nes_m2_b05_9996
+0.002 NES mapper2 b05 block 99A4 nes_m2_b05_99A9
+0.002 NES mapper2 b05 block 9C0B nes_m2_b05_9C0D
+0.002 NES mapper2 b05 block 9C0D nes_m2_b05_9C13
+0.002 NES mapper2 b05 block A712 nes_m2_b05_A717
+0.002 NES mapper2 b05 block A913 nes_m2_b05_A925
+0.002 NES mapper2 b05 block A970 nes_m2_b05_A979
+0.002 NES mapper2 b05 block A979 nes_m2_b05_A994
+0.002 NES mapper2 dispatch stub 915E nes_m2_b05_915E
+0.002 NES mapper2 dispatch stub 9541 nes_m2_b05_9541
+0.002 NES mapper2 dispatch stub 959B nes_m2_b05_959B
+0.002 NES mapper2 dispatch stub 962A nes_m2_b04_962A
+0.002 NES mapper2 dispatch stub 962F nes_m2_b04_962F
+0.002 NES mapper2 dispatch stub 999F nes_m2_b05_999F
+0.002 NES mapper2 dispatch stub A747 nes_m2_b05_A747
+0.002 NES mapper2 dispatch stub A75C nes_m2_b05_A75C
+0.002 NES mapper2 dispatch stub A766 nes_m2_b05_A766
+0.002 NES mapper2 b04 block 90B7 nes_D56A
+0.002 NES mapper2 b04 block 90C6 nes_D56A
+0.002 NES mapper2 b04 block 9120 nes_D56A
+0.002 NES mapper2 b04 block 912A nes_D56A
+0.002 NES mapper2 b04 block 913E nes_D56A
+0.002 NES mapper2 b04 block 9166 nes_D56A
+0.002 NES mapper2 b04 block 91B5 nes_D56A
+0.001 NES block D1D9 nes_D1E4
+0.001 NES block D1DF nes_D1E4
+0.001 NES block D977 nes_D982
+0.001 NES block D980 nes_D982
+0.001 NES mapper2 b04 block 961E nes_m2_b04_9627
+0.001 NES mapper2 b04 block 9625 nes_m2_b04_9627
+0.001 NES mapper2 b04 block 9748 nes_975A
+0.001 NES mapper2 b05 block A71E nes_m2_b05_A72A
+0.001 NES mapper2 b05 block A725 nes_m2_b05_A72A
+0.001 NES mapper2 b05 block A755 nes_m2_b05_A76A
+0.001 NES mapper2 b05 block A766 nes_m2_b05_A76A
+0.001 NES mapper2 b05 block A925 nes_m2_b05_A970
+0.001 NES mapper2 b05 block A96E nes_m2_b05_A970
+0.001 NES mapper2 dispatch stub 975A nes_m2_b04_975A
+0.001 NES mapper2 dispatch stub 9E6F nes_m2_b05_9E6F
+0.001 NES mapper2 dispatch stub 9F82 nes_m2_b05_9F82
