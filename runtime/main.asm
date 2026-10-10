@@ -20,6 +20,203 @@ SECTION "Header Entry", ROM0[$0100]
 SECTION "SMB split grace state", WRAM0[$C817]
 nes_split_retire_grace_used: ds 1
 
+MACRO BOOT_INIT_BODY
+    ; Canonical power-on state used by the recompiled 6502.
+    xor a
+    ldh [nes_a], a
+    ldh [nes_x], a
+    ldh [nes_y], a
+    ld [nes_ppu_status], a
+    ld [nes_ppuctrl], a
+    ld [nes_ppumask], a
+    ld [nes_oamaddr], a
+    ld [nes_ppu_scroll_x], a
+    ld [nes_ppu_scroll_y], a
+    ld [nes_ppu_addr_hi], a
+    ld [nes_ppu_addr_lo], a
+    ld [nes_ppu_latch], a
+    ld [nes_ppu_read_buffer], a
+    ld [nes_dac], a
+    ld [nes_controller_strobe], a
+    ld [nes_controller_shift], a
+    ldh [nes_host_vblank_pending], a
+    ld [nes_vram_unlocked], a
+    ld [nes_nmi_active], a
+    ld [nes_oam_dirty], a
+    ld [nes_current_code_bank], a
+    ld [nes_dispatch_cache_valid], a
+    ld [nes_nametable_queue_ptr_lo], a
+    ld [nes_nametable_queue_overflow], a
+    ld [nes_mask_dirty], a
+    ld a, $D8
+    ld [nes_nametable_queue_ptr_hi], a
+    xor a
+    ; Follow camera is the default. Start centered until the first OAM
+    ; projection acquires a plausible player sprite.
+    ld a, $04
+    ld [nes_view_mode], a
+    ld a, $30
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
+    ld [nes_view_armed_x], a
+    ld [nes_view_armed_y], a
+    ld a, $01
+    ld [nes_view_follow_enabled], a
+    xor a
+    ld [nes_view_follow_valid], a
+    ld [nes_view_follow_was_valid], a
+    ld [nes_view_follow_x], a
+    ld [nes_view_follow_y], a
+    ld [nes_view_follow_ref_x], a
+    ld [nes_view_follow_ref_y], a
+    ld [nes_view_follow_best_dist], a
+    ld [nes_view_follow_candidate_x], a
+    ld [nes_view_follow_candidate_y], a
+    ld [nes_view_follow_slot], a
+    ld [nes_view_select_prev], a
+    ld [nes_bg_pattern_committed], a
+    ld [nes_nametable_stage_used], a
+    ld [nes_generic_map_rebuild_dirty], a
+    ld [nes_hstitch_valid], a
+    ld [nes_hstitch_seen], a
+    ld [nes_hstitch_dirty], a
+    ld [nes_hstitch_key], a
+    ld [nes_hstitch_copy_start], a
+    ld [nes_hstitch_copy_len], a
+    ld [nes_hstitch_copy_skip], a
+    ld [nes_hstitch_target_key], a
+    ld [nes_hstitch_full_rebuilds], a
+    ld [nes_hstitch_catchups], a
+    ld [nes_diag_frame_serial], a
+    ld [nes_diag_ring_index], a
+    ld [nes_diag_event_flags], a
+
+    ld hl, nes_diag_ring
+    ld b, $10
+.clear_diag_ring:
+    ld [hli], a
+    dec b
+    jr nz, .clear_diag_ring
+
+    ld [nes_ntdiag_min_row], a
+    ld [nes_ntdiag_max_row], a
+    ld [nes_ntdiag_display_map], a
+    ld [nes_ntdiag_tile_count], a
+    ld [nes_ntdiag_phys_mask], a
+    ld [nes_ntdiag_min_col], a
+    ld [nes_ntdiag_max_col], a
+    ld [nes_ntdiag_first_hi], a
+    ld [nes_ntdiag_first_lo], a
+    ld [nes_ntdiag_last_hi], a
+    ld [nes_ntdiag_last_lo], a
+    ld [nes_ntdiag_commit_serial], a
+    ld [nes_split_duplicate_streak], a
+    ld [nes_split_retire_grace_used], a
+    ld [nes_reset_count], a
+    ldh [nes_fault_hram], a
+    ldh [nes_last_indirect_lo], a
+    ldh [nes_last_indirect_hi], a
+    ldh [nes_fault_pc_lo], a
+    ldh [nes_fault_pc_hi], a
+    ldh [nes_oam_shadow_ready], a
+    ldh [nes_palette_dirty], a
+    ldh [nes_scroll_dirty], a
+    ldh [nes_ctrl_dirty], a
+    ldh [nes_scroll_pair_count], a
+    ldh [nes_split_active], a
+    ldh [nes_split_top_x], a
+    ldh [nes_split_top_y], a
+    ldh [nes_split_bottom_x], a
+    ldh [nes_split_bottom_y], a
+    ldh [nes_split_top_ctrl], a
+    ldh [nes_split_bottom_ctrl], a
+    ldh [nes_split_armed_x], a
+    ldh [nes_split_armed_y], a
+    ldh [nes_split_armed_ctrl], a
+    ldh [nes_split_pending_x], a
+    ldh [nes_split_pending_y], a
+    ldh [nes_split_pending_ctrl], a
+    ldh [nes_split_armed_top_x], a
+    ldh [nes_split_armed_top_y], a
+    ldh [nes_split_armed_top_ctrl], a
+    ldh [nes_seam_active], a
+    ldh [nes_seam_line], a
+    ldh [nes_seam_top_ctrl], a
+    ldh [nes_seam_bottom_ctrl], a
+    ldh [nes_seam_top_y], a
+    ldh [nes_seam_bottom_y], a
+    ld a, $20
+    ldh [nes_split_line], a
+    xor a
+
+    ld [nes_pace_credit], a
+    ld [nes_pace_unpublished], a
+    ld [nes_pace_snap_valid], a
+    ld [nes_pace_snap_palette], a
+    ld [nes_pace_isr_active], a
+    ld [nes_pace_committed], a
+    ld [nes_pace_early], a
+    ld [nes_pace_mask_deferred], a
+    ld [nes_pace_armed], a
+    ld [nes_pace_idle_lo], a
+    ld [nes_pace_idle_hi], a
+    ld [nes_pace_cand_lo], a
+    ld [nes_pace_cand_hi], a
+    ; Unknown page contents: the first projection clears all 40 entries.
+    ld a, 40
+    ld [nes_oam_page_hw], a
+    ld [nes_oam_page_hw + 1], a
+    ld a, HIGH(nes_gbc_oam_shadow)
+    ld [nes_oam_dma_page], a
+IF !DEF(NES2GBC_NO_PACING)
+    ld [nes_oam_live_page], a
+    ld a, HIGH(nes_pace_oam)
+    ld [nes_oam_pace_page], a
+    xor a
+    ld [nes_oam_live_stale], a
+ENDC
+    ; Empty direct-mapped dispatch cache: tag 0, code bank 1, and a linked
+    ; address of nes_dispatch_dm_empty (a false tag-0 hit takes the miss path).
+    ld hl, nes_dispatch_dm_tag
+    ld b, $80
+.clear_dispatch_dm:
+    xor a
+    ld [hl], a
+    set 7, l
+    inc a
+    ld [hl], a
+    inc h
+    ld a, HIGH(nes_dispatch_dm_empty)
+    ld [hl], a
+    res 7, l
+    ld a, LOW(nes_dispatch_dm_empty)
+    ld [hl], a
+    dec h
+    inc l
+    dec b
+    jr nz, .clear_dispatch_dm
+    xor a
+
+    ld hl, nes_gbc_palette_shadow
+    ld b, $40
+.clear_palette_shadow:
+    ld [hli], a
+    dec b
+    jr nz, .clear_palette_shadow
+
+    ld a, $FD
+    ldh [nes_sp], a
+    ld a, $24
+    ldh [nes_p], a
+    ; Initial P=$24 has C=0, Z=0, N=0.
+    ld a, $01
+    ldh [nes_z_shadow], a
+    xor a
+    ldh [nes_n_shadow], a
+    ldh [nes_c_shadow], a
+
+ENDM
+
 SECTION "Runtime", ROM0[$0150]
 ; OAM DMA owns the main buses while active, so the wait loop must execute from
 ; HRAM. Keep a position-independent 8-byte image in ROM and borrow the first
@@ -121,15 +318,6 @@ IF DEF(NES2GBC_DEBUG_TRACE)
     ; TRACE builds only: the 4-frame renderer diagnostic ring is debugger
     ; telemetry and cost every host VBlank in release builds.
     call nes_diag_snapshot_frame
-ENDC
-IF DEF(NES2GBC_APU)
-    ; Count only: the ISR must not switch ROM banks (APU code is banked).
-    ; nes_poll_nmi_hl runs the pending sequencer ticks.
-    ld a, [nes_apu_tick_pending]
-    inc a
-    jr z, .apu_tick_saturated
-    ld [nes_apu_tick_pending], a
-.apu_tick_saturated:
 ENDC
 
 IF !DEF(NES2GBC_NO_PACING)
@@ -808,6 +996,8 @@ nes_gbc_stat_isr:
 ;   +3 event bits (NES_DIAG_EVENT_* above)
 ; C8FE points to the next slot to be written, so the newest record is the
 ; preceding slot modulo four.
+; Only referenced by DEBUG_TRACE builds; APU builds drop it for ROM0 room.
+IF DEF(NES2GBC_DEBUG_TRACE) || !DEF(NES2GBC_APU)
 nes_diag_snapshot_frame:
     ld a, [nes_diag_ring_index]
     and $03
@@ -887,6 +1077,8 @@ nes_diag_snapshot_frame:
     ld [nes_diag_event_flags], a
     ret
 
+ENDC
+
 Start:
     di
     ld sp, $D000
@@ -901,199 +1093,16 @@ Start:
     xor a
     ldh [rOPRI], a
 
-    ; Canonical power-on state used by the recompiled 6502.
-    xor a
-    ldh [nes_a], a
-    ldh [nes_x], a
-    ldh [nes_y], a
-    ld [nes_ppu_status], a
-    ld [nes_ppuctrl], a
-    ld [nes_ppumask], a
-    ld [nes_oamaddr], a
-    ld [nes_ppu_scroll_x], a
-    ld [nes_ppu_scroll_y], a
-    ld [nes_ppu_addr_hi], a
-    ld [nes_ppu_addr_lo], a
-    ld [nes_ppu_latch], a
-    ld [nes_ppu_read_buffer], a
-    ld [nes_dac], a
-    ld [nes_controller_strobe], a
-    ld [nes_controller_shift], a
-    ldh [nes_host_vblank_pending], a
-    ld [nes_vram_unlocked], a
-    ld [nes_nmi_active], a
-    ld [nes_oam_dirty], a
-    ld [nes_current_code_bank], a
-    ld [nes_dispatch_cache_valid], a
-    ld [nes_nametable_queue_ptr_lo], a
-    ld [nes_nametable_queue_overflow], a
-    ld [nes_mask_dirty], a
-    ld a, $D8
-    ld [nes_nametable_queue_ptr_hi], a
-    xor a
-    ; Follow camera is the default. Start centered until the first OAM
-    ; projection acquires a plausible player sprite.
-    ld a, $04
-    ld [nes_view_mode], a
-    ld a, $30
-    ldh [nes_view_x], a
-    ldh [nes_view_y], a
-    ld [nes_view_armed_x], a
-    ld [nes_view_armed_y], a
+IF DEF(NES2GBC_APU)
+    ; Boot-only RAM/HRAM init lives in helper bank $FF (ROM0 budget for APU).
+    ld a, $FF
+    ld [$2000], a
+    call nes_boot_init_banked
     ld a, $01
-    ld [nes_view_follow_enabled], a
-    xor a
-    ld [nes_view_follow_valid], a
-    ld [nes_view_follow_was_valid], a
-    ld [nes_view_follow_x], a
-    ld [nes_view_follow_y], a
-    ld [nes_view_follow_ref_x], a
-    ld [nes_view_follow_ref_y], a
-    ld [nes_view_follow_best_dist], a
-    ld [nes_view_follow_candidate_x], a
-    ld [nes_view_follow_candidate_y], a
-    ld [nes_view_follow_slot], a
-    ld [nes_view_select_prev], a
-    ld [nes_bg_pattern_committed], a
-    ld [nes_nametable_stage_used], a
-    ld [nes_generic_map_rebuild_dirty], a
-    ld [nes_hstitch_valid], a
-    ld [nes_hstitch_seen], a
-    ld [nes_hstitch_dirty], a
-    ld [nes_hstitch_key], a
-    ld [nes_hstitch_copy_start], a
-    ld [nes_hstitch_copy_len], a
-    ld [nes_hstitch_copy_skip], a
-    ld [nes_hstitch_target_key], a
-    ld [nes_hstitch_full_rebuilds], a
-    ld [nes_hstitch_catchups], a
-    ld [nes_diag_frame_serial], a
-    ld [nes_diag_ring_index], a
-    ld [nes_diag_event_flags], a
-
-    ld hl, nes_diag_ring
-    ld b, $10
-.clear_diag_ring:
-    ld [hli], a
-    dec b
-    jr nz, .clear_diag_ring
-
-    ld [nes_ntdiag_min_row], a
-    ld [nes_ntdiag_max_row], a
-    ld [nes_ntdiag_display_map], a
-    ld [nes_ntdiag_tile_count], a
-    ld [nes_ntdiag_phys_mask], a
-    ld [nes_ntdiag_min_col], a
-    ld [nes_ntdiag_max_col], a
-    ld [nes_ntdiag_first_hi], a
-    ld [nes_ntdiag_first_lo], a
-    ld [nes_ntdiag_last_hi], a
-    ld [nes_ntdiag_last_lo], a
-    ld [nes_ntdiag_commit_serial], a
-    ld [nes_split_duplicate_streak], a
-    ld [nes_split_retire_grace_used], a
-    ld [nes_reset_count], a
-    ldh [nes_fault_hram], a
-    ldh [nes_last_indirect_lo], a
-    ldh [nes_last_indirect_hi], a
-    ldh [nes_fault_pc_lo], a
-    ldh [nes_fault_pc_hi], a
-    ldh [nes_oam_shadow_ready], a
-    ldh [nes_palette_dirty], a
-    ldh [nes_scroll_dirty], a
-    ldh [nes_ctrl_dirty], a
-    ldh [nes_scroll_pair_count], a
-    ldh [nes_split_active], a
-    ldh [nes_split_top_x], a
-    ldh [nes_split_top_y], a
-    ldh [nes_split_bottom_x], a
-    ldh [nes_split_bottom_y], a
-    ldh [nes_split_top_ctrl], a
-    ldh [nes_split_bottom_ctrl], a
-    ldh [nes_split_armed_x], a
-    ldh [nes_split_armed_y], a
-    ldh [nes_split_armed_ctrl], a
-    ldh [nes_split_pending_x], a
-    ldh [nes_split_pending_y], a
-    ldh [nes_split_pending_ctrl], a
-    ldh [nes_split_armed_top_x], a
-    ldh [nes_split_armed_top_y], a
-    ldh [nes_split_armed_top_ctrl], a
-    ldh [nes_seam_active], a
-    ldh [nes_seam_line], a
-    ldh [nes_seam_top_ctrl], a
-    ldh [nes_seam_bottom_ctrl], a
-    ldh [nes_seam_top_y], a
-    ldh [nes_seam_bottom_y], a
-    ld a, $20
-    ldh [nes_split_line], a
-    xor a
-
-    ld [nes_pace_credit], a
-    ld [nes_pace_unpublished], a
-    ld [nes_pace_snap_valid], a
-    ld [nes_pace_snap_palette], a
-    ld [nes_pace_isr_active], a
-    ld [nes_pace_committed], a
-    ld [nes_pace_early], a
-    ld [nes_pace_mask_deferred], a
-    ld [nes_pace_armed], a
-    ld [nes_pace_idle_lo], a
-    ld [nes_pace_idle_hi], a
-    ld [nes_pace_cand_lo], a
-    ld [nes_pace_cand_hi], a
-    ; Unknown page contents: the first projection clears all 40 entries.
-    ld a, 40
-    ld [nes_oam_page_hw], a
-    ld [nes_oam_page_hw + 1], a
-    ld a, HIGH(nes_gbc_oam_shadow)
-    ld [nes_oam_dma_page], a
-IF !DEF(NES2GBC_NO_PACING)
-    ld [nes_oam_live_page], a
-    ld a, HIGH(nes_pace_oam)
-    ld [nes_oam_pace_page], a
-    xor a
-    ld [nes_oam_live_stale], a
+    ld [$2000], a
+ELSE
+    BOOT_INIT_BODY
 ENDC
-    ; Empty direct-mapped dispatch cache: tag 0, code bank 1, and a linked
-    ; address of nes_dispatch_dm_empty (a false tag-0 hit takes the miss path).
-    ld hl, nes_dispatch_dm_tag
-    ld b, $80
-.clear_dispatch_dm:
-    xor a
-    ld [hl], a
-    set 7, l
-    inc a
-    ld [hl], a
-    inc h
-    ld a, HIGH(nes_dispatch_dm_empty)
-    ld [hl], a
-    res 7, l
-    ld a, LOW(nes_dispatch_dm_empty)
-    ld [hl], a
-    dec h
-    inc l
-    dec b
-    jr nz, .clear_dispatch_dm
-    xor a
-
-    ld hl, nes_gbc_palette_shadow
-    ld b, $40
-.clear_palette_shadow:
-    ld [hli], a
-    dec b
-    jr nz, .clear_palette_shadow
-
-    ld a, $FD
-    ldh [nes_sp], a
-    ld a, $24
-    ldh [nes_p], a
-    ; Initial P=$24 has C=0, Z=0, N=0.
-    ld a, $01
-    ldh [nes_z_shadow], a
-    xor a
-    ldh [nes_n_shadow], a
-    ldh [nes_c_shadow], a
 
     call nes_generated_init
     call nes_generated_follow_init
@@ -1119,6 +1128,11 @@ ENDC
 INCLUDE "io.asm"
 IF DEF(NES2GBC_APU)
 INCLUDE "apu.asm"
+
+SECTION "NES boot init", ROMX, BANK[255]
+nes_boot_init_banked:
+    BOOT_INIT_BODY
+    ret
 ENDC
 INCLUDE "profile.asm"
 INCLUDE "cpu.asm"

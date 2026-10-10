@@ -42,7 +42,7 @@ make gbc ROM="path/to/game.nes" APU=1 APU_TEST_SPEED=2
 
 Supported values are `1`, `2`, and `4`; default is `1`.
 
-`APU_TEST_SPEED=2` lowers pulse/triangle/noise rendering by one octave, halves the software frame-sequencer work per host VBlank, and stretches the GBC envelope approximation by 2. `APU_TEST_SPEED=4` applies the corresponding two-octave / 4x timing compensation. This is a testing aid only: it does not change NES register state or the normal 1x APU model.
+`APU_TEST_SPEED=2` lowers pulse/triangle/noise rendering by one octave, and stretches the GBC envelope approximation by 2. `APU_TEST_SPEED=4` applies the corresponding two-octave / 4x timing compensation. This is a testing aid only: it does not change NES register state or the normal 1x APU model. (The frame sequencer is now per NES frame, so APU_TEST_SPEED only affects pitch and envelopes.)
 
 ## Current semantics
 
@@ -63,4 +63,4 @@ Supported values are `1`, `2`, and `4`; default is `1`.
 
 ## Code placement
 
-The APU bridge lives in the fixed helper ROMX bank ($FF, alongside the RAM interpreter and MMC1 helper) so APU=1 builds fit ROM0 for banked (mapper 1/2) games. ROM0 keeps only small shims: `nes_apu_write` / `nes_apu_init` map bank $FF, call the banked code, and restore `nes_current_code_bank`; `nes_apu_read_status` stays in ROM0 (no bank switch). The host VBlank ISR never switches ROM banks, so it only counts pending host VBlanks (`nes_apu_tick_pending`); `nes_poll_nmi_hl` drains them through `nes_apu_drain_ticks`, so frame-sequencer timing is still per host VBlank, just applied at the next NMI poll.
+The APU bridge is in ROM0, so APU register writes never switch ROM banks. To make room, APU=1 builds move boot-only init (`Start` RAM/HRAM setup, now `nes_boot_init_banked`) to helper bank $FF and drop the DEBUG_TRACE-only `nes_diag_snapshot_frame`; APU=0 output is unchanged. The frame sequencer runs one NES frame (four ~240 Hz steps) per delivered NES NMI, from `nes_poll_nmi_hl`, so sound timing follows emulated NES frames and scales with emulator speed instead of host VBlanks. Rewrites of an unchanged value to side-effect-free registers (even $4000-$400E, $4010-$4013) are skipped.

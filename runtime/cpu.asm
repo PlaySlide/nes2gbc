@@ -1585,11 +1585,6 @@ ENDC
     ; frame is intentionally dropped instead of creating back-to-back NMIs.
     xor a
     ldh [nes_host_vblank_pending], a
-IF DEF(NES2GBC_APU)
-    ; Run the APU sequencer ticks the VBlank ISR counted (banked code).
-    call nes_apu_drain_ticks
-ENDC
-
     ld a, [nes_ppuctrl]
     bit 7, a
 IF !DEF(NES2GBC_NO_PACING)
@@ -1608,6 +1603,11 @@ ENDC
 
     ld a, $01
     ld [nes_nmi_active], a
+IF DEF(NES2GBC_APU)
+    ; One APU frame-sequencer frame per delivered NES NMI (= emulated NES
+    ; frame), so APU timing follows emulation speed. Preserves BC/DE/HL.
+    call nes_apu_nes_frame
+ENDC
 
 IF !DEF(NES2GBC_NO_PACING)
     ; Early start while the previous frame is still unpublished: snapshot it

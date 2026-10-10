@@ -36,49 +36,25 @@ nes_apu_sweep_div_p2:    ds 1
 nes_apu_sweep_reload_p2: ds 1
 ; Approximate NES frame-counter phase. 4-step uses 0..3, 5-step uses 0..4.
 nes_apu_frame_phase: ds 1
-nes_apu_tick_pending: ds 1 ; host VBlanks not yet run by nes_apu_drain_ticks
 
-; ROM0 budget: the APU bridge lives in the fixed helper bank ($FF, shared
-; with the RAM interpreter / MMC1 helper); only these small shims stay in ROM0.
-; The host VBlank ISR must not switch ROM banks (it can interrupt a temporary
-; PRG data-bank read whose bank is not shadowed), so it only counts pending
-; host VBlanks; nes_apu_drain_ticks runs them from the NMI poll, where the
-; translated-code bank (nes_current_code_bank) is the mapped one.
-SECTION "NES APU fixed shims", ROM0
-; L = register low byte, E = value. Clobbers AF, BC, DE, HL.
-nes_apu_write:
-    ld a, $FF
-    ld [$2000], a
-    call nes_apu_write_banked
-    ld a, [nes_current_code_bank]
-    ld [$2000], a
-    ret
-
-nes_apu_init:
-    ld a, $FF
-    ld [$2000], a
-    call nes_apu_init_banked
-    ld a, [nes_current_code_bank]
-    ld [$2000], a
-    ret
-
-; Run the host VBlanks counted by the ISR. Preserves BC, DE, HL.
-nes_apu_drain_ticks:
-    ld a, [nes_apu_tick_pending]
-    and a
-    ret z
+; The APU bridge is ROM0 (boot-only init moved to helper bank $FF makes room),
+; so APU register writes never switch ROM banks. The frame sequencer runs once
+; per emulated NES frame from nes_poll_nmi_hl, not per host VBlank.
+SECTION "NES APU code", ROM0
+; One NES frame = four ~240 Hz frame-sequencer steps. Called once per emulated
+; NES frame (when nes_poll_nmi_hl consumes the frame event), so APU timing
+; follows emulation speed. Preserves BC, DE, HL.
+nes_apu_nes_frame:
     push bc
     push de
     push hl
-    ld a, $FF
-    ld [$2000], a
-.loop:
-    call nes_apu_frame_tick
-    ld hl, nes_apu_tick_pending
-    dec [hl]                ; single RMW: atomic against the ISR increment
-    jr nz, .loop
-    ld a, [nes_current_code_bank]
-    ld [$2000], a
+    ld b, 4
+.step:
+    push bc
+    call nes_apu_frame_step
+    pop bc
+    dec b
+    jr nz, .step
     pop hl
     pop de
     pop bc
@@ -113,9 +89,9 @@ nes_apu_read_status:
     ld a, b
     ret
 
-SECTION "NES APU code", ROMX, BANK[255]
 
 ; ---------------------------------------------------------------------------
+nes_apu_init:
 nes_apu_init_banked:
     ld hl, nes_apu_regs
     ld b, $18 + 13         ; register mirror + APU architectural state + tick count
@@ -158,14 +134,32 @@ nes_apu_init_banked:
     db $FE, $DC, $BA, $98, $76, $54, $32, $10
 
 ; ---------------------------------------------------------------------------
+nes_apu_write:
 nes_apu_write_banked:
     ld a, l
     cp $18
     ret nc
 
-    ; Shadow store. Base is $CA00 so H=$CA, L=index.
-    ld [nes_apu_write_idx], a
+    ; Rewriting an unchanged value to a side-effect-free register (even
+    ; $4000-$400E: duty/volume, timer low, linear, noise mode/period; DMC
+    ; $4010-$4013) is a no-op on the NES; skip the GB channel recompute.
+    ; $4001/$4005 (sweep reload), length/trigger writes, $4015 and $4017
+    ; keep their write side effects.
     ld h, HIGH(nes_apu_regs)
+    ld a, [hl]
+    cp e
+    jr nz, .changed
+    ld a, l
+    cp $14
+    jr nc, .changed
+    cp $10
+    ret nc
+    rra
+    ret nc
+.changed:
+    ; Shadow store. Base is $CA00 so H=$CA, L=index.
+    ld a, l
+    ld [nes_apu_write_idx], a
     ld a, e
     ld [hl], a
 
@@ -608,13 +602,15 @@ nes_apu_apply_triangle_gate:
     jr z, .mute
 
 .audible:
+    ; CH3 running implies NR30=$80/NR32=$20 are already set (every other NR30
+    ; write turns the DAC off, which stops the channel).
+    ldh a, [rNR52]
+    bit 2, a
+    ret nz                          ; already running: preserve GB phase
     ld a, $80
     ldh [rNR30], a
     ld a, $20
     ldh [rNR32], a
-    ldh a, [rNR52]
-    bit 2, a
-    ret nz                          ; already running: preserve GB phase
 
     ; Gate just reopened: start CH3 at the currently programmed frequency.
     ld a, [nes_apu_regs + $0A]
@@ -928,26 +924,6 @@ nes_apu_update_frame_counter:
     ret z
     call nes_apu_clock_quarter
     jp nes_apu_clock_half
-
-; Host VBlank is ~60 Hz at normal speed. Advance enough ~240 Hz sequencer
-; slots to preserve wall-clock APU timing at the selected emulator test speed.
-; 1x: 4 slots/VBlank, 2x: 2, 4x: 1. Keeping phase across calls preserves the
-; same effective NES quarter/half-frame rates while mGBA is fast-forwarding.
-nes_apu_frame_tick:
-IF NES2GBC_APU_TEST_SPEED == 2
-    ld b, 2
-ELIF NES2GBC_APU_TEST_SPEED == 4
-    ld b, 1
-ELSE
-    ld b, 4
-ENDC
-.step:
-    push bc
-    call nes_apu_frame_step
-    pop bc
-    dec b
-    jr nz, .step
-    ret
 
 nes_apu_frame_step:
     ld a, [nes_apu_regs + $17]
