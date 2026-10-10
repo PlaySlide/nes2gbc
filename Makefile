@@ -155,6 +155,7 @@ generate:
 			python3 tools/native_dk_sprite_loops.py runtime/generated.asm "$(ROM)"; \
 			python3 tools/fallthrough_layout.py runtime/generated.asm; \
 			python3 tools/thread_adapter_jumps.py runtime/generated.asm; \
+			python3 tools/host_z_branch.py runtime/generated.asm; \
 		fi; \
 		# TRACE and partial POSTPASS_THROUGH builds also expand generated blocks. \
 		# Normalize short/long NES-label jumps after the final selected pass so \
