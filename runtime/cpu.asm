@@ -1585,6 +1585,10 @@ ENDC
     ; frame is intentionally dropped instead of creating back-to-back NMIs.
     xor a
     ldh [nes_host_vblank_pending], a
+IF DEF(NES2GBC_APU)
+    ; Run the APU sequencer ticks the VBlank ISR counted (banked code).
+    call nes_apu_drain_ticks
+ENDC
 
     ld a, [nes_ppuctrl]
     bit 7, a
