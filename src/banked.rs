@@ -830,13 +830,39 @@ pub fn emit_mapper2_cfgs(
     // RTS guard targets must be dispatchable labels (fixed block or stub).
     let mut labels: BTreeSet<u16> = fixed_selected.keys().copied().collect();
     labels.extend(variants.keys().copied());
+    let rts_prof: BTreeMap<u16, f64> = std::env::var("NES2GBC_RTS_PROFILE")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| {
+            t.lines()
+                .filter(|l| !l.starts_with('#'))
+                .filter_map(|l| {
+                    let mut it = l.split_whitespace();
+                    let c: f64 = it.next()?.parse().ok()?;
+                    let a = u16::from_str_radix(it.next()?, 16).ok()?;
+                    Some((a, c))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let max_guards: usize = std::env::var("NES2GBC_RTS_GUARDS").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
     let rts_guards: BTreeMap<BlockId, Vec<u16>> = rts_return_candidates(views)
         .into_iter()
-        .map(|(k, v)| (k, v.into_iter().filter(|r| labels.contains(r)).take(max_guards).collect::<Vec<u16>>()))
+        .map(|(k, mut v)| {
+            // Profile-guided order (RTS_PROFILE block-entry counts): hottest
+            // return PCs are tested first; unprofiled ones keep static order.
+            if !rts_prof.is_empty() {
+                v.sort_by(|a, b| {
+                    let ca = rts_prof.get(a).copied().unwrap_or(0.0);
+                    let cb = rts_prof.get(b).copied().unwrap_or(0.0);
+                    cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            (k, v.into_iter().filter(|r| labels.contains(r)).take(max_guards).collect::<Vec<u16>>())
+        })
         .filter(|(_, v)| !v.is_empty())
         .collect();
-    println!("mapper2: guarded RTS continuations in {} block(s)", rts_guards.len());
+    println!("mapper2: guarded RTS continuations in {} block(s) ({} profiled return PCs)", rts_guards.len(), rts_prof.len());
     let guard_for = |id: BlockId| -> &[u16] { rts_guards.get(&id).map(|v| v.as_slice()).unwrap_or(&[]) };
 
     let level = crate::state_superblock::regalloc_level();

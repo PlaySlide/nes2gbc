@@ -58,9 +58,9 @@ generate:
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
-		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	else \
-		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \
