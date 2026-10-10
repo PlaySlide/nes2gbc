@@ -188,10 +188,8 @@ fn emit_block(
         if a {
             writeln!(out, "    push af").unwrap();
         }
-        writeln!(out, "    push bc").unwrap();
         writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
         writeln!(out, "    call nes_profile_trace_pc").unwrap();
-        writeln!(out, "    pop bc").unwrap();
         if a {
             writeln!(out, "    pop af").unwrap();
         }
@@ -775,7 +773,16 @@ pub fn emit_mapper2_cfgs(
             i = j;
         }
     }
+    let align_views = std::env::var("NES2GBC_ALIGN_VIEW_BANKS").map(|v| v == "1").unwrap_or(false);
+    let mut last_view: Option<u8> = None;
     for (&(bank, pc), block) in &banked_selected {
+        // Optionally start each PRG bank's variants in a fresh host bank so
+        // the final whole-bank repack keeps a view's hot code together.
+        if align_views && last_view != Some(bank) && used != 0 {
+            host_bank += 1;
+            used = 0;
+        }
+        last_view = Some(bank);
         assign_bank(
             &mut assigned,
             BlockId::Banked(bank, pc),
