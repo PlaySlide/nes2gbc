@@ -741,6 +741,76 @@ fn fast_store_supported(op: Operand) -> bool {
     !matches!(op, Operand::Immediate(_)) && fast_operand_supported(op)
 }
 
+/// HL = ($zp),Y with Y from host C (ensured resident). Clobbers A, DE, HL.
+fn emit_indirect_y_addr(out: &mut String, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
+    let cached = state.y_c;
+    writeln!(out, "    ld e, ${zp:02X}").unwrap();
+    writeln!(out, "    ld d, $C0").unwrap();
+    writeln!(out, "    ld a, [de]").unwrap();
+    writeln!(out, "    ld l, a").unwrap();
+    writeln!(out, "    inc e").unwrap();
+    writeln!(out, "    ld a, [de]").unwrap();
+    writeln!(out, "    ld h, a").unwrap();
+    if cached {
+        writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+        stats.y_reload_avoided += 1;
+        stats.y_index_uses += 1;
+    } else {
+        writeln!(out, "    ldh a, [nes_y]").unwrap();
+    }
+    emit_add_a_to_hl(out);
+}
+
+/// LDA ($zp),Y keeping X/Y resident in B/C: RAM inline, everything else
+/// through nes_cpu_read_hi with BC saved around the call.
+fn emit_indirect_y_load(out: &mut String, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
+    emit_indirect_y_addr(out, zp, state, stats);
+    writeln!(out, "    ld a, h").unwrap();
+    writeln!(out, "    cp $20").unwrap();
+    writeln!(out, "    jr nc, :+").unwrap();
+    writeln!(out, "    and $07").unwrap();
+    writeln!(out, "    or $C0").unwrap();
+    writeln!(out, "    ld h, a").unwrap();
+    writeln!(out, "    ld a, [hl]").unwrap();
+    writeln!(out, "    jr :++").unwrap();
+    writeln!(out, ":").unwrap();
+    let keep = state.x_b || state.y_c;
+    if keep {
+        writeln!(out, "    push bc ; superblock (zp),Y: keep cached X/Y").unwrap();
+    }
+    writeln!(out, "    call nes_cpu_read_hi ; inline RAM test failed: H >= $20").unwrap();
+    if keep {
+        writeln!(out, "    pop bc").unwrap();
+    }
+    writeln!(out, ":").unwrap();
+}
+
+/// STA ($zp),Y with the value in host A; A is clobbered afterwards.
+fn emit_indirect_y_store(out: &mut String, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
+    writeln!(out, "    push af").unwrap();
+    emit_indirect_y_addr(out, zp, state, stats);
+    writeln!(out, "    ld a, h").unwrap();
+    writeln!(out, "    cp $20").unwrap();
+    writeln!(out, "    jr nc, :+").unwrap();
+    writeln!(out, "    and $07").unwrap();
+    writeln!(out, "    or $C0").unwrap();
+    writeln!(out, "    ld h, a").unwrap();
+    writeln!(out, "    pop af").unwrap();
+    writeln!(out, "    ld [hl], a").unwrap();
+    writeln!(out, "    jr :++").unwrap();
+    writeln!(out, ":").unwrap();
+    writeln!(out, "    pop af").unwrap();
+    let keep = state.x_b || state.y_c;
+    if keep {
+        writeln!(out, "    push bc ; superblock (zp),Y: keep cached X/Y").unwrap();
+    }
+    writeln!(out, "    call nes_cpu_write").unwrap();
+    if keep {
+        writeln!(out, "    pop bc").unwrap();
+    }
+    writeln!(out, ":").unwrap();
+}
+
 fn emit_operand_load(
     out: &mut String,
     src: Operand,
@@ -1063,9 +1133,15 @@ fn emit_fast_modify_memory(
     }
 }
 
+fn indy_enabled() -> bool {
+    std::env::var("NES2GBC_STATE_INDY").map(|v| v != "0").unwrap_or(true)
+}
+
 fn fast_op_supported(op: &IrOp) -> bool {
     match *op {
         IrOp::SetFlag { .. } | IrOp::Nop => true,
+        IrOp::Load { dst: Register::A, src: Operand::IndirectIndexed(_) }
+        | IrOp::Store { src: Register::A, dst: Operand::IndirectIndexed(_) } => indy_enabled(),
         IrOp::Load { dst, src } => dst != Register::Sp && fast_operand_supported(src),
         IrOp::Store { src, dst } => src != Register::Sp && fast_store_supported(dst),
         IrOp::Transfer { src, dst, .. } => src != Register::Sp && dst != Register::Sp,
@@ -1161,6 +1237,21 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                 writeln!(out, "    ldh [nes_p], a").unwrap();
             }
         },
+        IrOp::Load { dst: Register::A, src: Operand::IndirectIndexed(zp) } => {
+            emit_indirect_y_load(out, zp, state, stats);
+            let _ = write_reg_from_a(out, Register::A, state, stats);
+            emit_update_nz(out);
+        }
+        IrOp::Store { src: Register::A, dst: Operand::IndirectIndexed(zp) } => {
+            let _ = load_reg_to_a(out, Register::A, state, stats);
+            if state.a_dirty {
+                writeln!(out, "    ldh [nes_a], a ; superblock materialize A").unwrap();
+                state.a_dirty = false;
+                stats.a_materialized += 1;
+            }
+            emit_indirect_y_store(out, zp, state, stats);
+            state.a_live = false;
+        }
         IrOp::Load { dst, src } => {
             emit_operand_load(out, src, state, stats);
             let _ = write_reg_from_a(out, dst, state, stats);
