@@ -31,7 +31,7 @@ import re
 from pathlib import Path
 
 
-NES_TARGET = r"nes_[0-9A-Fa-f]{4}(?:_fast_a|_branch_fast_a)?"
+NES_TARGET = r"nes_(?:m\d+_b[0-9A-Fa-f]{2}_)?[0-9A-Fa-f]{4}(?:_fast_a|_branch_fast_a)?"
 STATIC_JR_RE = re.compile(
     rf"^(?P<indent>\s*)jr (?:(?P<cond>z|nz|c|nc), )?(?P<target>{NES_TARGET})(?P<tail>\s*(?:;.*)?)$"
 )
@@ -63,7 +63,11 @@ def max_line_bytes(line: str) -> int | None:
     c = code(line)
     if not c or c.startswith("SECTION "):
         return 0
-    if LABEL_RE.fullmatch(c):
+    if LABEL_RE.fullmatch(c) or c == ":":
+        return 0
+    # Conditional-assembly directives emit nothing themselves; every line in
+    # every branch is still charged, so the bound holds for any flavour.
+    if c.startswith(("IF DEF(", "IF !DEF(", "ELSE", "ENDC")):
         return 0
 
     mnemonic = c.split(None, 1)[0].lower()
