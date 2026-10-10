@@ -33,6 +33,7 @@ def main():
     ap.add_argument("--make-var", action="append", default=[], help="extra make variable for the identity build")
     ap.add_argument("--fc", default=None, help="hex NES-RAM frame counter: count NES frames by it and key --press on it instead of the SMB latch schedule")
     ap.add_argument("--press", default="", help="btn@frame:dur,... keyed on --fc frames")
+    ap.add_argument("--zelda", action="store_true", help="Zelda driver: menus by mode $12/$13, then right/up play; --window counts NES frames ($15) after gameplay (mode 5) starts")
     ap.add_argument("--window", default=None, help="A-B NES frames (with --fc) to count jumps over")
     a = ap.parse_args()
     out = a.out or os.path.join(ROOT, "profiles", os.path.splitext(os.path.basename(a.rom))[0] + ".bankprof")
@@ -90,12 +91,42 @@ def main():
     hooks = [("nes_jump_known_hl_a_8bit", on_jump)]
     if "nes_jump_known_hl_a" in syms and syms["nes_jump_known_hl_a"] != syms["nes_jump_known_hl_a_8bit"]:
         hooks.append(("nes_jump_known_hl_a", on_jump))
-    if a.fc is None:
+    if a.fc is None and not a.zelda:
         hooks += [(nmi_label, on_nmi), ("nes_controller_latch", on_latch)]
+    if a.zelda:
+        st["on"] = False
     for s, f in hooks:
         b, ad = syms[s]
         pb.hook_register(b, ad, f, None)
-    if a.fc is None:
+    if a.zelda:
+        lo, hi = (int(x) for x in (a.window or "60-360").split("-"))
+        a.nmis = hi - lo
+        m = pb.memory
+        zs = {}; zt = 0; zl = None; lastfc = None; nesf = -1; want = set(); held = set()
+        while nesf < hi:
+            mode, sub, fcv = m[0xC012], m[0xC013], m[0xC015]
+            if mode != zl:
+                zl = mode; zt = 0
+            if fcv != lastfc:
+                lastfc = fcv
+                if nesf < 0 and mode != 5:
+                    want = set()
+                    if mode in (0, 1) and zt % 60 < 6:
+                        want = {"start"}
+                    elif mode == 0xE:
+                        zs["reg"] = True
+                        k = zt % 240
+                        want = {"a"} if k < 6 else {"select"} if 60 <= k < 66 else {"start"} if 120 <= k < 126 else set()
+                    zt += 1
+                else:
+                    nesf += 1
+                    st["on"] = nesf >= lo
+                    want = {"right"} if (nesf // 40) % 2 == 0 else {"up"}
+            for b in want - held: pb.button_press(b)
+            for b in held - want: pb.button_release(b)
+            held = set(want)
+            pb.tick(1, False)
+    elif a.fc is None:
         while st["nmi"] < a.nmis:
             pb.tick(1, False)
     else:
