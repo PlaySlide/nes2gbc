@@ -800,6 +800,7 @@ fn emit_indirect_y_store(out: &mut String, zp: u8, state: &mut TraceState, stats
     writeln!(out, "    jr :++").unwrap();
     writeln!(out, ":").unwrap();
     writeln!(out, "    pop af").unwrap();
+    writeln!(out, "    push af ; superblock (zp),Y store: A stays resident").unwrap();
     let keep = state.x_b || state.y_c;
     if keep {
         writeln!(out, "    push bc ; superblock (zp),Y: keep cached X/Y").unwrap();
@@ -808,6 +809,7 @@ fn emit_indirect_y_store(out: &mut String, zp: u8, state: &mut TraceState, stats
     if keep {
         writeln!(out, "    pop bc").unwrap();
     }
+    writeln!(out, "    pop af").unwrap();
     writeln!(out, ":").unwrap();
 }
 
@@ -1134,6 +1136,10 @@ fn emit_fast_modify_memory(
     }
 }
 
+fn park_enabled() -> bool {
+    std::env::var("NES2GBC_STATE_PARK_A").map(|v| v != "0").unwrap_or(true)
+}
+
 fn indy_alu_enabled() -> bool {
     indy_enabled() && std::env::var("NES2GBC_STATE_INDY_ALU").map(|v| v != "0").unwrap_or(true)
 }
@@ -1190,7 +1196,15 @@ fn fast_op_supported(op: &IrOp) -> bool {
 fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut StateStats) {
     debug_assert!(fast_op_supported(op));
 
+    let park = state.a_live && state.a_dirty
+        && park_enabled()
+        && matches!(*op, IrOp::Inc(Register::X | Register::Y) | IrOp::Dec(Register::X | Register::Y));
+    if park {
+        writeln!(out, "    ld d, a ; superblock park A across INX/INY/DEX/DEY").unwrap();
+    }
+
     match *op {
+        _ if park => {}
         IrOp::SetFlag { .. }
         | IrOp::Load {
             dst: Register::X | Register::Y,
@@ -1255,13 +1269,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
         }
         IrOp::Store { src: Register::A, dst: Operand::IndirectIndexed(zp) } => {
             let _ = load_reg_to_a(out, Register::A, state, stats);
-            if state.a_dirty {
-                writeln!(out, "    ldh [nes_a], a ; superblock materialize A").unwrap();
-                state.a_dirty = false;
-                stats.a_materialized += 1;
-            }
             emit_indirect_y_store(out, zp, state, stats);
-            state.a_live = false;
         }
         IrOp::Load { dst, src } => {
             emit_operand_load(out, src, state, stats);
@@ -1308,6 +1316,9 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
                 Register::Sp => unreachable!(),
             }
             emit_update_nz(out);
+            if park {
+                writeln!(out, "    ld a, d ; superblock unpark A").unwrap();
+            }
         }
         IrOp::Logic {
             op,
