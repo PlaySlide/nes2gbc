@@ -819,6 +819,7 @@ fn emit_operand_load(
 ) {
     match src {
         Operand::Immediate(v) => writeln!(out, "    ld a, ${v:02X}").unwrap(),
+        Operand::IndirectIndexed(zp) => emit_indirect_y_load(out, zp, state, stats),
         Operand::ZeroPage(zp) => {
             writeln!(out, "    ld a, [${:04X}]", NES_RAM_BASE + zp as u16).unwrap();
         }
@@ -1133,6 +1134,10 @@ fn emit_fast_modify_memory(
     }
 }
 
+fn indy_alu_enabled() -> bool {
+    indy_enabled() && std::env::var("NES2GBC_STATE_INDY_ALU").map(|v| v != "0").unwrap_or(true)
+}
+
 fn indy_enabled() -> bool {
     std::env::var("NES2GBC_STATE_INDY").map(|v| v != "0").unwrap_or(true)
 }
@@ -1141,7 +1146,13 @@ fn fast_op_supported(op: &IrOp) -> bool {
     match *op {
         IrOp::SetFlag { .. } | IrOp::Nop => true,
         IrOp::Load { dst: Register::A, src: Operand::IndirectIndexed(_) }
-        | IrOp::Store { src: Register::A, dst: Operand::IndirectIndexed(_) } => indy_enabled(),
+        | IrOp::Store { src: Register::A, dst: Operand::IndirectIndexed(_) }
+        => indy_enabled(),
+        IrOp::Logic { rhs: Operand::IndirectIndexed(_), .. }
+        | IrOp::Arithmetic { rhs: Operand::IndirectIndexed(_), .. } => indy_alu_enabled(),
+        IrOp::Compare { reg, rhs: Operand::IndirectIndexed(_) } => {
+            reg != Register::Sp && indy_alu_enabled()
+        }
         IrOp::Load { dst, src } => dst != Register::Sp && fast_operand_supported(src),
         IrOp::Store { src, dst } => src != Register::Sp && fast_store_supported(dst),
         IrOp::Transfer { src, dst, .. } => src != Register::Sp && dst != Register::Sp,
@@ -1300,6 +1311,23 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
         }
         IrOp::Logic {
             op,
+            rhs: Operand::IndirectIndexed(zp),
+        } => {
+            ensure_a(out, state, stats);
+            writeln!(out, "    push af ; superblock (zp),Y logic lhs").unwrap();
+            emit_indirect_y_load(out, zp, state, stats);
+            writeln!(out, "    ld e, a").unwrap();
+            writeln!(out, "    pop af").unwrap();
+            match op {
+                LogicOp::And => writeln!(out, "    and e").unwrap(),
+                LogicOp::Ora => writeln!(out, "    or e").unwrap(),
+                LogicOp::Eor => writeln!(out, "    xor e").unwrap(),
+            }
+            write_a_resident(state, stats);
+            emit_update_nz(out);
+        }
+        IrOp::Logic {
+            op,
             rhs: Operand::Immediate(imm),
         } => {
             ensure_a(out, state, stats);
@@ -1315,8 +1343,15 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
             // Capture architectural A before operand/address work can use host A.
             // B/C remain reserved for resident X/Y; D holds the 6502 lhs.
             ensure_a(out, state, stats);
+            if let Operand::IndirectIndexed(zp) = rhs {
+                writeln!(out, "    push af ; superblock (zp),Y arithmetic lhs").unwrap();
+                emit_indirect_y_load(out, zp, state, stats);
+                writeln!(out, "    ld e, a ; superblock arithmetic RHS").unwrap();
+                writeln!(out, "    pop af").unwrap();
+            }
             writeln!(out, "    ld d, a ; superblock resident arithmetic lhs").unwrap();
             match rhs {
+                Operand::IndirectIndexed(_) => {}
                 Operand::Immediate(imm) => {
                     writeln!(out, "    ld e, ${imm:02X}").unwrap();
                 }
