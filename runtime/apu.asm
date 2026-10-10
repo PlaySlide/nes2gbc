@@ -36,13 +36,89 @@ nes_apu_sweep_div_p2:    ds 1
 nes_apu_sweep_reload_p2: ds 1
 ; Approximate NES frame-counter phase. 4-step uses 0..3, 5-step uses 0..4.
 nes_apu_frame_phase: ds 1
+nes_apu_tick_pending: ds 1 ; host VBlanks not yet run by nes_apu_drain_ticks
 
-SECTION "NES APU code", ROM0
+; ROM0 budget: the APU bridge lives in the fixed helper bank ($FF, shared
+; with the RAM interpreter / MMC1 helper); only these small shims stay in ROM0.
+; The host VBlank ISR must not switch ROM banks (it can interrupt a temporary
+; PRG data-bank read whose bank is not shadowed), so it only counts pending
+; host VBlanks; nes_apu_drain_ticks runs them from the NMI poll, where the
+; translated-code bank (nes_current_code_bank) is the mapped one.
+SECTION "NES APU fixed shims", ROM0
+; L = register low byte, E = value. Clobbers AF, BC, DE, HL.
+nes_apu_write:
+    ld a, $FF
+    ld [$2000], a
+    call nes_apu_write_banked
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    ret
+
+nes_apu_init:
+    ld a, $FF
+    ld [$2000], a
+    call nes_apu_init_banked
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    ret
+
+; Run the host VBlanks counted by the ISR. Preserves BC, DE, HL.
+nes_apu_drain_ticks:
+    ld a, [nes_apu_tick_pending]
+    and a
+    ret z
+    push bc
+    push de
+    push hl
+    ld a, $FF
+    ld [$2000], a
+.loop:
+    call nes_apu_frame_tick
+    ld hl, nes_apu_tick_pending
+    dec [hl]                ; single RMW: atomic against the ISR increment
+    jr nz, .loop
+    ld a, [nes_current_code_bank]
+    ld [$2000], a
+    pop hl
+    pop de
+    pop bc
+    ret
 
 ; ---------------------------------------------------------------------------
-nes_apu_init:
+nes_apu_read_status:
+    ; NES $4015 read bits 0-3 report whether each channel length counter is
+    ; non-zero, not whether its enable bit was last written as 1. DMC and IRQ
+    ; status are not implemented yet, so bits 4, 6, and 7 remain clear.
+    ld b, $00
+    ld a, [nes_apu_len_p1]
+    and a
+    jr z, .status_p2
+    set 0, b
+.status_p2:
+    ld a, [nes_apu_len_p2]
+    and a
+    jr z, .status_tri
+    set 1, b
+.status_tri:
+    ld a, [nes_apu_len_tri]
+    and a
+    jr z, .status_noi
+    set 2, b
+.status_noi:
+    ld a, [nes_apu_len_noi]
+    and a
+    jr z, .status_done
+    set 3, b
+.status_done:
+    ld a, b
+    ret
+
+SECTION "NES APU code", ROMX, BANK[255]
+
+; ---------------------------------------------------------------------------
+nes_apu_init_banked:
     ld hl, nes_apu_regs
-    ld b, $18 + 12         ; register mirror + APU architectural state
+    ld b, $18 + 13         ; register mirror + APU architectural state + tick count
     xor a
 .clear:
     ld [hli], a
@@ -82,36 +158,7 @@ nes_apu_init:
     db $FE, $DC, $BA, $98, $76, $54, $32, $10
 
 ; ---------------------------------------------------------------------------
-nes_apu_read_status:
-    ; NES $4015 read bits 0-3 report whether each channel length counter is
-    ; non-zero, not whether its enable bit was last written as 1. DMC and IRQ
-    ; status are not implemented yet, so bits 4, 6, and 7 remain clear.
-    ld b, $00
-    ld a, [nes_apu_len_p1]
-    and a
-    jr z, .status_p2
-    set 0, b
-.status_p2:
-    ld a, [nes_apu_len_p2]
-    and a
-    jr z, .status_tri
-    set 1, b
-.status_tri:
-    ld a, [nes_apu_len_tri]
-    and a
-    jr z, .status_noi
-    set 2, b
-.status_noi:
-    ld a, [nes_apu_len_noi]
-    and a
-    jr z, .status_done
-    set 3, b
-.status_done:
-    ld a, b
-    ret
-
-; ---------------------------------------------------------------------------
-nes_apu_write:
+nes_apu_write_banked:
     ld a, l
     cp $18
     ret nc

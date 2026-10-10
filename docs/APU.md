@@ -60,3 +60,7 @@ Supported values are `1`, `2`, and `4`; default is `1`.
 - GBC hardware envelopes are only an approximation of the NES envelope generator.
 - Noise uses the GBC LFSR, so period/short-mode behavior cannot be cycle-identical to the NES.
 - There is no host-side audio buffering/resampling beyond GBC hardware.
+
+## Code placement
+
+The APU bridge lives in the fixed helper ROMX bank ($FF, alongside the RAM interpreter and MMC1 helper) so APU=1 builds fit ROM0 for banked (mapper 1/2) games. ROM0 keeps only small shims: `nes_apu_write` / `nes_apu_init` map bank $FF, call the banked code, and restore `nes_current_code_bank`; `nes_apu_read_status` stays in ROM0 (no bank switch). The host VBlank ISR never switches ROM banks, so it only counts pending host VBlanks (`nes_apu_tick_pending`); `nes_poll_nmi_hl` drains them through `nes_apu_drain_ticks`, so frame-sequencer timing is still per host VBlank, just applied at the next NMI poll.

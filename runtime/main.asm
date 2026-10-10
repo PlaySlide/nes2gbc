@@ -123,7 +123,13 @@ IF DEF(NES2GBC_DEBUG_TRACE)
     call nes_diag_snapshot_frame
 ENDC
 IF DEF(NES2GBC_APU)
-    call nes_apu_frame_tick
+    ; Count only: the ISR must not switch ROM banks (APU code is banked).
+    ; nes_poll_nmi_hl runs the pending sequencer ticks.
+    ld a, [nes_apu_tick_pending]
+    inc a
+    jr z, .apu_tick_saturated
+    ld [nes_apu_tick_pending], a
+.apu_tick_saturated:
 ENDC
 
 IF !DEF(NES2GBC_NO_PACING)
