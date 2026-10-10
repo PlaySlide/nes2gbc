@@ -165,5 +165,64 @@ if repl:
         else: nl.append(l)
     out = nl
 print(f"host-z-branch: {n2} compare+carry branch(es) reordered")
+
+# Carry branches: the capture instructions keep host C, so a later
+# "ldh a, [nes_c_shadow]; and a; j? z|nz" can test host C directly.
+#   sbc a ; inc a            -> shadow = !C   (nz -> nc, z -> c)
+#   ld a, $00 ; jr c, :+ ; inc a ; :   -> same
+#   sbc a (alone)            -> shadow = C?$FF:0 (nz -> c, z -> nc)
+L = out
+n3 = 0
+kill3 = {}
+for k in range(len(L) if os.environ.get("NES2GBC_HOST_C_BRANCH", "1") != "0" else 0):
+    if ins(L[k]) != "and a": continue
+    m = k + 1
+    while m < len(L) and ins(L[m]) == "": m += 1
+    mb = re.match(r"^(jr|jp) (n?z), (.*)$", ins(L[m])) if m < len(L) else None
+    if not mb: continue
+    j = k - 1
+    while j >= 0 and ins(L[j]) == "" and "already in A removed: ldh a, [nes_c_shadow]" not in L[j]: j -= 1
+    if j >= 0 and ins(L[j]) == "ldh a, [nes_c_shadow]": reload = j
+    elif j >= 0 and "already in A removed: ldh a, [nes_c_shadow]" in L[j]: reload = -1
+    else: continue
+    p = j - 1; st = None
+    while p >= 0:
+        s_ = ins(L[p])
+        if s_ == "ldh [nes_c_shadow], a": st = p; break
+        if L[p].strip().endswith(":") and L[p].strip() != ":": break
+        if L[p].strip() == ":": break
+        if not flag_safe(s_): break
+        p -= 1
+    if st is None: continue
+    prev = []
+    q = st - 1
+    while q >= 0 and len(prev) < 4:
+        if L[q].strip() == ":": prev.append(":")
+        elif ins(L[q]): prev.append(ins(L[q]))
+        elif re.match(r"^\S+:", L[q]): break
+        q -= 1
+    prev = prev[::-1]
+    inv = None
+    if prev[-2:] == ["sbc a", "inc a"]: inv = True
+    elif prev[-4:] == ["ld a, $00", "jr c, :+", "inc a", ":"]: inv = True
+    elif prev[-1:] == ["sbc a"]: inv = False
+    if inv is None: continue
+    if not a_dead_after(L, m + 1): continue
+    if mb.group(3) == ":+":
+        t = m + 1
+        while t < len(L) and L[t].strip() != ":":
+            if re.match(r"^\S+:", L[t]): t = len(L); break
+            t += 1
+        if not (t < len(L) and a_dead_after(L, t + 1)): continue
+    if n3 >= int(os.environ.get("NES2GBC_HOST_C_LIMIT", "999999")): continue
+    cond = mb.group(2)
+    newc = {("nz", True): "nc", ("z", True): "c", ("nz", False): "c", ("z", False): "nc"}[(cond, inv)]
+    if reload >= 0: kill3[reload] = "    ; host-C branch: " + L[reload].strip()
+    kill3[k] = "    ; host-C branch: and a"
+    kill3[m] = f"    {mb.group(1)} {newc}, {mb.group(3)} ; host-C branch"
+    n3 += 1
+for x, v in kill3.items(): L[x] = v
+out = L
+print(f"host-z-branch: {n3} carry branch(es) use the live host C flag")
 open(path, "w").write("\n".join(out))
 print(f"host-z-branch: {n} branch(es) use the live host Z flag")
