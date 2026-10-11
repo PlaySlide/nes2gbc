@@ -451,6 +451,12 @@ fn main() -> ExitCode {
             if let Some(ov) = ram_overlay.as_ref() {
                 dump("W RAM\n".to_string(), &mut ov.blocks.values());
             }
+            // Overlay image (expected PRG-RAM contents), so return-set analysis
+            // can decode RAM continuations that have no block.
+            if let Some(ov) = ram_overlay.as_ref() {
+                let hex: String = ov.bytes.iter().map(|b| format!("{b:02X}")).collect();
+                views_txt.push_str(&format!("O {:04X} {hex}\n", ov.dst));
+            }
             let views_path = parent.join(format!("{stem}.cfgviews.txt"));
             if let Err(err) = fs::write(&views_path, views_txt) {
                 eprintln!("error writing {}: {err}", views_path.display());
