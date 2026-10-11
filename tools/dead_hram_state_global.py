@@ -63,7 +63,12 @@ def main(path: str) -> None:
     n = len(lines)
     codes = [l.split(";", 1)[0].strip() for l in lines]
     cfg = p.with_name(p.stem + ".cfg.txt")
-    rsets = return_sets(cfg)[0] if cfg.exists() else {}
+    # The CFG dump of a banked (mapper 1/2) build is the bank-0 view only: a
+    # fixed-bank subroutine's return set misses JSR continuations in other
+    # switchable banks (e.g. Zelda bank 5 $8038 JSR $E5F7), so it is not a
+    # sound return set there. Use proven sets only for single-view programs.
+    rsets = (return_sets(cfg)[0] if cfg.exists()
+             and not any(l.startswith('SECTION "NES mapper') for l in lines) else {})
     # 6502 instruction whose translation a line belongs to (last comment above it in the section)
     insn_of = [None] * n
     last = None
