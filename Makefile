@@ -159,6 +159,11 @@ generate:
 			python3 tools/skip_jp_collapse.py runtime/generated.asm; \
 			python3 tools/small_peepholes.py runtime/generated.asm; \
 			python3 tools/flag_dead_peepholes.py runtime/generated.asm; \
+			if [ "$$NES2GBC_FINAL_DEAD_HRAM" != "0" ]; then \
+				python3 tools/dead_hram_state_global.py runtime/generated.asm; \
+				python3 tools/dead_overflow_global.py runtime/generated.asm; \
+				python3 tools/dead_reg_writes.py runtime/generated.asm; \
+			fi; \
 		fi; \
 		# TRACE and partial POSTPASS_THROUGH builds also expand generated blocks. \
 		# Normalize short/long NES-label jumps after the final selected pass so \
