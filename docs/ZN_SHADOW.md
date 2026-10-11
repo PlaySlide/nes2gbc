@@ -168,3 +168,53 @@ two-byte form; only the ones that *emit* N reads need step 2 changes.
 | `specialize_sprite0_poll.py` | 0 | 2 | 2 |
 | `store_reload.py` | 1 | 1 | 3 |
 | `virtualize_sprite0_waits.py` | 0 | 2 | 2 |
+
+## Findings from the implementation attempt (session 2)
+
+Static scan of the final asm at 158a9f1 (`/tmp/sweep/znscan.py`):
+
+| game | paired Z+N stores | lone N stores | N reads | inline BIT split pairs | BIT/PLP helper calls |
+|---|---|---|---|---|---|
+| Mega Man | 739 | 104 | 24 | 1 | 18 |
+| Zelda | 2540 | 206 | 44 | 7 | 17 |
+| Contra | 2273 | 86 | 124 | 2 | 10 |
+| Castlevania | 2316 | 25 | 98 | 4 | 2 |
+| SMB | 60 | 155 | 50 | 0 | 0 |
+
+Blocker: the region analysis does not close in practice.
+
+* PLP sites are followed by RTS (`call nes_set_p_from_a` then the inline RTS
+  pop and `jp nes_jump_known_hl_a*` / `nes_dispatch_hl`), so their region
+  escapes through a dynamic return on the first instruction.
+* All four banked games link the RAM interpreter (`RAM_INTERP`). Its exits
+  back to translated code are dynamic too. Any BIT/PLP it executes is a rare
+  writer whose region starts at an arbitrary dispatch target.
+* Without interprocedural return sets (all RTS targets, including the
+  PHA/PHA/RTS jump-table idiom used by Zelda and Mega Man), every banked game
+  would have to abort to the two-byte form. SMB is the only build that
+  qualifies, and it has just 60 paired stores, so there is nothing to gain.
+
+The shared-byte scheme therefore needs the same interprocedural machinery as
+the alternative below, plus a format change. The alternative gets most of
+the win without changing the format.
+
+## Recommended next approach: interprocedural N dead-store elimination
+
+N is read rarely (24-124 static BMI/BPL sites per game; PHP/BRK; NMI entry
+only through the handler's stacked P, which the poll-aware liveness already
+models). Most paired N stores are dead globally. They survive only because
+liveness stops at JSR/RTS/dispatch. `tools/dead_global_zn.py` exists but is
+not in the pipeline. It treats JSR as a reader, treats RTS as a dynamic exit,
+and only matches `nes_XXXX` (not banked `nes_mN_bXX_YYYY`) labels.
+
+Plan:
+1. Return-site sets per RTS: JSR return sites of every caller that reaches it,
+   plus RTS-trick targets (PHA/PHA/RTS tables) from the existing
+   `rts_return_sets` analysis. Unknown -> live.
+2. JSR = edge into the callee entry (not a reader); RTS live-out = union of
+   live-in at its return sites; indirect JMP / dispatch with unresolved
+   targets -> live.
+3. Extend to banked labels, run after `dead_hram_state_global.py`, and drop
+   only `ldh [nes_n_shadow], a` (Z can follow later).
+4. Same verification list as above. No runtime, reader or interpreter change,
+   so it is safe to land incrementally.
