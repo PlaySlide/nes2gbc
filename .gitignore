@@ -8,3 +8,4 @@
 *.sym
 *.map
 .DS_Store
+runtime/generated.cfgviews.txt

@@ -411,6 +411,52 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // Banked builds: every PRG view (switchable bank + fixed bank) and the
+        // PRG-RAM overlay, so return-set analysis sees callers from all banks.
+        if !switch_lo_views.is_empty() {
+            let mut views_txt = String::new();
+            views_txt.push_str(&format!("V {:04X} {:04X} {:04X}\n", vectors.reset, vectors.nmi, vectors.irq_brk));
+            let mut dump = |tag: String, blocks: &mut dyn Iterator<Item = &cfg::BasicBlock>| {
+                views_txt.push_str(&tag);
+                for block in blocks {
+                    views_txt.push_str(&format!("B {:04X}\n", block.start));
+                    for ins in &block.instructions {
+                        let operand = match ins.def.mode {
+                            cpu6502::AddressingMode::Absolute | cpu6502::AddressingMode::AbsoluteX
+                            | cpu6502::AddressingMode::AbsoluteY | cpu6502::AddressingMode::Indirect =>
+                                format!(" {:04X}", ins.operand),
+                            _ => String::new(),
+                        };
+                        views_txt.push_str(&format!("I {:04X} {:?} {:?}{operand}\n", ins.pc, ins.def.mnemonic, ins.def.mode));
+                    }
+                    for edge in &block.edges {
+                        let kind = match edge.kind {
+                            cfg::EdgeKind::Fallthrough => "fall",
+                            cfg::EdgeKind::BranchTaken => "branch",
+                            cfg::EdgeKind::Jump => "jump",
+                            cfg::EdgeKind::Call => "call",
+                            cfg::EdgeKind::CallReturn => "ret",
+                            cfg::EdgeKind::IndirectJump { .. } => "ind",
+                        };
+                        match edge.target {
+                            Some(t) => views_txt.push_str(&format!("E {kind} {t:04X}\n")),
+                            None => views_txt.push_str(&format!("E {kind} -\n")),
+                        }
+                    }
+                }
+            };
+            for (bank, g) in &switch_lo_views {
+                dump(format!("W {bank:02X}\n"), &mut g.blocks.values());
+            }
+            if let Some(ov) = ram_overlay.as_ref() {
+                dump("W RAM\n".to_string(), &mut ov.blocks.values());
+            }
+            let views_path = parent.join(format!("{stem}.cfgviews.txt"));
+            if let Err(err) = fs::write(&views_path, views_txt) {
+                eprintln!("error writing {}: {err}", views_path.display());
+                return ExitCode::FAILURE;
+            }
+        }
         let cfg_path = parent.join(format!("{stem}.cfg.txt"));
         if let Err(err) = fs::write(&cfg_path, cfg_txt) {
             eprintln!("error writing {}: {err}", cfg_path.display());

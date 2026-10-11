@@ -28,7 +28,7 @@ import bisect, re, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rts_return_sets import return_sets  # noqa: E402
+from rts_return_sets import return_sets, return_sets_banked  # noqa: E402
 
 INSN_RE = re.compile(r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ")
 
@@ -63,12 +63,19 @@ def main(path: str) -> None:
     n = len(lines)
     codes = [l.split(";", 1)[0].strip() for l in lines]
     cfg = p.with_name(p.stem + ".cfg.txt")
-    # The CFG dump of a banked (mapper 1/2) build is the bank-0 view only: a
-    # fixed-bank subroutine's return set misses JSR continuations in other
-    # switchable banks (e.g. Zelda bank 5 $8038 JSR $E5F7), so it is not a
-    # sound return set there. Use proven sets only for single-view programs.
-    rsets = (return_sets(cfg)[0] if cfg.exists()
-             and not any(l.startswith('SECTION "NES mapper') for l in lines) else {})
+    # Return sets: single-view programs use the CFG dump; banked builds use
+    # the all-views dump (<stem>.cfgviews.txt, every PRG bank + RAM overlay)
+    # and only when its analysis is complete (see rts_return_sets).
+    banked_build = any(l.startswith('SECTION "NES mapper') for l in lines)
+    views = p.with_name(p.stem + ".cfgviews.txt")
+    if not banked_build:
+        rsets = return_sets(cfg)[0] if cfg.exists() else {}
+    elif views.exists() and __import__("os").environ.get("NES2GBC_BANKED_RTS_SETS", "1") != "0":
+        rsets, rinfo = return_sets_banked(views)
+        if not rinfo["complete"]:
+            rsets = {}
+    else:
+        rsets = {}
     # 6502 instruction whose translation a line belongs to (last comment above it in the section)
     insn_of = [None] * n
     last = None
@@ -190,6 +197,11 @@ def main(path: str) -> None:
             return None
         return t
 
+    cont_variants = {}
+    for nm in glob_at:
+        mv = re.fullmatch(r"nes_m\d+_b[0-9A-Fa-f]+_([0-9A-F]{4})", nm)
+        if mv:
+            cont_variants.setdefault(int(mv.group(1), 16), []).append(nm)
     succ = [()] * n
     use = [0] * n
     kill = [0] * n
@@ -273,9 +285,21 @@ def main(path: str) -> None:
                     succ[i] = (t,)
                 continue
             t = resolve(tgt, i) if tgt != "hl" else None
-            if t is None and tgt == "nes_dispatch_hl" and not cond and not banked[i] and insn_of[i] and insn_of[i][1] == "Rts":
+            if t is None and tgt == "nes_dispatch_hl" and not cond and (banked_build or not banked[i]) and insn_of[i] and insn_of[i][1] == "Rts":
                 conts = rsets.get(insn_of[i][0])
-                ts = [resolve("nes_%04X" % c, i) for c in sorted(conts)] if conts else None
+                if conts and banked_build:
+                    # Generic label (bank trampoline incl. interpreter fallback)
+                    # must exist; add every bank variant of the PC too.
+                    ts = []
+                    for c in sorted(conts):
+                        g = resolve("nes_%04X" % c, i)
+                        if g is None:
+                            ts = None
+                            break
+                        ts.append(g)
+                        ts.extend(x for x in (glob_at.get(nm) for nm in cont_variants.get(c, ())) if x is not None and in_code[x])
+                else:
+                    ts = [resolve("nes_%04X" % c, i) for c in sorted(conts)] if conts else None
                 if ts and all(x is not None for x in ts) and private_tail(i):
                     succ[i] = tuple(ts)
                     rts_edges += 1
