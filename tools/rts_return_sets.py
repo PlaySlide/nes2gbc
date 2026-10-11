@@ -138,6 +138,9 @@ def return_sets(path):
 
 
 
+_LAST_MAPPER = None
+
+
 def load_views(path):
     """Parse <stem>.cfgviews.txt: one section per PRG view ('W bb') plus the
     PRG-RAM overlay ('W RAM'). Nodes are (kind, pc): ('F', pc) for the fixed
@@ -151,6 +154,9 @@ def load_views(path):
             continue
         if f[0] == "V":
             vectors = [int(x, 16) for x in f[1:]]
+        elif f[0] == "M":
+            global _LAST_MAPPER
+            _LAST_MAPPER = int(f[1])
         elif f[0] == "O":
             nodes[("O", int(f[1], 16))] = {"start": int(f[1], 16), "ins": [], "edges": [],
                                            "img": bytes.fromhex(f[2]) if len(f) > 2 else b""}
@@ -309,6 +315,9 @@ def synth_nodes(path, nodes):
             cands = [("R", t, rd_ram)] if rd_ram(t) is not None else []
         elif t >= 0xC000:
             cands = [("F", t, rd_bank(nb - 1))] if prg else []
+        elif src[0] not in ("F", "R") and not _may_switch(nodes[src]) and any(
+                k3 in ("fall", "branch", "jump") and t3 == t for k3, t3 in nodes[src]["edges"]):
+            cands = [(src[0], t, rd_bank(src[0]))] if prg else []
         else:
             cands = [(bk, t, rd_bank(bk)) for bk in range(nb)] if prg else []
         if not cands or any((c[0], t) in nodes for c in cands):
@@ -369,7 +378,7 @@ def trap_conts(path, nodes, banks):
     return out
 
 
-def return_sets_banked(path):
+def return_sets_banked(path, track=True):
     """Return sets for banked builds over every PRG view and the RAM overlay.
 
     Bank switching: a low-window ($8000-$BFFF) successor stays in the source
@@ -397,7 +406,10 @@ def return_sets_banked(path):
     stack unbalanced when it hands control to translated code; no code runs
     from $2000-$5FFF (register space / open bus; NES2GBC_RTS_IO_CALLS=1
     turns that off)."""
+    global _LAST_MAPPER
+    _LAST_MAPPER = None
     vectors, nodes = load_views(path)
+    mapper = _LAST_MAPPER
     banks = sorted({k for k, _ in nodes if k not in ("F", "R", "O")})
     # Continuations that fault when entered: a JSR whose return lands there
     # never resumes translated or interpreted code, so it contributes no
@@ -420,17 +432,84 @@ def return_sets_banked(path):
         if t < 0x8000:
             k = ("R", t)
             return [k] if k in nodes else None
-        if src_key[0] not in ("F", "R") and kind in ("fall", "branch", "jump") and not _may_switch(src):
+        if src_key[0] not in ("F", "R") and not _may_switch(src) and (
+                kind in ("fall", "branch", "jump", "call")
+                or kind in ("ret", "ind") and _keeps_bank(src_key, src)):
             k = (src_key[0], t)
-            if k in nodes:
-                return [k]
+            return [k] if k in nodes else None
         ks = [(b, t) for b in banks if (b, t) in nodes]
         return ks or None
+
+    # Callees that never change the PRG bank (no mapper store anywhere in
+    # their body or transitive callees, no dynamic transfer): a JSR to them
+    # from banked code returns to the same bank. Iterated to a fixpoint since
+    # callee bodies are resolved with the current summary.
+    switching = set()
+    sw_why = {}
+    disp = {t for b in nodes.values() if any(k == "ind" for k, _ in b["edges"])
+            for k, t in b["edges"] if k == "call"}
+
+    def _keeps_bank(src_key, src):
+        for k, t in src["edges"]:
+            if k != "call":
+                continue
+            ks = resolve(src_key, src, "call", t)
+            if not ks or any(x in switching for x in ks):
+                return False
+        return True
+
+    def _switches(e):
+        seen = {e}
+        work = [e]
+        while work:
+            s_ = work.pop()
+            b = nodes[s_]
+            if _may_switch(b) or any(m in BAD for _, m, _, _ in b["ins"]):
+                return (sw_why.__setitem__(e, (s_, 7)) or True)
+            for k, t in b["edges"]:
+                if k == "call":
+                    ks = resolve(s_, b, k, t)
+                    if not ks:
+                        if t in dead or (0x2000 <= t < 0x6000 and not io_code):
+                            continue
+                        return (sw_why.__setitem__(e, (s_, 14)) or True)
+                    if any(x in switching for x in ks):
+                        return (sw_why.__setitem__(e, (s_, 16)) or True)
+                    continue
+                if k not in INTRA:
+                    continue
+                if k == "ind" and e[1] in disp and any(m in ("Pla",) for _, m, _, _ in nodes[e]["ins"] + b["ins"]):
+                    continue          # inline dispatcher: targets are on the calling block
+                if t is None:
+                    return (sw_why.__setitem__(e, (s_, 23)) or True)
+                if t in dead:
+                    continue
+                ks = resolve(s_, b, k, t)
+                if ks is None:
+                    if 0x2000 <= t < 0x6000 and not io_code:
+                        continue
+                    return (sw_why.__setitem__(e, (s_, 30)) or True)
+                for x in ks:
+                    if x not in seen:
+                        seen.add(x)
+                        work.append(x)
+        return False
+    callees = set()
+    for key, b in nodes.items():
+        for k, t in b["edges"]:
+            if k == "call":
+                callees.update(resolve(key, b, "call", t) or [])
+    while True:
+        new = {e for e in callees if e not in switching and _switches(e)}
+        if not new:
+            break
+        switching |= new
 
     conts = collections.defaultdict(set)
     allconts = set()
     dyn = set()
     dsrc = []
+    gn = []
     inline_targets = set()
     for key, b in nodes.items():
         call = [t for k, t in b["edges"] if k == "call"]
@@ -459,15 +538,134 @@ def return_sets_banked(path):
     dynamic = {("F", v) for v in vectors if ("F", v) in nodes}
     rts = {k for k, b in nodes.items() if b["ins"] and b["ins"][-1][1] == "Rts"}
 
+    # PRG bank tracking through fixed-bank / RAM code: a walk state is
+    # (node, bank) where bank is the switchable bank known to be mapped at
+    # $8000 (None: unknown). Banked nodes always run in their own bank.
+    # Known after `LDA #k; JSR <MMC1 serial PRG write of A>` (five
+    # STA $E000-$FFFF / LSR A, RTS) and, on UxROM, `STA abs>=$8000` of a
+    # constant register. Any other mapper store, or a callee that may
+    # switch, makes it unknown.
+    nbanks = len(banks)
+    bmask = (1 << max(0, (max(banks) if banks else 0).bit_length())) - 1
+
+    def _serial(k):
+        b = nodes.get(k)
+        if not b or b["edges"] or not b["ins"] or b["ins"][-1][1] != "Rts":
+            return False
+        body = b["ins"][:-1]
+        sts = [x for x in body if x[1] == "Sta"]
+        return (mapper == 1 and len(sts) == 5 and all(x[2] == "Absolute" and x[3] is not None and x[3] >= 0xE000 for x in sts)
+                and all(x[1] == "Sta" or (x[1] == "Lsr" and x[2] == "Accumulator") for x in body))
+    serial = {k for k in nodes if k[0] == "F" and _serial(k)}
+
+    def bank_after(key, b, bank):
+        if not track:
+            return (key[0] if key[0] not in ("F", "R") else None), None
+        if key[0] not in ("F", "R"):
+            bank = key[0]
+        regs = {"a": None, "x": None, "y": None}
+        for _, m, mode, op in b["ins"]:
+            if m in ("Lda", "Ldx", "Ldy"):
+                r = m[2].lower()
+                regs[r] = ("imm", key, _) if mode == "Immediate" else None
+            elif m in STORES and (op is None or op >= 0x8000) and mode not in ("ZeroPage", "ZeroPageX", "ZeroPageY"):
+                bank = None
+                if mapper == 2 and mode == "Absolute" and op is not None and regs[m[2].lower()] is not None:
+                    v = _imm(regs[m[2].lower()])
+                    if v is not None:
+                        bank = v & bmask
+            elif m in ("Tax", "Tay"):
+                regs[m[2].lower()] = regs["a"]
+            elif m in ("Txa", "Tya"):
+                regs["a"] = regs[m[1].lower()]
+            elif m in ("Pla", "Adc", "Sbc", "And", "Ora", "Eor") or (m in ("Asl", "Lsr", "Rol", "Ror") and mode == "Accumulator"):
+                regs["a"] = None
+            elif m in ("Inx", "Dex", "Tsx"):
+                regs["x"] = None
+            elif m in ("Iny", "Dey"):
+                regs["y"] = None
+        return bank, regs["a"]
+
+    def _imm(tag):
+        _, key, pc = tag
+        prgp = imm_src
+        return prgp(key, pc)
+    _prg = Path(str(path).replace(".cfgviews.txt", ".prg.bin"))
+    _prgb = _prg.read_bytes() if _prg.exists() else None
+
+    def imm_src(key, pc):
+        if _prgb is None:
+            return None
+        nb = len(_prgb) // 0x4000
+        if pc >= 0xC000:
+            return _prgb[(nb - 1) * 0x4000 + pc - 0xC000 + 1]
+        if pc >= 0x8000 and key[0] not in ("F", "R"):
+            return _prgb[key[0] * 0x4000 + pc - 0x8000 + 1]
+        img = [v["img"] for k, v in nodes.items() if k[0] == "O" and k[1] <= pc + 1 < k[1] + len(v["img"])]
+        return img[0][pc + 1 - [k for k in nodes if k[0] == "O" and nodes[k]["img"] is img[0]][0][1]] if img else None
+
+    def succ_states(key, b, bank_in):
+        """[(kind, target, [(node, bank)] or None)] for INTRA edges."""
+        bank, a = bank_after(key, b, bank_in)
+        calls = [t for k, t in b["edges"] if k == "call"]
+        after_call = bank
+        for t in calls:
+            ks = resolve2(key, b, "call", t, bank)
+            if ks and all(k in serial for k in ks) and a is not None and _imm(a) is not None:
+                after_call = _imm(a) & bmask
+            elif not ks or any(k in switching for k in ks):
+                after_call = None
+        out = []
+        for k, t in b["edges"]:
+            if k not in INTRA:
+                continue
+            if t is None:
+                out.append((k, t, None))
+                continue
+            bk = after_call if k in ("ret", "ind") else bank
+            ks = resolve2(key, b, k, t, bk)
+            out.append((k, t, None if ks is None else [(x, x[0] if x[0] not in ("F", "R") else bk) for x in ks]))
+        return out
+
+    lazy_dead = set()
+
+    def resolve2(key, b, kind, t, bank):
+        if 0x8000 <= t < 0xC000 and bank is None and key[0] not in ("F", "R") and not _may_switch(b) and kind in ("fall", "branch", "jump", "call"):
+            bank = key[0]
+        if 0x8000 <= t < 0xC000 and bank is not None:
+            k = (bank, t)
+            if track and k not in nodes and k not in lazy_dead and _prgb is not None and bank * 0x4000 < len(_prgb):
+                # Untranslated code in a known bank: decode it for the walk.
+                def rd(a, bk=bank):
+                    if 0x8000 <= a < 0xC000:
+                        return _prgb[bk * 0x4000 + a - 0x8000]
+                    if a >= 0xC000:
+                        return _prgb[len(_prgb) - 0x4000 + a - 0xC000]
+                    return None
+                r = _decode_block(rd, t, lambda q: (bank, q) in nodes)
+                if r is None:
+                    lazy_dead.add(k)
+                else:
+                    nodes[k] = {"start": t, "ins": r[0], "edges": r[1], "view": bank, "synth": True}
+                    if r[0] and r[0][-1][1] == "Rts":
+                        rts.add(k)
+            if k in lazy_dead:
+                return []
+            return [k] if k in nodes else None
+        return resolve(key, b, kind, t)
+
     def walk(e):
         """Yield (rts_key, depth) and record dynamic transfers; returns bad flag."""
+        st0 = (e, e[0] if e[0] not in ("F", "R") else None)
         depth = {e: 0}
-        work = [e]
+        seen = {st0}
+        work = [st0]
         bad = False
         hits = []
         dyn_d = []
         while work:
-            s_ = work.pop()
+            s0 = work.pop()
+            s_, bank_in = s0
             b = nodes[s_]
             d = depth[s_]
             for _, m, _, _ in b["ins"]:
@@ -476,30 +674,29 @@ def return_sets_banked(path):
                 d += PUSH.get(m, 0)
             if s_ in rts:
                 hits.append((s_, d))
-            for k, t in b["edges"]:
-                if k not in INTRA:
-                    continue
+            for k, t, sts in succ_states(s_, b, bank_in):
                 if t is not None and t in dead:
                     continue                 # faults when executed
                 if t is None:
                     dyn_d.append((d, s_, "ind"))          # unresolved indirect jump
                     continue
-                ks = resolve(s_, b, k, t)
-                if ks is None:
+                if sts is None:
                     dyn_d.append((d, s_, (k, t)))          # untranslated target: interpreter
                     continue
-                for tk in ks:
+                for st in sts:
+                    tk = st[0]
                     if k == "ind" and d < 0:
                         if d == -2 and tk in inline_targets:
                             continue
                         bad = True
                         continue
-                    if tk in depth:
-                        if depth[tk] != d:
-                            bad = True
+                    if tk in depth and depth[tk] != d:
+                        bad = True
                         continue
                     depth[tk] = d
-                    work.append(tk)
+                    if st not in seen:
+                        seen.add(st)
+                        work.append(st)
         return hits, dyn_d, bad
 
     ctx = collections.defaultdict(set)
@@ -522,7 +719,7 @@ def return_sets_banked(path):
             else:
                 global_none = True
     # Unknown handler starts: every node at relative depth 0.
-    for st in nodes:
+    for st in list(nodes):
         hits, dyn_d, bad = walk(st)
         for s_, d in hits:
             if d != 0 or bad:
@@ -530,6 +727,11 @@ def return_sets_banked(path):
         if any(d != 0 for d, _, _ in dyn_d):
             # a handler that pushes/pops before another dynamic transfer
             global_none = True
+            gn.append((st, [x for x in dyn_d if x[0] != 0][:2]))
+    if global_none and track:
+        # Bank tracking reaches more (decoded) code; when that makes the
+        # analysis incomplete, fall back to the untracked over-approximation.
+        return return_sets_banked(path, track=False)
     out = {}
     for s_ in rts:
         pc = nodes[s_]["ins"][-1][0]
@@ -543,5 +745,5 @@ def return_sets_banked(path):
             res = None if (out[pc] is None or res is None) else (out[pc] | res)
         out[pc] = res
     info = {"traps": len(traps), "global_none": global_none, "dyn": len(dyn), "allconts": len(allconts),
-            "complete": not global_none, "dyn_src": dsrc}
+            "complete": not global_none, "dyn_src": dsrc, "gn": gn, "sw_why": sw_why, "switching": switching, "_resolve": resolve, "_nodes": nodes}
     return out, info

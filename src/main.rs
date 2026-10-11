@@ -416,6 +416,7 @@ fn main() -> ExitCode {
         if !switch_lo_views.is_empty() {
             let mut views_txt = String::new();
             views_txt.push_str(&format!("V {:04X} {:04X} {:04X}\n", vectors.reset, vectors.nmi, vectors.irq_brk));
+            views_txt.push_str(&format!("M {}\n", cart.mapper));
             let mut dump = |tag: String, blocks: &mut dyn Iterator<Item = &cfg::BasicBlock>| {
                 views_txt.push_str(&tag);
                 for block in blocks {
