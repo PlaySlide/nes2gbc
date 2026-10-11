@@ -66,6 +66,44 @@ fn assign_bank(
     *used += cost;
 }
 
+/// Backward edges (S->T, T<=S) whose target can reach S again inside the
+/// view CFG. A backward edge on no cycle cannot repeat without passing a
+/// polled point (vector, dynamic entry, or another cyclic back target).
+/// None (poll every backward target) under NES2GBC_POLL_ALL_BACK.
+fn cyclic_back_targets(graph: &ControlFlowGraph) -> Option<BTreeSet<(u16, u16)>> {
+    if std::env::var("NES2GBC_POLL_ALL_BACK").is_ok() {
+        return None;
+    }
+    let mut out = BTreeSet::new();
+    for (&start, block) in &graph.blocks {
+        for t in block.edges.iter().filter_map(|e| e.target) {
+            if t > start {
+                continue;
+            }
+            let mut seen = BTreeSet::new();
+            let mut stack = vec![t];
+            let mut hit = false;
+            while let Some(pc) = stack.pop() {
+                if pc == start { hit = true; break; }
+                if !seen.insert(pc) { continue; }
+                match graph.blocks.get(&pc) {
+                    Some(b) => {
+                        for e in &b.edges {
+                            match e.target { Some(x) => stack.push(x), None => { hit = true; } }
+                        }
+                        let returns = b.instructions.last().map_or(false, |i| matches!(i.def.mnemonic, crate::cpu6502::Mnemonic::Rts | crate::cpu6502::Mnemonic::Rti));
+                        if b.edges.is_empty() && !returns { hit = true; }
+                    }
+                    None => { hit = true; }
+                }
+                if hit { break; }
+            }
+            if hit { out.insert((start, t)); }
+        }
+    }
+    Some(out)
+}
+
 fn poll_points(graph: &ControlFlowGraph) -> BTreeSet<u16> {
     let mut points = BTreeSet::new();
     for &entry in &graph.entry_points {
@@ -580,7 +618,7 @@ pub fn emit_mapper2_cfgs(
     let mut fixed_polls = BTreeSet::new();
     let mut banked_polls = BTreeSet::new();
 
-    // Fixed-bank ($C000+) poll points mirror the NROM rule (vectors, PHA
+    // Poll points mirror the NROM rule in every view (vectors, PHA
     // continuations, harvested jump-table targets, backward-edge targets).
     // Every fixed block is a discovery seed in every view, so the plain
     // entry-point rule would poll at every fixed block.
@@ -592,14 +630,18 @@ pub fn emit_mapper2_cfgs(
         if !poll_all_fixed {
             let mut fixed_points: BTreeSet<u16> = vectors.iter().copied().collect();
             fixed_points.extend(graph.dynamic_entries.iter().copied());
+            let in_cycle = cyclic_back_targets(graph);
             for (&start, block) in &graph.blocks {
                 for t in block.edges.iter().filter_map(|e| e.target) {
-                    if t <= start {
+                    if t <= start && (in_cycle.is_none() || in_cycle.as_ref().unwrap().contains(&(start, t))) {
                         fixed_points.insert(t);
                     }
                 }
             }
-            polls.retain(|&pc| pc < 0xC000 || fixed_points.contains(&pc));
+            // Switchable-bank code follows the same rule unless
+            // NES2GBC_BANKED_POLL_ALL keeps a poll at every entry point.
+            let poll_all_banked = std::env::var("NES2GBC_BANKED_POLL_ALL").is_ok();
+            polls.retain(|&pc| (pc < 0xC000 && poll_all_banked) || fixed_points.contains(&pc));
         }
         for (&pc, block) in &graph.blocks {
             // Cross-bank convergence intentionally probes addresses that may be
