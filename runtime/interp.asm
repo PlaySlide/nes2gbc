@@ -17,7 +17,7 @@ SECTION "NES RAM interpreter entry", ROM0
 ; that temporarily switches ROMX banks returns to the interpreter.
 nes_interp_enter:
     ld a, $FF
-    ld [nes_current_code_bank], a
+    ldh [nes_current_code_bank], a
     ld [$2000], a
     xor a
     ld [$3000], a

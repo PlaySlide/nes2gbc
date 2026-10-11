@@ -83,7 +83,7 @@ def helper() -> str:
         f"{HELPER}:\n"
         "    ; A = translated code bank (<256), HL = linked ROMX target.\n"
         "    ; MBC5 bank bit 8 is already zero from the initial dispatcher.\n"
-        "    ld [nes_current_code_bank], a\n"
+        "    ldh [nes_current_code_bank], a\n"
         "    ld [$2000], a\n"
         # Block entries never assume A/flags (nes_dispatch_hl enters them
         # with arbitrary values), so no A=0 normalization is needed.

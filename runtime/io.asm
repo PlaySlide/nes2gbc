@@ -74,7 +74,7 @@ nes_hstitch_seen: ds 1 ; title has successfully established horizontal stitched 
 nes_controller_strobe: ds 1
 nes_controller_shift:  ds 1
 nes_reset_count:           ds 1 ; was HRAM; cold reset counter
-nes_current_code_bank: ds 1
+nes_fault_zp07_snapshot: ds 1 ; computed indirect target high (fault-only; was HRAM $FFFD)
 
 ; Debug breadcrumbs. These live in the gap before palette RAM so they do not
 ; disturb the existing fixed WRAM layout.
@@ -220,7 +220,7 @@ nes_fault_y_snapshot:      ds 1   ; $FFF9
 nes_fault_zp04_snapshot:   ds 1   ; $FFFA, JumpEngine caller-return pointer low
 nes_fault_zp05_snapshot:   ds 1   ; $FFFB, caller-return pointer high
 nes_fault_zp06_snapshot:   ds 1   ; $FFFC, computed indirect target low
-nes_fault_zp07_snapshot:   ds 1   ; $FFFD, computed indirect target high
+nes_current_code_bank:     ds 1   ; $FFFD (was nes_fault_zp07_snapshot; now WRAM)
 nes_fault_kind:            ds 1   ; $FFFE, $01 = nes_unimplemented
 
 SECTION "Projected GBC OAM shadow", WRAM0[$CB00]

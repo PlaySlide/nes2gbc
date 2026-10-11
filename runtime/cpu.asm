@@ -206,7 +206,7 @@ ENDC
     jr nz, .dm_miss
     set 7, l
     ld a, [hl]
-    ld [nes_current_code_bank], a
+    ldh [nes_current_code_bank], a
     ld [$2000], a
     inc h
     ld a, [hl]
@@ -288,7 +288,7 @@ ENDC
     ld [hl], e
 
     ld a, b
-    ld [nes_current_code_bank], a
+    ldh [nes_current_code_bank], a
     ld [$2000], a
     xor a
     ld [$3000], a
@@ -307,14 +307,14 @@ nes_dispatch_dm_empty::
 ; Fast path for statically known cross-bank transfers.
 ; Input: A = translated code bank, HL = linked ROMX target address.
 nes_jump_known_hl_a:
-    ld [nes_current_code_bank], a
+    ldh [nes_current_code_bank], a
     ld [$2000], a
     xor a
     ld [$3000], a
     jp hl
 
 nes_restore_code_bank:
-    ld a, [nes_current_code_bank]
+    ldh a, [nes_current_code_bank]
     ld [$2000], a
     xor a
     ld [$3000], a
@@ -344,7 +344,7 @@ nes_unimplemented:
     ld a, [$C006]
     ldh [nes_fault_zp06_snapshot], a
     ld a, [$C007]
-    ldh [nes_fault_zp07_snapshot], a
+    ld [nes_fault_zp07_snapshot], a
 
     ld a, $01
     ldh [nes_fault_kind], a
@@ -581,7 +581,7 @@ ENDC
 
     ; Generic PRG reads are temporary data-bank switches. Restore the
     ; translated-code bank before returning to generated code.
-    ld a, [nes_current_code_bank]
+    ldh a, [nes_current_code_bank]
     ld [$2000], a
     xor a
     ld [$3000], a
@@ -608,7 +608,7 @@ ENDC
     or $40
     ld h, a
     ld l, [hl]
-    ld a, [nes_current_code_bank]
+    ldh a, [nes_current_code_bank]
     ld [$2000], a
     ld a, l
 IF DEF(NES2GBC_DEBUG_TRACE)
@@ -679,14 +679,24 @@ IF DEF(NES2GBC_RAM_INTERP)
     jr nz, .hi
     set 6, h
     ld a, [nes_prg_bank]
-    jr .have
+    inc a
+    ld [$2000], a
+    ld l, [hl]
+    ldh a, [nes_current_code_bank]
+    ld [$2000], a
+    xor a
+    ld a, l
+IF DEF(NES2GBC_DEBUG_TRACE)
+    ld [nes_debug_bus_value], a
+ENDC
+    ret
 .hi:
     ld a, [nes_prg_hi_bank]
 .have:
     inc a
     ld [$2000], a
     ld l, [hl]
-    ld a, [nes_current_code_bank]
+    ldh a, [nes_current_code_bank]
     ld [$2000], a
     xor a
     ld a, l
@@ -748,7 +758,7 @@ nes_prg_read_hi_a::
     res 7, h
     ld [$2000], a
     ld l, [hl]
-    ld a, [nes_current_code_bank]
+    ldh a, [nes_current_code_bank]
     ld [$2000], a
     ld a, l
     ret
@@ -765,7 +775,7 @@ nes_cpu_read_hi_view::
 .go:
     ld [$2000], a
     ld l, [hl]
-    ld a, [nes_current_code_bank]
+    ldh a, [nes_current_code_bank]
     ld [$2000], a
     xor a
     ld a, l
@@ -773,7 +783,13 @@ nes_cpu_read_hi_view::
 .hi:
     ld a, [nes_prg_hi_bank]
     inc a
-    jr .go
+    ld [$2000], a
+    ld l, [hl]
+    ldh a, [nes_current_code_bank]
+    ld [$2000], a
+    xor a
+    ld a, l
+    ret
 nes_prg_read_hi_dyn::
     ld a, [nes_prg_hi_bank]
     inc a

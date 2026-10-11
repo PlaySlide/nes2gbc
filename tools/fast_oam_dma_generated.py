@@ -144,7 +144,7 @@ def helper() -> str:
         '    ld a, BANK(nes_oam_scan16_romx)\n',
         '    ld [$2000], a\n',
         '    call nes_oam_scan16_romx\n',
-        '    ld a, [nes_current_code_bank]\n',
+        '    ldh a, [nes_current_code_bank]\n',
         '    ld [$2000], a\n',
         '    jp c, .full_ready\n',
         '    jp .clear_unused\n',

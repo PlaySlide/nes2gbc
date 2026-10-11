@@ -43,7 +43,7 @@ MACRO BOOT_INIT_BODY
     ld [nes_vram_unlocked], a
     ld [nes_nmi_active], a
     ld [nes_oam_dirty], a
-    ld [nes_current_code_bank], a
+    ldh [nes_current_code_bank], a
     ld [nes_dispatch_cache_valid], a
     ld [nes_nametable_queue_ptr_lo], a
     ld [nes_nametable_queue_overflow], a
