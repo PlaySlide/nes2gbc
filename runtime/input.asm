@@ -48,34 +48,27 @@ nes_view_mark_dirty:
 ; First-pass generic follow camera. Acquire the sprite nearest the NES screen
 ; center, then track the nearest sprite to the previous anchor. A dead-zone
 ; keeps composite-sprite animation from making the crop wobble every frame.
+DEF FOLLOW_TRACK_RADIUS EQU 16
+DEF FOLLOW_LOST_LIMIT EQU 60
+
 nes_view_follow_update:
     ld a, [nes_view_follow_enabled]
     and a
     ret z
 
-    ; Once acquired, follow the exact NES OAM slot. Do not drift to a nearby
-    ; enemy or effect sprite. If that slot is temporarily hidden, hold the
-    ; camera until it becomes visible again.
+    ; Once acquired, track the sprite by position, not by OAM slot: many
+    ; games rotate OAM slot order every frame for flicker multiplexing, so a
+    ; fixed slot hops between unrelated objects. Each frame pick the visible
+    ; sprite nearest the previous anchor; if none is within
+    ; FOLLOW_TRACK_RADIUS, hold the camera (target hidden or flickered out).
     ld a, [nes_view_follow_valid]
     and a
     jr z, .acquire
-
-    ld a, [nes_view_follow_slot]
-    add a
-    add a
-    ld l, a
-    ld h, HIGH(nes_oam_ram)
-
-    ld a, [hli]
-    cp $EF
-    ret nc
-    inc a
-    ld [nes_view_follow_y], a
-    inc hl
-    inc hl
-    ld a, [hl]
-    ld [nes_view_follow_x], a
-    jp .camera
+    ld a, [nes_view_follow_x]
+    ld [nes_view_follow_ref_x], a
+    ld a, [nes_view_follow_y]
+    ld [nes_view_follow_ref_y], a
+    jr .scan_from_ref
 
 .acquire:
     ld a, $80
@@ -83,6 +76,7 @@ nes_view_follow_update:
     ld a, $78
     ld [nes_view_follow_ref_y], a
 
+.scan_from_ref:
     ld a, $FF
     ld [nes_view_follow_best_dist], a
     ld hl, nes_oam_ram
@@ -133,10 +127,6 @@ nes_view_follow_update:
 
     ld a, c
     ld [nes_view_follow_best_dist], a
-    ld a, [nes_view_follow_candidate_x]
-    ld [nes_view_follow_x], a
-    ld a, [nes_view_follow_candidate_y]
-    ld [nes_view_follow_y], a
 
     ; Current slot index = 64 - remaining-count B.
     ld a, $40
@@ -156,10 +146,42 @@ nes_view_follow_update:
     jp nz, .scan
 
 .finish:
+    ld a, [nes_view_follow_valid]
+    and a
     ld a, [nes_view_follow_best_dist]
+    jr z, .finish_acquire
+    cp FOLLOW_TRACK_RADIUS + 1
+    jr c, .accept
+    ; Target not found near the anchor: hold the camera. After
+    ; FOLLOW_LOST_LIMIT consecutive misses (teleport, room change) reacquire.
+    ld a, [nes_view_follow_was_valid]
+    inc a
+    ld [nes_view_follow_was_valid], a
+    cp FOLLOW_LOST_LIMIT
+    ret c
+    xor a
+    ld [nes_view_follow_valid], a
+    ld [nes_view_follow_was_valid], a
+    ret
+.finish_acquire:
     cp $FF
     ret z
-
+.accept:
+    xor a
+    ld [nes_view_follow_was_valid], a
+    ; Re-read the winning slot (recorded by the scan) as the new anchor.
+    ld a, [nes_view_follow_slot]
+    add a
+    add a
+    ld l, a
+    ld h, HIGH(nes_oam_ram)
+    ld a, [hli]
+    inc a
+    ld [nes_view_follow_y], a
+    inc hl
+    inc hl
+    ld a, [hl]
+    ld [nes_view_follow_x], a
     ld a, $01
     ld [nes_view_follow_valid], a
 
@@ -257,38 +279,94 @@ nes_view_toggle_follow:
     ldh [nes_view_y], a
     jp nes_view_mark_dirty
 
-; In Follow mode, Select+B advances to the next visible NES OAM slot.
-; This is a manual correction fallback for games without a compatibility hint.
-; The scan wraps and tests at most all 64 slots, starting after the current one.
+; In Follow mode, Select+B advances to the next visible sprite to the right
+; of the current anchor (wrapping to the leftmost). Ordering by screen X, not
+; OAM slot, keeps the cycle meaningful when games rotate OAM slots per frame.
 nes_view_cycle_follow_target:
     ld a, [nes_view_follow_enabled]
     and a
     ret z
 
-    ld a, [nes_view_follow_slot]
+    ; C = threshold X (anchor + 8, saturating; invalid anchor -> 0).
+    ld c, 0
+    ld a, [nes_view_follow_valid]
+    and a
+    jr z, .threshold_ready
+    ld a, [nes_view_follow_x]
+    add 8
+    jr nc, .threshold_set
+    ld a, $FF
+.threshold_set:
     ld c, a
-    ld b, 64
-.scan_next:
-    inc c
-    ld a, c
-    and $3F
-    ld c, a
+.threshold_ready:
+    ld d, $FF               ; best X > threshold
+    ld e, $FF               ; its slot
+    ld a, $FF
+    ld [nes_view_follow_ref_x], a   ; leftmost X overall
+    ld [nes_view_follow_ref_y], a   ; its slot
+    ld hl, nes_oam_ram
+    ld b, 0                 ; slot
+.cycle_scan:
+    ld a, [hl]
+    cp $EF
+    jr nc, .cycle_next
+    inc l
+    inc l
+    inc l
+    ld a, [hl]              ; X
+    dec l
+    dec l
+    dec l
+    ld [nes_view_follow_candidate_x], a
+    push hl
+    ld hl, nes_view_follow_ref_x
+    cp [hl]
+    jr nc, .not_leftmost
+    ld [hl], a
+    ld hl, nes_view_follow_ref_y
+    ld [hl], b
+.not_leftmost:
+    pop hl
+    ld a, [nes_view_follow_candidate_x]
+    ; strictly right of threshold and left of best
+    cp c
+    jr c, .cycle_next
+    jr z, .cycle_next
+    cp d
+    jr nc, .cycle_next
+    ld d, a
+    ld e, b
+.cycle_next:
+    inc l
+    inc l
+    inc l
+    inc l
+    inc b
+    ld a, b
+    cp 64
+    jr nz, .cycle_scan
 
+    ld a, e
+    cp $FF
+    jr nz, .cycle_found
+    ld a, [nes_view_follow_ref_y]
+    cp $FF
+    ret z
+.cycle_found:
+    ld [nes_view_follow_slot], a
     add a
     add a
     ld l, a
     ld h, HIGH(nes_oam_ram)
+    ld a, [hli]
+    inc a
+    ld [nes_view_follow_y], a
+    inc hl
+    inc hl
     ld a, [hl]
-    cp $EF
-    jr c, .found
-
-    dec b
-    jr nz, .scan_next
-    ret
-
-.found:
-    ld a, c
-    ld [nes_view_follow_slot], a
+    ld [nes_view_follow_x], a
+    xor a
+    ld [nes_view_follow_was_valid], a
     ld a, $01
     ld [nes_view_follow_valid], a
     jp nes_view_follow_update

@@ -134,7 +134,7 @@ nes_ntdiag_commit_serial:   ds 1 ; C86F, increments on each nonempty NT publish
 SECTION "NES follow viewport", WRAM0[$C8E9]
 nes_view_follow_enabled:     ds 1 ; 1=automatic player-follow camera, 0=manual
 nes_view_follow_valid:       ds 1
-nes_view_follow_was_valid:   ds 1
+nes_view_follow_was_valid:   ds 1 ; consecutive tracking misses (reacquire at limit)
 nes_view_follow_x:           ds 1 ; tracked NES sprite anchor
 nes_view_follow_y:           ds 1
 nes_view_follow_ref_x:       ds 1

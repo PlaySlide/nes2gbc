@@ -866,7 +866,7 @@ fn emit_operand_load(
             emit_add_a_to_hl(out);
             writeln!(out, "    ld a, [hl]").unwrap();
         }
-        Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => unreachable!(),
+        Operand::IndexedIndirect(_) => unreachable!(),
     }
 }
 
