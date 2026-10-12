@@ -734,16 +734,19 @@ nes_video_wait_vram:
     bit 7, a
     ret z
 .wait:
+    ; Return only in mode 0 (HBlank) or 1 (VBlank): STAT bit 1 clear. Mode 2
+    ; also reads as "not 3", but it can end a few cycles later, so callers'
+    ; writes would land in mode 3 and be dropped by the LCD (torn CHR-RAM
+    ; rows / missing map bytes on hardware). From mode 0/1, at least the
+    ; 20 M-cycle mode 2 follows before VRAM locks again.
     ldh a, [rSTAT]
-    and $03
-    cp $03
-    ret nz
+    bit 1, a
+    ret z
     PROFILE_INC nes_profile_vram_wait_block
 .wait_busy:
     ldh a, [rSTAT]
-    and $03
-    cp $03
-    jr z, .wait_busy
+    bit 1, a
+    jr nz, .wait_busy
     ret
 
 ; OAM projection is a 160-byte burst, so keep it in the long VBlank window.
