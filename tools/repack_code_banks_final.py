@@ -228,7 +228,7 @@ def main_profiled(p, lines, codes, sections, sec_of_line, old_banks):
         m = SEC_RE.match(lines[sections[idx][0]].rstrip("\n"))
         name_idx[m.group(2)] = idx
     dyn = {}
-    for raw in Path(BANK_PROFILE).read_text().splitlines():
+    for raw in (Path(BANK_PROFILE).read_text().splitlines() if BANK_PROFILE else []):
         raw = raw.split("#", 1)[0].strip()
         if not raw:
             continue
@@ -376,7 +376,9 @@ def main(path: str) -> None:
         # current bank at every nes_jump_known_hl_a_8bit identifies the
         # source's old bank exactly.
         return finish(p, lines, codes, sections, sec_of_line, {b: b for b in old_banks}, old_banks)
-    if BANK_PROFILE:
+    if BANK_PROFILE or (BANKED and _os.environ.get("NES2GBC_STATIC_SECTION_PACK", "1") != "0"):
+        # Without a profile, section-granular clustering on static
+        # trampoline-site counts still groups callers with callees.
         return main_profiled(p, lines, codes, sections, sec_of_line, old_banks)
     # Agglomerative clustering: merge the heaviest-connected pair that fits.
     cluster = {b: b for b in old_banks}
