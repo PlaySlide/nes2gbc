@@ -6,10 +6,10 @@ PROFILE_TRACE ?= 0
 PEEPHOLE ?= 1
 # Compiler register allocation level (src/state_superblock.rs); 0 = previous emission.
 REGALLOC ?= 3
-# NES APU/sound emulation (runtime/apu.asm, docs/APU.md). 0 (default) = silent,
-# no APU cost; 1 = APU register writes/$4015 reads drive CGB sound. Set it on
+# NES APU/sound emulation (runtime/apu.asm, docs/APU.md). 0 = silent (opt-out),
+# no APU cost; 1 (default) = APU register writes/$4015 reads drive CGB sound. Set it on
 # `make generate`/`make gbc`; it is recorded in runtime/generated_config.inc.
-APU ?= 0
+APU ?= 1
 # Multi-frame catch-up (runtime pacing): 1 = bank up to CATCHUP_MAX host VBlanks
 # that elapsed while a translated NMI ran, so following short frames start
 # their NMI without waiting for the next VBlank. 0 (default) = previous

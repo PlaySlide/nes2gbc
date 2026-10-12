@@ -45,13 +45,247 @@ nes_view_mark_dirty:
     ldh [nes_scroll_dirty], a
     ret
 
+; Follow camera: the logic lives in the runtime helper bank (BANK 255) to
+; keep ROM0 within budget (APU=1 builds). These ROM0 entry points switch to
+; the helper bank and restore the translated-code bank on return.
+nes_view_follow_update:
+    ld a, [nes_view_follow_enabled]
+    and a
+    ret z
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    call nes_view_follow_update_romx
+    jp nes_restore_code_bank
+
+nes_view_toggle_follow:
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    call nes_view_toggle_follow_romx
+    jp nes_restore_code_bank
+
+nes_view_cycle_follow_target:
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    call nes_view_cycle_follow_target_romx
+    jp nes_restore_code_bank
+
+; Cycle TL -> TR -> BL -> BR -> center -> TL.
+nes_view_cycle:
+    ld a, [nes_view_mode]
+    inc a
+    cp $05
+    jr c, .mode_ready
+    xor a
+.mode_ready:
+    ld [nes_view_mode], a
+
+    and a
+    jr z, .top_left
+    cp $01
+    jr z, .top_right
+    cp $02
+    jr z, .bottom_left
+    cp $03
+    jr z, .bottom_right
+
+    ; center: (256-160)/2, (240-144)/2 = 48,48
+    ld a, $30
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
+    jp nes_view_mark_dirty
+
+.top_right:
+    ld a, $60
+    ldh [nes_view_x], a
+    xor a
+    ldh [nes_view_y], a
+    jp nes_view_mark_dirty
+
+.bottom_left:
+    xor a
+    ldh [nes_view_x], a
+    ld a, $60
+    ldh [nes_view_y], a
+    jp nes_view_mark_dirty
+
+.bottom_right:
+    ld a, $60
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
+    jp nes_view_mark_dirty
+
+.top_left:
+    xor a
+    ldh [nes_view_x], a
+    ldh [nes_view_y], a
+    jp nes_view_mark_dirty
+
+
+nes_controller_latch:
+    ; Action buttons: GBC A/B/Select/Start map directly to NES bits 0-3.
+    ld a, $10
+    ldh [rP1], a
+    ldh a, [rP1]
+    cpl
+    and $0F
+    ld b, a
+
+    ; Camera chords are edge-triggered and consumed so the NES game never
+    ; sees them. Select+A toggles Follow/Manual. Select+B cycles visible follow
+    ; targets. In Manual, Select+Start cycles TL -> TR -> BL -> BR -> Center.
+    bit 2, b
+    jr z, .view_chord_released
+
+    bit 0, b
+    jr z, .check_follow_cycle_chord
+    ld a, [nes_view_select_prev]
+    and a
+    jr nz, .follow_chord_held
+    ld a, $01
+    ld [nes_view_select_prev], a
+    push bc
+    call nes_view_toggle_follow
+    pop bc
+.follow_chord_held:
+    res 0, b
+    res 2, b
+    jr .view_chord_done
+
+.check_follow_cycle_chord:
+    bit 1, b
+    jr z, .check_cycle_chord
+    ld a, [nes_view_select_prev]
+    and a
+    jr nz, .follow_cycle_chord_held
+    ld a, $01
+    ld [nes_view_select_prev], a
+    push bc
+    call nes_view_cycle_follow_target
+    pop bc
+.follow_cycle_chord_held:
+    res 1, b
+    res 2, b
+    jr .view_chord_done
+
+.check_cycle_chord:
+    bit 3, b
+    jr z, .view_chord_released
+    ld a, [nes_view_select_prev]
+    and a
+    jr nz, .cycle_chord_held
+    ld a, $01
+    ld [nes_view_select_prev], a
+
+    ld a, [nes_view_follow_enabled]
+    and a
+    jr nz, .cycle_chord_held
+    push bc
+    call nes_view_cycle
+    pop bc
+.cycle_chord_held:
+    res 2, b
+    res 3, b
+    jr .view_chord_done
+
+.view_chord_released:
+    xor a
+    ld [nes_view_select_prev], a
+.view_chord_done:
+
+    ; Directions: GBC R,L,U,D -> NES bits 7,6,4,5.
+    ld a, $20
+    ldh [rP1], a
+    ldh a, [rP1]
+    cpl
+    and $0F
+    ld c, a
+
+    bit 2, c
+    jr z, .no_up
+    ld a, b
+    or $10
+    ld b, a
+.no_up:
+    bit 3, c
+    jr z, .no_down
+    ld a, b
+    or $20
+    ld b, a
+.no_down:
+    bit 1, c
+    jr z, .no_left
+    ld a, b
+    or $40
+    ld b, a
+.no_left:
+    bit 0, c
+    jr z, .no_right
+    ld a, b
+    or $80
+    ld b, a
+.no_right:
+    ld a, b
+    ld [nes_controller_shift], a
+    ret
+
+; Input A = value written to $4016.
+nes_controller_write:
+    and $01
+    ld b, a
+    ld a, [nes_controller_strobe]
+    ld c, a
+    ld a, b
+    ld [nes_controller_strobe], a
+
+    ; Latch on strobe high and again on the falling edge.
+    and a
+    jp nz, nes_controller_latch
+    ld a, c
+    and a
+    jp nz, nes_controller_latch
+    ret
+
+; Output A bit0 = next NES controller bit.
+nes_controller_read:
+    ld a, [nes_controller_strobe]
+    and a
+    jr z, .shift
+
+    call nes_controller_latch
+    ld a, [nes_controller_shift]
+    and $01
+    ret
+
+.shift:
+    ld a, [nes_controller_shift]
+    ld b, a
+    and $01
+    ld c, a
+
+    ld a, b
+    srl a
+    or $80
+    ld [nes_controller_shift], a
+
+    ld a, c
+    ret
+
+
+SECTION "NES follow camera helper", ROMX, BANK[255]
+
 ; First-pass generic follow camera. Acquire the sprite nearest the NES screen
 ; center, then track the nearest sprite to the previous anchor. A dead-zone
 ; keeps composite-sprite animation from making the crop wobble every frame.
 DEF FOLLOW_TRACK_RADIUS EQU 16
 DEF FOLLOW_LOST_LIMIT EQU 60
 
-nes_view_follow_update:
+nes_view_follow_update_romx:
     ld a, [nes_view_follow_enabled]
     and a
     ret z
@@ -422,7 +656,7 @@ nes_view_follow_hinted:
     ret
 
 ; Select+A toggles Follow <-> Manual. Manual starts centered.
-nes_view_toggle_follow:
+nes_view_toggle_follow_romx:
     ld a, [nes_view_follow_enabled]
     xor $01
     ld [nes_view_follow_enabled], a
@@ -446,7 +680,7 @@ nes_view_toggle_follow:
 ; In Follow mode, Select+B advances to the next visible sprite to the right
 ; of the current anchor (wrapping to the leftmost). Ordering by screen X, not
 ; OAM slot, keeps the cycle meaningful when games rotate OAM slots per frame.
-nes_view_cycle_follow_target:
+nes_view_cycle_follow_target_romx:
     ld a, [nes_view_follow_enabled]
     and a
     ret z
@@ -536,205 +770,5 @@ nes_view_cycle_follow_target:
     ld [nes_view_follow_was_valid], a
     ld a, $01
     ld [nes_view_follow_valid], a
-    jp nes_view_follow_update
+    jp nes_view_follow_update_romx
 
-; Cycle TL -> TR -> BL -> BR -> center -> TL.
-nes_view_cycle:
-    ld a, [nes_view_mode]
-    inc a
-    cp $05
-    jr c, .mode_ready
-    xor a
-.mode_ready:
-    ld [nes_view_mode], a
-
-    and a
-    jr z, .top_left
-    cp $01
-    jr z, .top_right
-    cp $02
-    jr z, .bottom_left
-    cp $03
-    jr z, .bottom_right
-
-    ; center: (256-160)/2, (240-144)/2 = 48,48
-    ld a, $30
-    ldh [nes_view_x], a
-    ldh [nes_view_y], a
-    jp nes_view_mark_dirty
-
-.top_right:
-    ld a, $60
-    ldh [nes_view_x], a
-    xor a
-    ldh [nes_view_y], a
-    jp nes_view_mark_dirty
-
-.bottom_left:
-    xor a
-    ldh [nes_view_x], a
-    ld a, $60
-    ldh [nes_view_y], a
-    jp nes_view_mark_dirty
-
-.bottom_right:
-    ld a, $60
-    ldh [nes_view_x], a
-    ldh [nes_view_y], a
-    jp nes_view_mark_dirty
-
-.top_left:
-    xor a
-    ldh [nes_view_x], a
-    ldh [nes_view_y], a
-    jp nes_view_mark_dirty
-
-
-nes_controller_latch:
-    ; Action buttons: GBC A/B/Select/Start map directly to NES bits 0-3.
-    ld a, $10
-    ldh [rP1], a
-    ldh a, [rP1]
-    cpl
-    and $0F
-    ld b, a
-
-    ; Camera chords are edge-triggered and consumed so the NES game never
-    ; sees them. Select+A toggles Follow/Manual. Select+B cycles visible follow
-    ; targets. In Manual, Select+Start cycles TL -> TR -> BL -> BR -> Center.
-    bit 2, b
-    jr z, .view_chord_released
-
-    bit 0, b
-    jr z, .check_follow_cycle_chord
-    ld a, [nes_view_select_prev]
-    and a
-    jr nz, .follow_chord_held
-    ld a, $01
-    ld [nes_view_select_prev], a
-    push bc
-    call nes_view_toggle_follow
-    pop bc
-.follow_chord_held:
-    res 0, b
-    res 2, b
-    jr .view_chord_done
-
-.check_follow_cycle_chord:
-    bit 1, b
-    jr z, .check_cycle_chord
-    ld a, [nes_view_select_prev]
-    and a
-    jr nz, .follow_cycle_chord_held
-    ld a, $01
-    ld [nes_view_select_prev], a
-    push bc
-    call nes_view_cycle_follow_target
-    pop bc
-.follow_cycle_chord_held:
-    res 1, b
-    res 2, b
-    jr .view_chord_done
-
-.check_cycle_chord:
-    bit 3, b
-    jr z, .view_chord_released
-    ld a, [nes_view_select_prev]
-    and a
-    jr nz, .cycle_chord_held
-    ld a, $01
-    ld [nes_view_select_prev], a
-
-    ld a, [nes_view_follow_enabled]
-    and a
-    jr nz, .cycle_chord_held
-    push bc
-    call nes_view_cycle
-    pop bc
-.cycle_chord_held:
-    res 2, b
-    res 3, b
-    jr .view_chord_done
-
-.view_chord_released:
-    xor a
-    ld [nes_view_select_prev], a
-.view_chord_done:
-
-    ; Directions: GBC R,L,U,D -> NES bits 7,6,4,5.
-    ld a, $20
-    ldh [rP1], a
-    ldh a, [rP1]
-    cpl
-    and $0F
-    ld c, a
-
-    bit 2, c
-    jr z, .no_up
-    ld a, b
-    or $10
-    ld b, a
-.no_up:
-    bit 3, c
-    jr z, .no_down
-    ld a, b
-    or $20
-    ld b, a
-.no_down:
-    bit 1, c
-    jr z, .no_left
-    ld a, b
-    or $40
-    ld b, a
-.no_left:
-    bit 0, c
-    jr z, .no_right
-    ld a, b
-    or $80
-    ld b, a
-.no_right:
-    ld a, b
-    ld [nes_controller_shift], a
-    ret
-
-; Input A = value written to $4016.
-nes_controller_write:
-    and $01
-    ld b, a
-    ld a, [nes_controller_strobe]
-    ld c, a
-    ld a, b
-    ld [nes_controller_strobe], a
-
-    ; Latch on strobe high and again on the falling edge.
-    and a
-    jp nz, nes_controller_latch
-    ld a, c
-    and a
-    jp nz, nes_controller_latch
-    ret
-
-; Output A bit0 = next NES controller bit.
-nes_controller_read:
-    ld a, [nes_controller_strobe]
-    and a
-    jr z, .shift
-
-    call nes_controller_latch
-    ld a, [nes_controller_shift]
-    and $01
-    ret
-
-.shift:
-    ld a, [nes_controller_shift]
-    ld b, a
-    and $01
-    ld c, a
-
-    ld a, b
-    srl a
-    or $80
-    ld [nes_controller_shift], a
-
-    ld a, c
-    ret
