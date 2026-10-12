@@ -1117,8 +1117,7 @@ ENDC
     and $07
     or $C0
     ld h, a
-    ld a, e
-    ld [hl], a
+    ld [hl], e
     ret
 
 .ppu:
@@ -1143,8 +1142,7 @@ ENDC
     and $0F
     or $D0
     ld h, a
-    ld a, e
-    ld [hl], a
+    ld [hl], e
     pop af
     ldh [rSVBK], a
     ret
@@ -1167,8 +1165,7 @@ ENDC
     ret z
     ld a, b
     ld [nes_chr_bank], a
-    call nes_upload_chr_bank
-    ret
+    jp nes_upload_chr_bank
 
 .mapper2:
     ; UxROM writes anywhere in $8000-$FFFF select the 16 KiB bank visible

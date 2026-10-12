@@ -696,8 +696,10 @@ IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
 ENDC
 
 .generic:
-    call nes_ppu_get_addr_hl
-    ld a, h
+    ld a, [nes_ppu_addr_lo]
+    ld l, a
+    ld a, [nes_ppu_addr_hi]
+    ld h, a
     cp $20
     jr c, .pattern
     cp $3F
@@ -757,8 +759,7 @@ ENDC
     call nes_video_update_mask
 
 .nametable_store_value:
-    ld a, e
-    ld [hl], a
+    ld [hl], e
 
     ; A translated NES NMI is logically executing during NES VBlank even if
     ; it takes several host GBC frames.  When rendering remains enabled, do not
