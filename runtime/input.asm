@@ -56,6 +56,10 @@ nes_view_follow_update:
     and a
     ret z
 
+    ld a, [nes_view_follow_hint_mode]
+    and a
+    jp nz, nes_view_follow_hinted
+
     ; Once acquired, track the sprite by position, not by OAM slot: many
     ; games rotate OAM slot order every frame for flicker multiplexing, so a
     ; fixed slot hops between unrelated objects. Each frame pick the visible
@@ -186,6 +190,7 @@ nes_view_follow_update:
     ld [nes_view_follow_valid], a
 
 .camera:
+nes_view_follow_camera::
     ; Horizontal dead-zone: keep target within viewport-relative X 56..104.
     ldh a, [nes_view_x]
     ld c, a
@@ -221,6 +226,10 @@ nes_view_follow_update:
     ldh [nes_view_x], a
 
 .camera_y:
+    ; PocketNES hints drive Y proportionally (nes_view_follow_hinted).
+    ld a, [nes_view_follow_hint_mode]
+    and a
+    jp nz, nes_view_mark_dirty
     ; Vertical dead-zone: viewport-relative Y 48..96.
     ldh a, [nes_view_y]
     ld c, a
@@ -257,6 +266,161 @@ nes_view_follow_update:
 .done_camera:
     jp nes_view_mark_dirty
 
+; PocketNES-hinted follow (data-driven from the PocketNES menu-maker DB).
+; Mode 1 follows NES OAM sprite N; mode 2 follows the screen-Y byte at a NES
+; RAM address, which is immune to OAM slot rotation. Like PocketNES
+; (ppu.s: windowtop = Y*5/16), Y > 239 holds the camera and the crop top is
+; proportional to Y: view_y = Y*2/5 (0..96 for Y 0..239), so the player sits
+; at 0.6*Y on the 144-line screen. PocketNES does not pan horizontally (the
+; GBA is 240 wide); the 160-wide GBC crop pans X with the usual dead-zone,
+; anchored on the hinted sprite (mode 1) or on the visible sprite nearest the
+; previous anchor X among those within 24 lines of the RAM Y (mode 2).
+nes_view_follow_hinted:
+    cp $01
+    jr nz, .mem
+    ld a, [nes_view_follow_slot]
+    add a
+    add a
+    ld l, a
+    ld h, HIGH(nes_oam_ram)
+    ld a, [hli]
+    cp $F0
+    ret nc
+    ld [nes_view_follow_y], a
+    inc hl
+    inc hl
+    ld a, [hl]
+    ld [nes_view_follow_x], a
+    ; Sprite mode: the hinted slot is the player, so the X dead-zone tracks it.
+    call .proportional_y
+    jp nes_view_follow_camera
+
+.mem:
+    ld a, [nes_view_follow_hint_lo]
+    ld l, a
+    ld a, [nes_view_follow_hint_hi]
+    ld h, a
+    ld a, [hl]
+    cp $F0
+    ret nc
+    ld [nes_view_follow_y], a
+    ; X: nearest-to-anchor sprite within the RAM Y band.
+    ld e, a                 ; E = target Y
+    ld a, [nes_view_follow_valid]
+    and a
+    ld a, $80
+    jr z, .anchor_ready
+    ld a, [nes_view_follow_x]
+.anchor_ready:
+    ld c, a                 ; C = anchor X
+    ld d, $FF               ; D = best |dx|
+    ld hl, nes_oam_ram
+    ld b, 64
+.band_scan:
+    ld a, [hl]
+    cp $EF
+    jr nc, .band_next
+    sub e
+    jr nc, .dy_pos
+    cpl
+    inc a
+.dy_pos:
+    cp 32
+    jr nc, .band_next
+    inc l
+    inc l
+    inc l
+    ld a, [hl]
+    dec l
+    dec l
+    dec l
+    ld [nes_view_follow_candidate_x], a
+    sub c
+    jr nc, .dx_pos
+    cpl
+    inc a
+.dx_pos:
+    cp d
+    jr nc, .band_next
+    ld d, a
+    ld a, [nes_view_follow_candidate_x]
+    ld [nes_view_follow_best_dist], a   ; best X
+.band_next:
+    inc l
+    inc l
+    inc l
+    inc l
+    dec b
+    jr nz, .band_scan
+    ld a, d
+    cp $FF
+    jr z, .apply_y_only
+    ; With a valid anchor, accept only a sprite within 16px of it (bullets and
+    ; enemies share the player's lines); else hold X, and reacquire nearest
+    ; screen centre after FOLLOW_LOST_LIMIT misses.
+    ld a, [nes_view_follow_valid]
+    and a
+    jr z, .band_accept
+    ld a, d
+    cp FOLLOW_TRACK_RADIUS + 1
+    jr c, .band_accept
+    ld a, [nes_view_follow_was_valid]
+    inc a
+    ld [nes_view_follow_was_valid], a
+    cp FOLLOW_LOST_LIMIT
+    jr c, .apply_y_only
+    xor a
+    ld [nes_view_follow_valid], a
+    ld [nes_view_follow_was_valid], a
+    jr .apply_y_only
+.band_accept:
+    xor a
+    ld [nes_view_follow_was_valid], a
+    ld a, [nes_view_follow_best_dist]
+    ld [nes_view_follow_x], a
+    ld a, $01
+    ld [nes_view_follow_valid], a
+.apply:
+    ; X is proportional too: view_x = X/4 + X/8 (0..95), so the anchor sits
+    ; at 5/8*X on the 160-wide screen and a wrong or swapped anchor moves the
+    ; crop by only 3/8 of the difference (the player stays in view).
+    ld a, [nes_view_follow_x]
+    srl a
+    srl a
+    ld b, a
+    srl a
+    add b
+    ldh [nes_view_x], a
+    call .proportional_y
+    jp nes_view_mark_dirty
+.apply_y_only:
+    call .proportional_y
+    jp nes_view_mark_dirty
+
+.proportional_y:
+    ; view_y = Y/2 - Y/8 + Y/32 (~0.406*Y), clamped to 96.
+    ld a, [nes_view_follow_y]
+    ld b, a
+    srl a
+    ld c, a                 ; Y/2
+    ld a, b
+    srl a
+    srl a
+    srl a
+    ld d, a                 ; Y/8
+    ld a, b
+    swap a
+    and $0F
+    srl a                   ; Y/32
+    add c
+    sub d
+    cp $61
+    jr c, .py_store
+    ld a, $60
+.py_store:
+    ldh [nes_view_y], a
+    ret
+
 ; Select+A toggles Follow <-> Manual. Manual starts centered.
 nes_view_toggle_follow:
     ld a, [nes_view_follow_enabled]
@@ -286,6 +450,9 @@ nes_view_cycle_follow_target:
     ld a, [nes_view_follow_enabled]
     and a
     ret z
+    ; A manual target choice overrides any PocketNES hint.
+    xor a
+    ld [nes_view_follow_hint_mode], a
 
     ; C = threshold X (anchor + 8, saturating; invalid anchor -> 0).
     ld c, 0

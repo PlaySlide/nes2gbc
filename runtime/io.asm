@@ -144,6 +144,12 @@ nes_view_follow_candidate_x: ds 1
 nes_view_follow_candidate_y: ds 1
 nes_view_follow_slot:        ds 1 ; locked NES OAM slot (0-63)
 
+; PocketNES-derived follow hint (nes_generated_follow_init).
+SECTION "NES follow hint", WRAM0
+nes_view_follow_hint_mode:   ds 1 ; 0=heuristic, 1=OAM sprite number, 2=RAM screen Y
+nes_view_follow_hint_lo:     ds 1 ; RAM mode: GB address of the NES RAM byte
+nes_view_follow_hint_hi:     ds 1
+
 ; Horizontal nametable stitch state. For vertical mirroring, the two NES
 ; physical nametables are horizontal neighbours; a single 256px GBC map cannot
 ; represent their 512px scroll space without stitching the wrap columns.

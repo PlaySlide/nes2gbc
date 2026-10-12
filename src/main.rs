@@ -81,32 +81,63 @@ fn crc32_ieee(data: &[u8]) -> u32 {
     !crc
 }
 
-fn pocketnes_follow_slot(crc: u32) -> Option<u8> {
-    match crc {
-        // PocketNES database: Balloon Fight (E)/(JU) -> OAM slot 8.
-        // 401349A8 is the later USA payload CRC and uses the same player slot.
-        0xE541_38A9 | 0x2B46_2010 | 0x4013_49A8 => Some(8),
-        // PocketNES database: Donkey Kong (JU) / Donkey Kong Classics (U).
-        0x6F97_C721 | 0x703E_1948 => Some(0),
-        // PocketNES database: Donkey Kong Jr. (JU).
-        0x4864_C304 => Some(8),
-        // PocketNES database: Ice Climber (U).
-        0xFB98_D46E => Some(0),
-        // PocketNES database: Super Mario Bros. (PRG 0) (JU).
-        0xD445_F698 => Some(8),
-        _ => None,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FollowHint {
+    /// Follow NES OAM sprite number n (PocketNES sprite follow).
+    Sprite(u8),
+    /// Follow the screen-Y byte at NES RAM $aaaa (PocketNES FOLLOWMEM).
+    Mem(u16),
 }
 
-fn emit_follow_hint_init(asm: &mut String, follow_slot: Option<u8>) {
-    asm.push_str("\n; PocketNES-derived initial follow-camera hint\n");
+const POCKETNES_FOLLOW_DB: &str = include_str!("../data/pocketnes_follow.txt");
+
+fn pocketnes_follow_hint(crc: u32) -> Option<FollowHint> {
+    // Later payload revisions of PocketNES-listed games, same player slot.
+    match crc {
+        // Balloon Fight (USA, later payload) and Donkey Kong Classics (U).
+        0x4013_49A8 => return Some(FollowHint::Sprite(8)),
+        0x703E_1948 => return Some(FollowHint::Sprite(0)),
+        _ => {}
+    }
+    for line in POCKETNES_FOLLOW_DB.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut f = line.split_whitespace();
+        let (Some(c), Some(m), Some(v)) = (f.next(), f.next(), f.next()) else { continue };
+        if u32::from_str_radix(c, 16).ok() != Some(crc) {
+            continue;
+        }
+        let v = u16::from_str_radix(v, 16).ok()?;
+        return match m {
+            "S" => Some(FollowHint::Sprite(v as u8)),
+            "M" => Some(FollowHint::Mem(v)),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn emit_follow_hint_init(asm: &mut String, hint: Option<FollowHint>) {
+    asm.push_str("\n; PocketNES-derived follow-camera hint\n");
     asm.push_str("SECTION \"Generated follow-camera metadata\", ROM0\n");
     asm.push_str("nes_generated_follow_init:\n");
-    if let Some(slot) = follow_slot {
+    // nes_view_follow_hint_mode: 0 = heuristic, 1 = sprite number, 2 = RAM Y.
+    let (mode, value) = match hint {
+        None => (0u8, 0u16),
+        Some(FollowHint::Sprite(n)) => (1, n as u16),
+        Some(FollowHint::Mem(a)) => (2, a & 0x07FF),
+    };
+    asm.push_str(&format!("    ld a, ${mode:02X}\n"));
+    asm.push_str("    ld [nes_view_follow_hint_mode], a\n");
+    asm.push_str(&format!("    ld a, ${:02X}\n", value & 0xFF));
+    asm.push_str("    ld [nes_view_follow_hint_lo], a\n");
+    asm.push_str(&format!("    ld a, ${:02X}\n", (value >> 8) | 0xC0));
+    asm.push_str("    ld [nes_view_follow_hint_hi], a\n");
+    if let Some(FollowHint::Sprite(slot)) = hint {
         asm.push_str(&format!("    ld a, ${slot:02X}\n"));
         asm.push_str("    ld [nes_view_follow_slot], a\n");
-        asm.push_str("    ld a, $01\n");
-        asm.push_str("    ld [nes_view_follow_valid], a\n");
     }
     asm.push_str("    ret\n");
 }
@@ -178,7 +209,7 @@ fn main() -> ExitCode {
     };
 
     let payload_crc = crc32_ieee(&bytes[16..]);
-    let follow_slot = pocketnes_follow_slot(payload_crc);
+    let follow_hint = pocketnes_follow_hint(payload_crc);
 
     println!("ROM: {}", path.display());
     println!("Header: {:?}", cart.format);
@@ -193,8 +224,9 @@ fn main() -> ExitCode {
     println!("Trainer: {}", if cart.trainer.is_some() { "yes" } else { "no" });
 
     println!("PocketNES payload CRC32: {payload_crc:08X}");
-    match follow_slot {
-        Some(slot) => println!("PocketNES follow hint: OAM slot {slot}"),
+    match follow_hint {
+        Some(FollowHint::Sprite(slot)) => println!("PocketNES follow hint: OAM sprite {slot}"),
+        Some(FollowHint::Mem(a)) => println!("PocketNES follow hint: RAM ${a:04X} (screen Y)"),
         None => println!("PocketNES follow hint: none; using generic acquisition"),
     }
 
@@ -385,7 +417,7 @@ fn main() -> ExitCode {
             chr_gbc_file: &chr_gbc_name,
         }));
 
-        emit_follow_hint_init(&mut asm, follow_slot);
+        emit_follow_hint_init(&mut asm, follow_hint);
 
         // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the
         // interprocedural asm passes (tools/rts_return_sets.py).
@@ -540,12 +572,16 @@ mod follow_hint_tests {
     }
 
     #[test]
-    fn known_pocketnes_follow_slots_are_seeded() {
-        assert_eq!(pocketnes_follow_slot(0x4013_49A8), Some(8));
-        assert_eq!(pocketnes_follow_slot(0x703E_1948), Some(0));
-        assert_eq!(pocketnes_follow_slot(0x4864_C304), Some(8));
-        assert_eq!(pocketnes_follow_slot(0xFB98_D46E), Some(0));
-        assert_eq!(pocketnes_follow_slot(0xD445_F698), Some(8));
-        assert_eq!(pocketnes_follow_slot(0), None);
+    fn known_pocketnes_follow_hints_are_seeded() {
+        assert_eq!(pocketnes_follow_hint(0x4013_49A8), Some(FollowHint::Sprite(8)));
+        assert_eq!(pocketnes_follow_hint(0x703E_1948), Some(FollowHint::Sprite(0)));
+        assert_eq!(pocketnes_follow_hint(0x4864_C304), Some(FollowHint::Sprite(8)));
+        assert_eq!(pocketnes_follow_hint(0xFB98_D46E), Some(FollowHint::Sprite(0)));
+        assert_eq!(pocketnes_follow_hint(0xD445_F698), Some(FollowHint::Sprite(8)));
+        assert_eq!(pocketnes_follow_hint(0x6EE4_BB0A), Some(FollowHint::Mem(0x0600)));
+        assert_eq!(pocketnes_follow_hint(0xF603_5030), Some(FollowHint::Mem(0x031A)));
+        assert_eq!(pocketnes_follow_hint(0xB668_C7FC), Some(FollowHint::Mem(0x01F5)));
+        assert_eq!(pocketnes_follow_hint(0xEAF7_ED72), Some(FollowHint::Sprite(18)));
+        assert_eq!(pocketnes_follow_hint(0), None);
     }
 }
