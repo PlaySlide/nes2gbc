@@ -1555,6 +1555,13 @@ ENDC
     ldh [nes_host_vblank_pending], a
 .no_credit:
 ENDC
+    ; If the next NMI is already due (this one overran a host frame), the
+    ; interrupted main thread still gets to run up to its next poll point
+    ; before that NMI starts. On hardware an NMI handler always returns with
+    ; slack, so idle loops that advance RNG state (Contra $34, Castlevania
+    ; $6F) never starve; without this they run zero iterations per frame.
+    ldh a, [nes_host_vblank_pending]
+    ld [nes_rti_grace], a
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -1572,6 +1579,15 @@ nes_poll_nmi_hl:
     ldh a, [nes_host_vblank_pending]
     and a
     ret z
+    ; First pending poll after an overrunning RTI: keep the event pending and
+    ; let the main thread continue (see nes_rti_pop_hl).
+    ld a, [nes_rti_grace]
+    and a
+    jr z, .no_rti_grace
+    xor a
+    ld [nes_rti_grace], a
+    ret
+.no_rti_grace:
 IF !DEF(NES2GBC_NO_PACING)
     ; An early (paced) NMI start must not preempt main-thread work that on
     ; hardware would finish before the next NMI: only start it once the game

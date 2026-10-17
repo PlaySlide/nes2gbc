@@ -337,3 +337,6 @@ nes_nametable_stage_seen: ds $800
 
 SECTION "NES nametable stage generation", WRAM0
 nes_stage_gen: ds 1 ; never 0 once initialised
+
+SECTION "NES RTI grace", WRAM0
+nes_rti_grace: ds 1 ; RTI with a VBlank already pending: skip the next NMI poll once

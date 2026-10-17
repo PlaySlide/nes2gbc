@@ -162,6 +162,7 @@ MACRO BOOT_INIT_BODY
     ld [nes_pace_idle_hi], a
     ld [nes_pace_cand_lo], a
     ld [nes_pace_cand_hi], a
+    ld [nes_rti_grace], a
     ; Unknown page contents: the first projection clears all 40 entries.
     ld a, 40
     ld [nes_oam_page_hw], a
