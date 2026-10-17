@@ -30,6 +30,11 @@ INSN_RE = re.compile(
     r"; \$([0-9A-Fa-f]{4}): \$([0-9A-Fa-f]{2}) ([A-Za-z0-9_]+) ([A-Za-z0-9_]+)"
 )
 TARGET_RE = re.compile(r"\bnes_([0-9A-Fa-f]{4})\b")
+# Exits that do not name a canonical nes_XXXX label: a 6502 PC loaded into HL
+# for a dispatch helper (`ld hl, $XXXX` / `jp nes_dispatch_hl`, used for
+# cross-bank targets), bank-variant labels and computed jumps.
+HL_PC_RE = re.compile(r"^ld hl, \$([0-9A-Fa-f]{4})$")
+BANKED_TARGET_RE = re.compile(r"\bnes_m\d+_b[0-9A-Fa-f]{2}_[0-9A-Fa-f]{4}\b")
 
 # 6502 instructions that replace both Z and N with values independent of their
 # incoming state.  TXS deliberately absent; TSX deliberately present.
@@ -138,6 +143,20 @@ def parse_blocks(lines: list[str]) -> dict[int, Block]:
             for m in TARGET_RE.finditer(tail)
             if int(m.group(1), 16) in labels_set
         }
+        # Successors reached through HL dispatch are edges too (a missed edge
+        # made a live Z look dead: Contra E3E7 SBC/BCS -> E3ED BNE). Targets
+        # that cannot be mapped to a parsed block make the exit unknown.
+        for j in range(last.line + 1, block.end_i):
+            c = code(lines[j])
+            mh = HL_PC_RE.fullmatch(c)
+            if mh:
+                pc = int(mh.group(1), 16)
+                if pc in labels_set:
+                    refs.add(pc)
+                else:
+                    block.unknown_exit = True
+            elif BANKED_TARGET_RE.search(c) or c in {"jp hl", "jp [hl]"}:
+                block.unknown_exit = True
 
         if last.mnemonic in BRANCHES:
             fallthrough = (last.pc + 2) & 0xFFFF
