@@ -511,9 +511,37 @@ def return_sets_banked(path, track=True):
     dsrc = []
     gn = []
     inline_targets = set()
+    _prgp = Path(str(path).replace(".cfgviews.txt", ".prg.bin"))
+    _prg = _prgp.read_bytes() if _prgp.exists() else None
+
+    def _rd_view(bk):
+        nb_ = len(_prg) // 0x4000
+
+        def rd(a):
+            if 0x8000 <= a < 0xC000:
+                return _prg[bk * 0x4000 + a - 0x8000]
+            if a >= 0xC000:
+                return _prg[(nb_ - 1) * 0x4000 + a - 0xC000]
+            return None
+        return rd
+    view_traps = 0
     for key, b in nodes.items():
         call = [t for k, t in b["edges"] if k == "call"]
         ret = [t for k, t in b["edges"] if k == "ret"]
+        if (ret and call and _prg is not None and isinstance(key[0], int)
+                and __import__("os").environ.get("NES2GBC_RTS_VIEW_TRAPS", "0") != "0"
+                and not _may_switch(b)):
+            # A JSR fetched from PRG bank key[0] whose callees can never
+            # switch banks returns into that same bank: a continuation whose
+            # straight-line code there faults never resumes, so it is no
+            # return target (trap_conts only drops it when it faults in
+            # every bank).
+            kss = [resolve(key, b, "call", t) for t in call]
+            if all(ks and not any(x in switching for x in ks) for ks in kss):
+                rd = _rd_view(key[0])
+                keep = [r for r in ret if not (0x8000 <= r < 0xC000 and _traps(rd, r))]
+                view_traps += len(ret) - len(keep)
+                ret = keep
         allconts.update(ret)
         for t in call:
             ks = resolve(key, b, "call", t)
@@ -744,6 +772,6 @@ def return_sets_banked(path, track=True):
         if pc in out:
             res = None if (out[pc] is None or res is None) else (out[pc] | res)
         out[pc] = res
-    info = {"traps": len(traps), "global_none": global_none, "dyn": len(dyn), "allconts": len(allconts),
+    info = {"traps": len(traps), "view_traps": view_traps, "global_none": global_none, "dyn": len(dyn), "allconts": len(allconts),
             "complete": not global_none, "dyn_src": dsrc, "gn": gn, "sw_why": sw_why, "switching": switching, "_resolve": resolve, "_nodes": nodes}
     return out, info

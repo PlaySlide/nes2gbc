@@ -68,3 +68,46 @@ except dispatch ~4.5M (11.9M with all exits). The exits interact.
 Knobs added (all default off; the default build is byte-identical to d54dcb8):
 NES2GBC_HRAM_EXP_DEAD, NES2GBC_HRAM_EXP_CAT, NES2GBC_HRAM_EXP_DUMP,
 NES2GBC_HRAM_NMI_TSX_REACH, NES2GBC_HRAM_EXP_TSX_IGNORE.
+
+## Session 2: leads 1 and 2 (no merge)
+
+Lead 1 premise was wrong: no return continuation is "bank-variant only".
+In every return set that the pass drops, the missing continuation has no
+translation at all:
+
+* Contra: $A2BA, in 148/148 known sets. It is the continuation of
+  `JSR $82A2` at bank 1 $A2B7. That block is reached only through
+  `JMP ($0004)` at $E678, whose targets were resolved from ROM pointer
+  bytes. Bank 1 $A2BA is `D7 ...` (illegal opcode), so this looks like
+  data. It reaches every set through DYN, not through its own RTS: callee
+  bank 1 $82A2 has an unresolved `JMP (ind)` at depth 0
+  (`dyn_src ('ind', (1,$82A2), ...)`), so its JSR continuations are added
+  to every return set.
+* Castlevania: $80E6, in 260/260 sets: `JSR $7332` (PRG-RAM, interpreted
+  callee) at bank 3 $80E3. Again it reaches every set through DYN. Bank 3
+  $80E6 is `SBC $E9 / STY $8081 (bank switch) / $80 (illegal)`, so it does
+  not trap in its own bank.
+
+At runtime these continuations enter the interpreter via the dispatch
+miss, so they read everything. Given the callee's unresolved indirect jump
+(it can switch banks), the bank at the return is unknown. Across all banks
+the bytes do not all trap (e.g. a BRK in some bank). So they cannot be
+dropped soundly.
+
+I tried a refinement: drop a continuation that traps in the JSR's own
+bank when every callee is non-switching (`NES2GBC_RTS_VIEW_TRAPS=1`; default
+off here). It drops only 3 (Contra) / 1 (Castlevania) continuations and
+does not touch DYN. No effect.
+
+Lead 2 alone ("IF RAM_INTERP" stub fallbacks treated as non-reading) is
+worth ~0 on Contra in the unsound experiment (6 stores). It only pays
+together with usable return sets and NMI-poll edges (~3.2M and ~11.5M
+cycles/run, i.e. ~6% normalized on Contra).
+
+What would make it work: a proof that the speculative indirect targets
+(ROM-pointer-resolved `JMP (ind)` from RAM pointers, JSR into PRG-RAM)
+are not executed. That needs runtime evidence (profiles) or game
+knowledge, so it cannot be done generically and soundly. Alternatively:
+a runtime guard that bails out to a slow path that re-materialises flags
+when the interpreter is entered from a dispatch miss (e.g. keep a
+"flags canonical" epoch). Too large for this session.
