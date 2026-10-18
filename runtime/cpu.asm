@@ -2032,6 +2032,15 @@ nes_pace_retire_flushed_queue:
     ld c, a
     ld a, [nes_nametable_queue_ptr_hi]
     ld b, a
+    ; The queue may have been committed and reset (ptr back at the start)
+    ; after the snapshot recorded its end: then ptr < end and every live
+    ; entry already sits at the queue start. Moving [end, ptr) would run
+    ; away through WRAM/IO/HRAM.
+    ld a, c
+    sub e
+    ld a, b
+    sbc d
+    ret c
 .move_loop:
     ld a, e
     cp c
