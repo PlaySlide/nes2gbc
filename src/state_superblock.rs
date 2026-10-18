@@ -1533,7 +1533,16 @@ fn emit_barrier_ops(
         return;
     }
     sync_state(out, state, stats);
-    invalidate_state(state);
+    // A lone conditional branch lowers to a shadow-flag test (A) and a taken
+    // exit through HL; B/C are untouched, so clean X/Y residency survives
+    // into a chained fallthrough successor (canonical HRAM is already synced
+    // for the taken edge and for the successor's canonical adapter).
+    let branch_only = ops.len() == 1 && matches!(ops[0], IrOp::Branch { .. });
+    if branch_only {
+        state.a_live = false;
+    } else {
+        invalidate_state(state);
+    }
     state.carry = None;
     out.push_str(&lr35902::emit_ops(ops));
     stats.barriers += 1;

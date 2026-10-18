@@ -234,6 +234,16 @@ def main_profiled(p, lines, codes, sections, sec_of_line, old_banks):
             continue
         cnt, rest = raw.split(None, 1)
         src, tgt = rest.rsplit(None, 1)
+        if src not in name_idx:
+            # Blocks chained into a trace (NES2GBC_BANKED_TRACES) lose their
+            # own section; credit the edge to the section holding the block.
+            m = re.fullmatch(r"NES block ([0-9A-F]{4})", src)
+            if m:
+                for lab in (f"nes_{m.group(1)}_trace", f"nes_{m.group(1)}"):
+                    if lab in label_sec:
+                        src = lines[sections[label_sec[lab]][0]]
+                        src = SEC_RE.match(src.rstrip("\n")).group(2)
+                        break
         if src in name_idx and tgt in label_sec:
             dyn[(name_idx[src], tgt)] = dyn.get((name_idx[src], tgt), 0) + float(cnt)
     weight = {}
