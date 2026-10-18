@@ -216,7 +216,8 @@ def main(path: str) -> None:
     NMI_FLAGS = (BIT["nes_z_shadow"] | BIT["nes_n_shadow"] | BIT["nes_c_shadow"])
     nmi_h = None
     if (any(l.startswith('SECTION "NES mapper') for l in lines)  # banked builds only
-            and not any(x and x[1] == "Tsx" for x in insn_of)):
+            and (__import__("os").environ.get("NES2GBC_HRAM_NMI_TSX_REACH", "0") != "0"
+                 or not any(x and x[1] == "Tsx" for x in insn_of))):
         for k, ck in enumerate(codes):
             if ck == "nes_nmi_entry:":
                 for k2 in range(k + 1, min(n, k + 6)):
@@ -228,6 +229,8 @@ def main(path: str) -> None:
                         break
                 break
     nmi_edges = 0
+    nmi_lines = []
+    rti_lines = set()
 
     for i, c in enumerate(codes):
         if not in_code[i]:
@@ -242,15 +245,19 @@ def main(path: str) -> None:
         if nmi_h is not None:
             if c == "call nes_poll_nmi_hl":
                 succ[i] = (i + 1,)
+                nmi_lines.append(i)
                 continue
             if (c == "jp nz, nes_nmi_entry" and i >= 2
                     and codes[i - 1] == "and a" and codes[i - 2] == "call nes_poll_nmi_hl"):
                 succ[i] = (i + 1, nmi_h)
                 nmi_edges += 1
+                nmi_lines.append(i)
                 continue
             if c == "call nes_rti_pop_hl":
                 kill[i] = NMI_FLAGS
                 succ[i] = (i + 1,)
+                nmi_lines.append(i)
+                rti_lines.add(i)
                 continue
         m = STORE_RE.match(c)
         if m:
@@ -321,7 +328,53 @@ def main(path: str) -> None:
         use[i] = ALL
         succ[i] = ()
 
+    # With TSX in the program the NMI-pushed P byte could be inspected. It
+    # only exists between NMI entry and RTI, so keep the poll-aware edges
+    # only when no TSX is reachable from the handler before RTI and the
+    # handler reaches no unresolved exit (where anything may follow).
+    if (nmi_h is not None and any(x and x[1] == "Tsx" for x in insn_of)
+            and not __import__("os").environ.get("NES2GBC_HRAM_EXP_TSX_IGNORE")):
+        seen = {nmi_h}
+        stack = [nmi_h]
+        bad = None
+        while stack and bad is None:
+            i = stack.pop()
+            if insn_of[i] and insn_of[i][1] == "Tsx":
+                bad = "TSX at $%04X" % insn_of[i][0]
+                break
+            if i in rti_lines:
+                continue
+            if not succ[i] and use[i] == ALL:
+                bad = "unresolved exit at line %d" % (i + 1)
+                break
+            for t in succ[i]:
+                if t < n and t not in seen and t != nmi_h:
+                    seen.add(t)
+                    stack.append(t)
+        if bad is not None:
+            for i in nmi_lines:
+                use[i] = ALL
+                kill[i] = 0
+                succ[i] = (i + 1,)
+            print(f"dead-hram-global: NMI-poll edges off ({bad} reachable from the NMI handler)")
+            nmi_edges = 0
+        else:
+            print(f"dead-hram-global: TSX present but unreachable from the NMI handler ({len(seen)} lines)")
     # Backward liveness: live_in = use | (live_out & ~kill)
+    _exp = __import__("os").environ.get("NES2GBC_HRAM_EXP_DEAD", "")
+    if _exp:
+        _m = 0
+        for v in _exp.split(","):
+            _m |= BIT[v]
+        _cre = re.compile(__import__("os").environ.get("NES2GBC_HRAM_EXP_CAT", "."))
+        if __import__("os").environ.get("NES2GBC_HRAM_EXP_DUMP"):
+            with open(__import__("os").environ["NES2GBC_HRAM_EXP_DUMP"], "w") as _f:
+                for i in range(n):
+                    if use[i] == ALL and in_code[i]:
+                        _f.write(re.sub(r"\$[0-9A-Fa-f]+|_[0-9A-F]{4}\b|\d+", "#", codes[i]) + "\n")
+        for i in range(n):
+            if use[i] == ALL and _cre.search(codes[i] if in_code[i] else "<notcode>"):
+                use[i] = ALL & ~_m
     preds = [[] for _ in range(n + 1)]
     for i in range(n):
         for s in succ[i]:
