@@ -48,13 +48,12 @@ nes_apu_nes_frame:
     push bc
     push de
     push hl
-    ld b, 4
-.step:
-    push bc
-    call nes_apu_frame_step
-    pop bc
-    dec b
-    jr nz, .step
+    ld a, BANK(nes_apu_nes_frame_romx)
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    call nes_apu_nes_frame_romx
+    call nes_restore_code_bank
     pop hl
     pop de
     pop bc
@@ -90,48 +89,14 @@ nes_apu_read_status:
     ret
 
 
-; ---------------------------------------------------------------------------
+; Boot-only: the body lives in helper bank $FF; boot runs with bank 1 mapped.
 nes_apu_init:
-nes_apu_init_banked:
-    ld hl, nes_apu_regs
-    ld b, $18 + 13         ; register mirror + APU architectural state + tick count
-    xor a
-.clear:
-    ld [hli], a
-    dec b
-    jr nz, .clear
-
-    ; Master APU on, full stereo volume, all pans enabled.
-    ld a, $80
-    ldh [rNR52], a
-    ld a, $77
-    ldh [rNR50], a
-    ld a, $FF
-    ldh [rNR51], a
-
-    ; Classic 32-step triangle (0..F..0) into wave RAM.
-    ld hl, rWave
-    ld de, .triangle_wave
-    ld b, 16
-.load_wave:
-    ld a, [de]
-    inc de
-    ld [hli], a
-    dec b
-    jr nz, .load_wave
-
-    ; Silence channels initially (DAC / envelope off).
-    xor a
-    ldh [rNR10], a
-    ldh [rNR12], a
-    ldh [rNR22], a
-    ldh [rNR30], a
-    ldh [rNR42], a
+    ld a, BANK(nes_apu_init_banked)
+    ld [$2000], a
+    call nes_apu_init_banked
+    ld a, $01
+    ld [$2000], a
     ret
-
-.triangle_wave:
-    db $01, $23, $45, $67, $89, $AB, $CD, $EF
-    db $FE, $DC, $BA, $98, $76, $54, $32, $10
 
 ; ---------------------------------------------------------------------------
 nes_apu_write:
@@ -775,11 +740,14 @@ nes_apu_vol_to_nrx2:
     swap a
     ret
 .envelope:
+    ; Preserve DE: start_p1/p2 still need the period high bits in D after
+    ; this call (envelope-mode notes used to get NRx4 frequency bits 0).
     and $0F
-    ld e, a
-    ld d, 0
-    ld hl, nes_apu_gb_env_period
-    add hl, de
+    add LOW(nes_apu_gb_env_period)
+    ld l, a
+    adc HIGH(nes_apu_gb_env_period)
+    sub l
+    ld h, a
     ld a, [hl]
 IF NES2GBC_APU_TEST_SPEED == 2
     add a
@@ -805,58 +773,37 @@ nes_apu_gb_env_period:
 ; ---------------------------------------------------------------------------
 ; Input:  BC = NES 11-bit timer t
 ; Output: DE = GBC period n = 2048 - min(2047, ((t+1)*75)/64), in 0..2047
-; Clobbers: AF, HL, BC
+; Clobbers: AF, HL, BC (BC = t + 1 on return)
 ;
 ; 75/64 = 1.171875, within ~0.03% of the NTSC NES->GBC divisor ratio for
 ; both pulse and triangle channels. No title-specific pitch scaling is applied.
 ; ---------------------------------------------------------------------------
 nes_apu_timer_to_period:
-    ; HL = t + 1
+    ; BC = x = t + 1 (<= $0800); HL = 11x (<= 22528)
     inc bc
-    ld l, c
     ld h, b
-
-    push hl
-    ; DE = HL * 11 = HL*8 + HL*2 + HL
-    push hl
+    ld l, c
     add hl, hl
-    add hl, hl
-    add hl, hl
-    ld e, l
     ld d, h
-    pop hl
-    push hl
+    ld e, l
     add hl, hl
-    ld a, l
-    add e
-    ld e, a
-    ld a, h
-    adc d
+    add hl, hl
+    add hl, de
+    add hl, bc
+    ; (11x)/64 = (11x << 2) >> 8: shift two bits into A, quotient is A:H
+    xor a
+    add hl, hl
+    rla
+    add hl, hl
+    rla
+    ld e, h
     ld d, a
-    pop hl
-    ld a, l
-    add e
-    ld e, a
-    ld a, h
-    adc d
-    ld d, a
-
-    ; DE = ((t+1)*11)/64
-    ld b, 6
-.shr6:
-    srl d
-    rr e
-    dec b
-    jr nz, .shr6
-
-    ; + (t+1) = ((t+1)*75)/64
-    pop hl
-    ld a, l
-    add e
-    ld e, a
-    ld a, h
-    adc d
-    ld d, a
+    ; DE = x + (11x)/64 = (x*75)/64
+    ld h, b
+    ld l, c
+    add hl, de
+    ld d, h
+    ld e, l
 
     ; Fast-forward compensation operates on the GB frequency divisor only.
     ; Doubling the divisor lowers pitch one octave; x4 lowers two octaves.
@@ -922,6 +869,44 @@ nes_apu_update_frame_counter:
     ld a, e
     bit 7, a
     ret z
+    ld a, BANK(nes_apu_update_frame_counter_romx)
+    ld [$2000], a
+    xor a
+    ld [$3000], a
+    call nes_apu_update_frame_counter_romx
+    jp nes_restore_code_bank
+
+; Official NES length counter table (bits 3-7 of $4003/$4007/$400B/$400F).
+nes_apu_length_table:
+    db 10,254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14
+    db 12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
+
+; NES noise period index 0..F → nearest GB NR43 clock setting.
+; NES index 0 is the highest clock and index F the lowest. Values below are
+; chosen by nearest log-frequency match using NTSC NES noise periods and the
+; GB clock formula 262144 / (divider * 2^shift). Bit 3 remains clear here and
+; is ORed in separately when NES short/periodic-noise mode is selected.
+nes_apu_noise_nr43:
+    db $00, $01, $02, $05, $15, $17, $25, $26
+    db $27, $35, $37, $45, $47, $55, $65, $75
+
+; ---------------------------------------------------------------------------
+; Frame sequencer (once per emulated NES frame) and boot init live in helper
+; bank $FF to keep ROM0 headroom; register-write paths stay in ROM0 and the
+; shared channel helpers they call are ROM0, so they are reachable from here.
+; ---------------------------------------------------------------------------
+SECTION "NES APU frame sequencer", ROMX, BANK[255]
+nes_apu_nes_frame_romx:
+    ld b, 4
+.step:
+    push bc
+    call nes_apu_frame_step
+    pop bc
+    dec b
+    jr nz, .step
+    ret
+
+nes_apu_update_frame_counter_romx:
     call nes_apu_clock_quarter
     jp nes_apu_clock_half
 
@@ -1002,6 +987,10 @@ nes_apu_clock_half:
     jp nes_apu_clock_sweep_p2
 
 nes_apu_clock_triangle_linear:
+    ; C = previous linear counter: the gate only depends on whether it is
+    ; zero, and every other gate input change re-gates at its own write.
+    ld a, [nes_apu_linear_tri]
+    ld c, a
     ld a, [nes_apu_tri_reload]
     and a
     jr z, .decrement
@@ -1024,9 +1013,21 @@ nes_apu_clock_triangle_linear:
     xor a
     ld [nes_apu_tri_reload], a
 .gate:
+    ld a, [nes_apu_linear_tri]
+    and a
+    jr z, .now_zero
+    ld a, c
+    and a
+    ret nz                          ; non-zero -> non-zero: gate unchanged
+    jp nes_apu_apply_triangle_gate
+.now_zero:
+    ld a, c
+    and a
+    ret z                           ; zero -> zero: gate unchanged
     jp nes_apu_apply_triangle_gate
 
 nes_apu_clock_lengths:
+    ld c, 0                         ; 1 = triangle length just reached 0
     ld a, [nes_apu_regs + $00]
     bit 5, a
     jr nz, .p2
@@ -1059,6 +1060,8 @@ nes_apu_clock_lengths:
     jr z, .noi
     dec a
     ld [nes_apu_len_tri], a
+    jr nz, .noi
+    inc c
 .noi:
     ld a, [nes_apu_regs + $0C]
     bit 5, a
@@ -1072,6 +1075,8 @@ nes_apu_clock_lengths:
     xor a
     ldh [rNR42], a
 .gate_triangle:
+    dec c
+    ret nz
     jp nes_apu_apply_triangle_gate
 
 
@@ -1178,16 +1183,45 @@ nes_apu_clock_sweep_p2:
     ld [nes_apu_sweep_reload_p2], a
     jp nes_apu_refresh_p2
 
-; Official NES length counter table (bits 3-7 of $4003/$4007/$400B/$400F).
-nes_apu_length_table:
-    db 10,254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14
-    db 12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
+; ---------------------------------------------------------------------------
+nes_apu_init_banked:
+    ld hl, nes_apu_regs
+    ld b, $18 + 13         ; register mirror + APU architectural state + tick count
+    xor a
+.clear:
+    ld [hli], a
+    dec b
+    jr nz, .clear
 
-; NES noise period index 0..F → nearest GB NR43 clock setting.
-; NES index 0 is the highest clock and index F the lowest. Values below are
-; chosen by nearest log-frequency match using NTSC NES noise periods and the
-; GB clock formula 262144 / (divider * 2^shift). Bit 3 remains clear here and
-; is ORed in separately when NES short/periodic-noise mode is selected.
-nes_apu_noise_nr43:
-    db $00, $01, $02, $05, $15, $17, $25, $26
-    db $27, $35, $37, $45, $47, $55, $65, $75
+    ; Master APU on, full stereo volume, all pans enabled.
+    ld a, $80
+    ldh [rNR52], a
+    ld a, $77
+    ldh [rNR50], a
+    ld a, $FF
+    ldh [rNR51], a
+
+    ; Classic 32-step triangle (0..F..0) into wave RAM.
+    ld hl, rWave
+    ld de, .triangle_wave
+    ld b, 16
+.load_wave:
+    ld a, [de]
+    inc de
+    ld [hli], a
+    dec b
+    jr nz, .load_wave
+
+    ; Silence channels initially (DAC / envelope off).
+    xor a
+    ldh [rNR10], a
+    ldh [rNR12], a
+    ldh [rNR22], a
+    ldh [rNR30], a
+    ldh [rNR42], a
+    ret
+
+.triangle_wave:
+    db $01, $23, $45, $67, $89, $AB, $CD, $EF
+    db $FE, $DC, $BA, $98, $76, $54, $32, $10
+
