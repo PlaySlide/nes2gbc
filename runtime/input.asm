@@ -55,7 +55,7 @@ nes_view_follow_update:
     ld a, $FF
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     call nes_view_follow_update_romx
     jp nes_restore_code_bank
 
@@ -63,7 +63,7 @@ nes_view_toggle_follow:
     ld a, $FF
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     call nes_view_toggle_follow_romx
     jp nes_restore_code_bank
 
@@ -71,7 +71,7 @@ nes_view_cycle_follow_target:
     ld a, $FF
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     call nes_view_cycle_follow_target_romx
     jp nes_restore_code_bank
 

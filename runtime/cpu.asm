@@ -233,7 +233,7 @@ ENDC
     add $18
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
 
     ; Table offset = (PC & $0FFF) * 4, mapped into ROMX $4000-$7FFF.
     ld a, h
@@ -291,7 +291,7 @@ ENDC
     ldh [nes_current_code_bank], a
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
 
     ld h, d
     ld l, e
@@ -309,15 +309,15 @@ nes_dispatch_dm_empty::
 nes_jump_known_hl_a:
     ldh [nes_current_code_bank], a
     ld [$2000], a
-    xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256). Block
+    ; entries never assume A/flags, so no A=0 normalization either.
     jp hl
 
 nes_restore_code_bank:
     ldh a, [nes_current_code_bank]
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     ret
 
 nes_unimplemented:
@@ -363,7 +363,7 @@ nes_cache_prg16_to_wram:
     ld a, $01
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
 
     ld de, $4000
     ld a, $02
@@ -401,7 +401,7 @@ nes_mapper2_conflict_read_hl:
     inc a
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
 
     ld a, h
     and $3F
@@ -570,7 +570,7 @@ ENDC
     inc a
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
 
     ; A 16 KiB NES window maps directly onto ROMX $4000-$7FFF.
     ld a, h
@@ -584,7 +584,7 @@ ENDC
     ldh a, [nes_current_code_bank]
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     ld a, l
 IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_debug_bus_value], a
@@ -1208,7 +1208,7 @@ ENDC
     ld a, $FF
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     call nes_mmc1_write_romx
     call nes_restore_code_bank
     ret
@@ -1331,7 +1331,7 @@ nes_mmc1_apply:
     ld a, $FF
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     ret
 
 ; Input: A = lhs, E = rhs. Uses lazy 6502 carry-in.

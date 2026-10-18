@@ -20,7 +20,7 @@ nes_interp_enter:
     ldh [nes_current_code_bank], a
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     jp nes_interp_run
 
 ; Translated code has no entry for this ROM PC (no dispatch-table entry, or

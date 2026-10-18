@@ -51,7 +51,7 @@ nes_apu_nes_frame:
     ld a, BANK(nes_apu_nes_frame_romx)
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     call nes_apu_nes_frame_romx
     call nes_restore_code_bank
     pop hl
@@ -872,7 +872,7 @@ nes_apu_update_frame_counter:
     ld a, BANK(nes_apu_update_frame_counter_romx)
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     call nes_apu_update_frame_counter_romx
     jp nes_restore_code_bank
 

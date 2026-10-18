@@ -16,7 +16,7 @@ nes_clear_chr_ram:
     ld a, $FF
     ld [$2000], a
     xor a
-    ld [$3000], a
+    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     call nes_clear_chr_ram_romx
     ret
 

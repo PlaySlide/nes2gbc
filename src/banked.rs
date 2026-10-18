@@ -403,7 +403,6 @@ fn emit_overlay_dispatch(out: &mut String, addresses: &BTreeSet<u16>) {
     writeln!(out, ":").unwrap();
     writeln!(out, "    ld [$2000], a").unwrap();
     writeln!(out, "    xor a").unwrap();
-    writeln!(out, "    ld [$3000], a").unwrap();
     writeln!(out, "    ld a, h").unwrap();
     writeln!(out, "    and $0F").unwrap();
     writeln!(out, "    ld h, a").unwrap();

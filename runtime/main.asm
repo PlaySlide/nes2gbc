@@ -23,6 +23,9 @@ nes_split_retire_grace_used: ds 1
 MACRO BOOT_INIT_BODY
     ; Canonical power-on state used by the recompiled 6502.
     xor a
+    ; MBC5 ROM bank bit 8 = 0 for the whole run: every bank switch writes
+    ; only $2000 (all code/data banks are < 256).
+    ld [$3000], a
     ldh [nes_a], a
     ldh [nes_x], a
     ldh [nes_y], a
