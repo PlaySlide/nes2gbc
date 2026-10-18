@@ -352,9 +352,50 @@ def main(path: str) -> None:
         if v and not (live_out[i] & BIT[v]):
             remove.add(i)
             stats[v] += 1
-    p.write_text("".join(l for k, l in enumerate(lines) if k not in remove))
+    # Partial dead-store sinking: a store that sits in the straight-line run
+    # right before a conditional jump (only other stores and A-preserving
+    # flag tests in between) and is dead on the taken edge but live on the
+    # fallthrough moves past the jump, so the taken path no longer pays for
+    # it. A still holds the stored value there; host flags are unaffected.
+    sink_after = {}
+    SINK_VARS = set(__import__("os").environ.get("NES2GBC_HRAM_SINK_VARS", " ".join(VARS)).split())
+    sunk = 0
+    if __import__("os").environ.get("NES2GBC_HRAM_SINK", "1") != "0":
+        for j, c in enumerate(codes):
+            if not in_code[j] or ignore[j] or barrier[j] or len(succ[j]) != 2:
+                continue
+            op, _, rest = c.partition(" ")
+            parts = [x.strip() for x in rest.split(",")]
+            if op not in ("jp", "jr") or len(parts) != 2 or parts[0] not in COND:
+                continue
+            t, f = succ[j]
+            if f != j + 1 or f >= n or t >= n or not in_code[f]:
+                continue
+            moved = []
+            k = j - 1
+            while k >= 0:
+                ck = codes[k]
+                if k in remove or ck == "" or ck in ("and a", "or a") or re.match(r"^bit [0-7], a$", ck) \
+                        or re.match(r"^cp (\$[0-9A-Fa-f]+|[bcdehl]|\[hl\])$", ck):
+                    k -= 1
+                    continue
+                if store_var[k] and in_code[k] and not ignore[k]:
+                    b = BIT[store_var[k]]
+                    if store_var[k] in SINK_VARS and not (live_in[t] & b) and (live_in[f] & b) and not any(
+                            store_var[q] == store_var[k] for q, _ in moved):
+                        moved.append((k, lines[k]))
+                    k -= 1
+                    continue
+                break
+            if moved and sunk < int(__import__("os").environ.get("NES2GBC_HRAM_SINK_MAX", "1000000000")):
+                for k2, _ in moved:
+                    remove.add(k2)
+                sink_after[j] = "".join(l for _, l in reversed(moved))
+                sunk += len(moved)
+    p.write_text("".join((l if k not in remove else "") + sink_after.get(k, "")
+                         for k, l in enumerate(lines)))
     print("dead-hram-global: removed " + ", ".join(f"{c} {v}" for v, c in stats.items() if c) +
-          f" ({len(remove)} stores; {rts_edges} RTS fallbacks with proven return sets; {nmi_edges} NMI-poll edges)")
+          f" ({len(remove) - sunk} stores; {sunk} sunk past taken-dead branches; {rts_edges} RTS fallbacks with proven return sets; {nmi_edges} NMI-poll edges)")
 
 
 if __name__ == "__main__":
