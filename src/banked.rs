@@ -726,7 +726,7 @@ pub fn emit_mapper2_cfgs(
     // in the same section with A/X/Y residency carried across; every other
     // entry to B goes through a canonical adapter.
     let mut chain_next: BTreeMap<u16, u16> = BTreeMap::new();
-    if !options.debug_trace && std::env::var("NES2GBC_BANKED_TRACES").map(|v| v != "0").unwrap_or(true) {
+    if !options.debug_trace && std::env::var("NES2GBC_BANKED_TRACES").map(|v| v == "1").unwrap_or(false) {
         let mut incoming: BTreeMap<u16, usize> = BTreeMap::new();
         let mut count = |b: &BasicBlock| {
             for t in b.edges.iter().filter_map(|e| e.target) {
