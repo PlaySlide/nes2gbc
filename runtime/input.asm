@@ -315,75 +315,48 @@ nes_view_follow_update_romx:
     ld [nes_view_follow_ref_y], a
 
 .scan_from_ref:
-    ld a, $FF
-    ld [nes_view_follow_best_dist], a
-    ld hl, nes_oam_ram
-    ld b, 64
-
-.scan:
-    ; NES OAM Y is top-minus-one; $EF+ is conventionally hidden/offscreen.
-    ld a, [hli]
-    cp $EF
-    jp nc, .skip_three
-    inc a
-    ld [nes_view_follow_candidate_y], a
-
-    ; Skip tile + attributes, then read X.
-    inc hl
-    inc hl
-    ld a, [hli]
-    ld [nes_view_follow_candidate_x], a
-
-    ; Chebyshev distance = max(abs(dx), abs(dy)); no 8-bit sum overflow.
-    ld c, a
+    ; Registers: D = ref X, E = ref Y, B = best distance, C = |dy|.
     ld a, [nes_view_follow_ref_x]
-    sub c
-    jr nc, .dx_ready
-    cpl
-    inc a
-.dx_ready:
     ld d, a
-
-    ld a, [nes_view_follow_candidate_y]
-    ld c, a
     ld a, [nes_view_follow_ref_y]
-    sub c
-    jr nc, .dy_ready
+    ld e, a
+    ld b, $FF
+    ; Unrolled over the 64 fixed canonical OAM entries (absolute loads).
+FOR I, 64
+    ; NES OAM Y is top-minus-one; $EF+ is conventionally hidden/offscreen.
+    ld a, [nes_oam_ram + 4 * I]
+    cp $EF
+    jr nc, .s_n{d:I}
+    inc a
+    ; Chebyshev distance = max(abs(dx), abs(dy)); no 8-bit sum overflow.
+    sub e
+    jr nc, .s_p{d:I}
     cpl
     inc a
-.dy_ready:
-    cp d
-    jr nc, .distance_ready
-    ld a, d
-.distance_ready:
+.s_p{d:I}:
     ld c, a
-
-    ld a, [nes_view_follow_best_dist]
+    ld a, [nes_oam_ram + 4 * I + 3]
+    sub d
+    jr nc, .s_q{d:I}
+    cpl
+    inc a
+.s_q{d:I}:
     cp c
-    jr c, .next
-    jr z, .next
-
+    jr nc, .s_r{d:I}
     ld a, c
-    ld [nes_view_follow_best_dist], a
-
-    ; Current slot index = 64 - remaining-count B.
-    ld a, $40
-    sub b
+.s_r{d:I}:
+    ; Strictly nearer than the best so far: record it and its slot.
+    cp b
+    jr nc, .s_n{d:I}
+    ld b, a
+    ld a, I
     ld [nes_view_follow_slot], a
-
-.next:
-    dec b
-    jp nz, .scan
-    jr .finish
-
-.skip_three:
-    inc hl
-    inc hl
-    inc hl
-    dec b
-    jp nz, .scan
+.s_n{d:I}:
+ENDR
 
 .finish:
+    ld a, b
+    ld [nes_view_follow_best_dist], a
     ld a, [nes_view_follow_valid]
     and a
     ld a, [nes_view_follow_best_dist]
@@ -548,47 +521,36 @@ nes_view_follow_hinted:
 .anchor_ready:
     ld c, a                 ; C = anchor X
     ld d, $FF               ; D = best |dx|
-    ld hl, nes_oam_ram
-    ld b, 64
-.band_scan:
-    ld a, [hl]
+    ; B = best X. Unrolled over the 64 fixed canonical OAM entries.
+FOR I, 64
+    ld a, [nes_oam_ram + 4 * I]
     cp $EF
-    jr nc, .band_next
+    jr nc, .b_n{d:I}
     sub e
-    jr nc, .dy_pos
+    jr nc, .b_p{d:I}
     cpl
     inc a
-.dy_pos:
+.b_p{d:I}:
     cp 32
-    jr nc, .band_next
-    inc l
-    inc l
-    inc l
-    ld a, [hl]
-    dec l
-    dec l
-    dec l
-    ld [nes_view_follow_candidate_x], a
+    jr nc, .b_n{d:I}
+    ld a, [nes_oam_ram + 4 * I + 3]
     sub c
-    jr nc, .dx_pos
+    jr nc, .b_q{d:I}
     cpl
     inc a
-.dx_pos:
+.b_q{d:I}:
     cp d
-    jr nc, .band_next
+    jr nc, .b_n{d:I}
     ld d, a
-    ld a, [nes_view_follow_candidate_x]
-    ld [nes_view_follow_best_dist], a   ; best X
-.band_next:
-    inc l
-    inc l
-    inc l
-    inc l
-    dec b
-    jr nz, .band_scan
+    ld a, [nes_oam_ram + 4 * I + 3]
+    ld b, a
+.b_n{d:I}:
+ENDR
     ld a, d
     cp $FF
     jr z, .apply_y_only
+    ld a, b
+    ld [nes_view_follow_best_dist], a   ; best X
     ; With a valid anchor, accept only a sprite within 16px of it (bullets and
     ; enemies share the player's lines); else hold X, and reacquire nearest
     ; screen centre after FOLLOW_LOST_LIMIT misses.
