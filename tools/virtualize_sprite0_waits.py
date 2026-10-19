@@ -26,6 +26,7 @@ branches through the canonical nes_XXXX adapter.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,44 @@ class Candidate:
     branch_jump_i: int
     addr: int
     wait_for_set: bool
+    nmi_only: bool = True
+
+
+COUNTERS = {"Inx", "Iny", "Dex", "Dey"}
+
+
+def mainline_enabled() -> bool:
+    return os.environ.get("NES2GBC_SPRITE0_VIRTUAL_MAIN", "1") != "0"
+
+
+def counter_heads(lines: list[str]) -> set[int]:
+    """Blocks T that are exactly `INX|INY|DEX|DEY / BEQ|BNE <exit>` and fall
+    through into T+3: the timeout head of a counted sprite-0 wait loop."""
+    out: set[int] = set()
+    cur = None
+    insns: list = []
+
+    def close():
+        if cur is None or len(insns) != 2:
+            return
+        a, b = insns
+        if a[0] == cur and a[2] in COUNTERS and a[3] == "Implied" \
+                and b[0] == (cur + 1) & 0xFFFF and b[2] in {"Beq", "Bne"} and b[3] == "Relative":
+            out.add(cur)
+
+    for line in lines:
+        c = code(line)
+        bm = BLOCK_RE.fullmatch(c)
+        if bm or c.startswith("SECTION "):
+            close()
+            cur = int(bm.group(1), 16) if bm else None
+            insns = []
+            continue
+        x = insn(line)
+        if x is not None and (not insns or insns[-1][0] != x[0]):
+            insns.append(x)
+    close()
+    return out
 
 
 def block_end(lines: list[str], start: int) -> int:
@@ -74,8 +113,56 @@ def block_end(lines: list[str], start: int) -> int:
     return len(lines)
 
 
+def poll_blocks(lines: list[str]) -> set[int]:
+    """Blocks nes_P that start with a marked $2002 read at P followed by
+    AND #imm at P+3 and BEQ/BNE at P+5 (any target)."""
+    out: set[int] = set()
+    cur = None
+    seen: dict[int, tuple] = {}
+    marked = False
+
+    def close():
+        if cur is None or not marked:
+            return
+        a, b, c = seen.get(cur), seen.get((cur + 3) & 0xFFFF), seen.get((cur + 5) & 0xFFFF)
+        if a and b and c and a[2:] == ("Lda", "Absolute") and b[2:] == ("And", "Immediate") \
+                and c[2] in {"Beq", "Bne"}:
+            out.add(cur)
+
+    for line in lines:
+        c = code(line)
+        bm = BLOCK_RE.fullmatch(c)
+        if bm or c.startswith("SECTION "):
+            close()
+            cur = int(bm.group(1), 16) if bm else None
+            seen = {}
+            marked = False
+            continue
+        if is_marker(line):
+            marked = True
+        x = insn(line)
+        if x is not None:
+            seen.setdefault(x[0], x)
+    close()
+    return out
+
+
 def find_candidates(lines: list[str]) -> list[Candidate]:
     out: list[Candidate] = []
+    heads = counter_heads(lines) if mainline_enabled() else set()
+    polls = poll_blocks(lines) if heads else set()
+
+    def chain_ok(t: int, p: int) -> bool:
+        # head T falls through T+3, T+10, ... (each a 7-byte $2002 poll
+        # block) down to P
+        q = (t + 3) & 0xFFFF
+        for _ in range(4):
+            if q == p:
+                return True
+            if q not in polls:
+                return False
+            q = (q + 7) & 0xFFFF
+        return False
     physical_addr: int | None = None
     physical_start = 0
     physical_end = len(lines)
@@ -131,15 +218,29 @@ def find_candidates(lines: list[str]) -> list[Candidate]:
         jump_i = None
         for j in range(branch_i + 1, physical_end):
             m = COND_SELF_RE.fullmatch(code(lines[j]))
-            if not m:
-                continue
-            if m.group(1) == expected_cond and int(m.group(2), 16) == physical_addr:
-                jump_i = j
+            at = j
+            if m and m.group(1) == expected_cond:
+                t = int(m.group(2), 16)
+            else:
+                # undispatched form: jr <!cond>, :+ / ld hl, $T / jp nes_dispatch_hl / :
+                m2 = re.fullmatch(r"jr (z|nz), :\+", code(lines[j]))
+                if not (m2 and mainline_enabled() and j + 3 < physical_end):
+                    continue
+                inv = "nz" if m2.group(1) == "z" else "z"
+                m3 = re.fullmatch(r"ld hl, \$([0-9A-Fa-f]{4})", code(lines[j + 1]))
+                if inv != expected_cond or not m3 or code(lines[j + 2]) != "jp nes_dispatch_hl" \
+                        or code(lines[j + 3]) != ":":
+                    continue
+                t = int(m3.group(1), 16)
+                at = j + 3
+            if t == physical_addr or (t in heads and chain_ok(t, physical_addr)):
+                jump_i = at
                 break
         if jump_i is None:
             continue
 
-        out.append(Candidate(i, jump_i, physical_addr, branch[2] == "Beq"))
+        out.append(Candidate(i, jump_i, physical_addr, branch[2] == "Beq",
+                             nmi_only=not mainline_enabled()))
 
     return out
 
@@ -155,11 +256,35 @@ def apply(lines: list[str], candidates: list[Candidate]) -> tuple[int, int]:
         physical = f"{tag}_physical"
         done = f"{tag}_done"
 
-        fast = [
-            f"{ind}; virtualized exact sprite-0 {'set' if c.wait_for_set else 'clear'} wait while translated NMI is active\n",
-            f"{ind}ld a, [nes_nmi_active]\n",
-            f"{ind}and a\n",
-            f"{ind}jr z, {physical}\n",
+        virt = f"{tag}_virtual"
+        if c.nmi_only:
+            fast = [
+                f"{ind}; virtualized exact sprite-0 {'set' if c.wait_for_set else 'clear'} wait while translated NMI is active\n",
+                f"{ind}ld a, [nes_nmi_active]\n",
+                f"{ind}and a\n",
+                f"{ind}jr z, {physical}\n",
+            ]
+        else:
+            # Mainline too: the renderer places the split from STAT/LYC, so
+            # the wait need not track the live host raster. A set wait still
+            # requires a hit to be possible this frame (rendering on, sprite 0
+            # on screen); otherwise the physical poll keeps its exact result.
+            fast = [f"{ind}; virtualized sprite-0 {'set' if c.wait_for_set else 'clear'} wait (NMI or mainline)\n"]
+            if c.wait_for_set:
+                fast += [
+                    f"{ind}ld a, [nes_nmi_active]\n",
+                    f"{ind}and a\n",
+                    f"{ind}jr nz, {virt}\n",
+                    f"{ind}ld a, [nes_ppumask]\n",
+                    f"{ind}and $18\n",
+                    f"{ind}cp $18\n",
+                    f"{ind}jr nz, {physical}\n",
+                    f"{ind}ld a, [nes_oam_ram]\n",
+                    f"{ind}cp $EF\n",
+                    f"{ind}jr nc, {physical}\n",
+                    f"{virt}:\n",
+                ]
+        fast += [
             f"{ind}ld a, [nes_ppu_status]\n",
             f"{ind}and $3F\n",
         ]
@@ -209,7 +334,7 @@ def main() -> int:
     print(
         "sprite0-wait-virtual: fast-forwarded "
         f"{clear_waits} clear + {set_waits} set exact self-loop wait(s) inside translated NMI; "
-        "physical fallback preserved"
+        f"physical fallback preserved (mainline={'on' if mainline_enabled() else 'off'})"
     )
     return 0
 
