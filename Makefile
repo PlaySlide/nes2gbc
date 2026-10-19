@@ -170,6 +170,7 @@ generate:
 		# TRACE and partial POSTPASS_THROUGH builds also expand generated blocks. \
 		# Normalize short/long NES-label jumps after the final selected pass so \
 		# debug/pass-isolation builds cannot leave an out-of-range JR behind. \
+		if [ "$(POSTPASS_THROUGH)" = "all" ]; then python3 tools/outline_nmi_polls.py runtime/generated.asm; fi; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 
