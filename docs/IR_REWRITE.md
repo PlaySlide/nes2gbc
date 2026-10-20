@@ -36,29 +36,56 @@ games plus opt-out combinations and the CI smoke ROMs.
 * `Item`: `Inst`, `Label { global }` (RGBDS scoping: `.x` and `a.b` are local,
   `:` anonymous), `Directive` (SECTION, IF/ENDC, db, macros: opaque),
   `Comment`, `Blank`.
-* `MirBuf`: the single emission buffer every path now writes into (it
-  implements `fmt::Write`, `push_str`, `len`, `truncate`, and derefs to `str`,
-  so emitter code is unchanged). It keeps the exact text and incrementally
-  parses each completed line into an `Item`; printing is the stored text, so
-  output is identical by construction. `MirBuf::blocks()` gives
-  global-label blocks with successor labels and fall-through.
-* `report_entry_reloads` (`NES2GBC_MIR_STATS=1`) prints, per path, how many
-  block-entry HRAM reloads of A/X/Y/SP exist: the stage-2 opportunity.
+* `MirBuf`: the single emission buffer every path writes into.
+  * **Typed builders** (stage 1c): `ins(mnemonic, &[operands], comment)`
+    constructs the `Inst` (def/use from the decoder table) and renders its
+    line; `label(name)`; `nes_label(name, BlockMeta)`. Emitters construct
+    instructions through these; text is rendered from them. About 99% of
+    instructions are built (SMB 84,052 built / 1,209 parsed; Zelda
+    242,086 / 423). What still arrives as text and is parsed: directives
+    (SECTION, IF/ELSE/ENDC, db/dw/ds, INCBIN), comments, the follow-hint
+    routine in main.rs, and banked chained-entry adapters (strings joined
+    with `jp X_trace`).
+  * `append(MirBuf)` / `without_line` move built MIR between buffers
+    (lr35902 `emit_ops_buf` output is appended, not re-parsed).
+  * It still implements `fmt::Write`/`push_str`/`truncate` and derefs to
+    `str` for the remaining text paths, parsing completed lines.
+* `BlockMeta` (stage 1c): emitter-supplied identity of NES block labels:
+  NES `pc`, PRG `bank` (banked views), `EntryKind` (`Canonical` = HRAM
+  contract; `Trace` = `_trace` continuation with resident A/X/Y;
+  `Unchecked` = overlay `nes_r_XXXX_nc`), and the `poll` flag.
+  `MirBuf::blocks()` attaches it to each `Block`.
+* `report_entry_reloads` (`NES2GBC_MIR_STATS=1`) prints, per path, block
+  count, built vs parsed instructions, and block-entry HRAM reloads of
+  A/X/Y/SP: the stage-2 opportunity.
 
 ### Shared logic
 
-* `src/emit_common.rs`: `estimated_block_size`, `emit_pc_dispatch`,
-  `flag_mask` (were copied in each path).
-* `src/polls.rs`: NMI poll placement: `nmi_poll_points` (was copied 3x),
+* `src/emit_common.rs` (stage 1a + 1d): bank constants,
+  `estimated_block_size`, `emit_pc_dispatch`, `flag_mask`, `is_branch`,
+  `terminal_mnemonic`, `select_reachable`, `assign_code_banks(max_bank)`
+  (255 plain / 254 superblock), `emit_dispatch_tables`, `approx_code_bytes`,
+  `emit_static_target`, `emit_known_target`,
+  `emit_static_control(fast_a_target)` (`emit_fast_a_target` is only used by
+  the plain path), `reachable_from_roots`, `nmi_exclusive_blocks`. These were
+  copied between recompile.rs and state_superblock.rs and differed only in
+  formatting/comments, plus those two parameters.
+* `src/polls.rs`: NMI poll placement: `nmi_poll_points`,
   `cyclic_back_targets`, counted-loop budget rules; used by NROM and banked.
+* banked.rs keeps its own `is_branch`/`terminal_mnemonic`/
+  `emit_dispatch_tables` (different semantics: BRK, mapper dispatch layout).
 
 ## Stage plan
 
 1. **Stage 1 (this branch)**: MIR types; all paths emit into `MirBuf`;
-   dedupe shared helpers; byte-identical proof script. *Status: done for the
-   buffer/IR layer and dedup; emitters still build instructions as text
-   (writeln!) which MirBuf parses.*
-   Remaining stage-1 items:
+   typed builders; NES block metadata; dedupe shared helpers;
+   byte-identical proof script. *Status: done (1a-1d).* Still textual
+   (by design for now): directives/comments; remaining duplication is the two
+   main per-block emission loops (`recompile::emit_cfg_with_interrupts_impl`
+   vs `state_superblock`'s superblock planner/emitter), which really differ
+   (A-residency fast entries vs X/Y/A trace residency) and are unified as part
+   of stage 2 when both lower from one MIR block model.
+   Former stage-1 items (all done):
    * construct `Inst`s directly (typed builders such as
      `m.ldh_load(Loc::A, Loc::NesX)`) instead of formatting text, starting
      with `state_superblock.rs` helpers (`ensure_x/ensure_y/materialize_*`,
