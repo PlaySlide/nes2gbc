@@ -1326,6 +1326,14 @@ pub(crate) struct CarryCfg {
     /// replacements) assume HRAM is authoritative at every 6502 control
     /// transfer, which clean contracts preserve.
     pub dirty: bool,
+    /// Only contract registers the successor reads before writing
+    /// (NES2GBC_XY_PROFIT=0 disables).
+    pub profit: bool,
+}
+
+fn xy_strict() -> bool {
+    static S: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *S.get_or_init(|| std::env::var("NES2GBC_XY_STRICT").as_deref() != Ok("0"))
 }
 
 fn carry_keep() -> (bool, bool) {
@@ -1342,14 +1350,17 @@ pub(crate) fn carry_cfg() -> CarryCfg {
         "0" => (false, false),
         "x" => (true, false),
         "y" => (false, true),
-        "xy" => (true, true),
-        // Default: X only. Carrying Y measured as a net loss (SMB +3% wcost:
-        // predecessors must load C for the contract more often than it saves).
-        _ => (true, false),
+        "xy" | "1" => (true, true),
+        // Default: off (output identical to stage 1). With the
+        // profitability rules X+Y carry measured within +-1% of stage 1 in
+        // real GB cycles per NES frame on all 12 games (docs/IR_REWRITE.md),
+        // so it stays opt-in.
+        _ => (false, false),
     };
     let keep = (x || y) && std::env::var("NES2GBC_XY_KEEP").as_deref() != Ok("0");
     let dirty = (x || y) && std::env::var("NES2GBC_XY_DIRTY").as_deref() == Ok("1");
-    CarryCfg { x, y, keep, dirty }
+    let profit = std::env::var("NES2GBC_XY_PROFIT").as_deref() != Ok("0");
+    CarryCfg { x, y, keep, dirty, profit }
 }
 
 /// Register contract of a block's `nes_XXXX_rc` entry: for X (in B) and Y
@@ -1375,6 +1386,30 @@ struct Arrivals {
     x_dirty: u32,
     y_res: u32,
     y_dirty: u32,
+}
+
+/// Stage-2 profitability: is X (resp. Y) read before it is written in the
+/// block at `addr` (upward-exposed)? A contract on a register the successor
+/// overwrites first is pure cost: its stub loads it eagerly on every dynamic
+/// entry and predecessors may have to load it, while the body never needs it.
+/// Unknown (untouched before the block end, JSR, or BRK) counts as not read.
+pub(crate) fn exposed_xy(block: &crate::cfg::BasicBlock) -> (bool, bool) {
+    use crate::cpu6502::AddressingMode as M;
+    use crate::cpu6502::Mnemonic::*;
+    let (mut x, mut y): (Option<bool>, Option<bool>) = (None, None);
+    for i in &block.instructions {
+        let (m, mode) = (i.def.mnemonic, i.def.mode);
+        let rx = matches!(mode, M::ZeroPageX | M::AbsoluteX | M::IndexedIndirect)
+            || matches!(m, Inx | Dex | Stx | Txa | Txs | Cpx);
+        let ry = matches!(mode, M::ZeroPageY | M::AbsoluteY | M::IndirectIndexed)
+            || matches!(m, Iny | Dey | Sty | Tya | Cpy);
+        if x.is_none() && rx { x = Some(true); }
+        if y.is_none() && ry { y = Some(true); }
+        if x.is_none() && matches!(m, Ldx | Tax | Tsx) { x = Some(false); }
+        if y.is_none() && matches!(m, Ldy | Tay) { y = Some(false); }
+        if matches!(m, Jsr | Brk | Rts | Rti) { break; }
+    }
+    (x == Some(true), y == Some(true))
 }
 
 fn refine_contracts(cur: &BTreeMap<u16, Contract>, arr: &BTreeMap<u16, Arrivals>) -> BTreeMap<u16, Contract> {
@@ -1439,6 +1474,12 @@ fn carry_exit(
     let x_hit = c.x.is_some() && state.x_b;
     let y_hit = c.y.is_some() && state.y_c;
     if !x_hit && !y_hit {
+        return None;
+    }
+    // Strict (default; NES2GBC_XY_STRICT=0 disables): never load a register only to satisfy a contract
+    // (go canonical instead). Measured better than loading the missing one
+    // here (SMB wcost -0.6% vs +2.9% with X+Y).
+    if xy_strict() && ((c.x.is_some() && !state.x_b) || (c.y.is_some() && !state.y_c)) {
         return None;
     }
     let a = arrivals.entry(target).or_default();
@@ -1571,6 +1612,28 @@ impl LocalTrace {
     }
     pub fn a_live(&self) -> bool {
         self.state.a_live
+    }
+    /// Stage 2 (banked): emit a clean register-contract stub (HRAM -> B/C)
+    /// at a canonical block head followed by the `nes_<pc>_trace` contract
+    /// entry; the body then starts with X (resp. Y) resident and clean.
+    pub fn enter_contract(&mut self, out: &mut MirBuf, pc: u16, bank: Option<u16>, x: bool, y: bool) {
+        writeln!(out, "    ; xy-carry stub: clean register contract (HRAM authoritative)").unwrap();
+        if y {
+            out.ins("ldh", &["a", "[nes_y]"], None);
+            out.ins("ld", &["c", "a"], Some("carry stub: reload cached X/Y (Y in C)"));
+        }
+        if x {
+            out.ins("ldh", &["a", "[nes_x]"], None);
+            out.ins("ld", &["b", "a"], Some("carry stub: reload cached X/Y (X in B)"));
+        }
+        out.nes_label(&format!("nes_{pc:04X}_trace"), crate::mir::BlockMeta { pc, bank, kind: crate::mir::EntryKind::Carry, poll: false });
+        self.state = TraceState::default();
+        self.state.x_b = x;
+        self.state.y_c = y;
+    }
+    /// Clean residency of (X in B, Y in C) after the body (state is synced).
+    pub fn resident_clean(&self) -> (bool, bool) {
+        (self.state.x_b && !self.state.x_dirty, self.state.y_c && !self.state.y_dirty)
     }
 }
 
@@ -1735,7 +1798,11 @@ pub fn emit_cfg_with_interrupts(
             if continuing_target || polled {
                 continue;
             }
-            contracts.insert(addr, Contract { x: carry.x.then_some(carry.dirty), y: carry.y.then_some(carry.dirty) });
+            let (ex, ey) = if carry.profit { exposed_xy(&graph.blocks[&addr]) } else { (true, true) };
+            let c = Contract { x: (carry.x && ex).then_some(carry.dirty), y: (carry.y && ey).then_some(carry.dirty) };
+            if !c.is_empty() {
+                contracts.insert(addr, c);
+            }
         }
         // Debug bisection aid: NES2GBC_XY_RANGE=lo-hi (hex NES PCs) keeps
         // only contracts inside the range.

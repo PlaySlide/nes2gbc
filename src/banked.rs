@@ -185,6 +185,7 @@ fn emit_block(
     trace: &mut crate::state_superblock::LocalTrace,
     continuing: bool,
     chain_to: Option<u16>,
+    carry: &BTreeMap<u16, (u16, bool, bool)>,
 ) -> Option<String> {
     let mut adapter = None;
     if continuing {
@@ -242,6 +243,13 @@ fn emit_block(
         writeln!(out, "    ; m2-bank-stable").unwrap();
     }
 
+    // Stage 2: register-contract entry for carried static predecessors
+    // (dynamic entries, dispatch and bank thunks land on the canonical label
+    // above and reload through the stub).
+    if let (BlockId::Fixed(pc), Some(&(_, cx, cy))) = (id, carry.get(&block.start)) {
+        trace.enter_contract(out, pc, None, cx, cy);
+    }
+
     writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
     out.ins("ld", &["hl", format!("${:04X}", block.start).as_str()], None);
     out.ins("call", &["nes_profile_trace_pc"], None);
@@ -266,6 +274,38 @@ fn emit_block(
     }
     if chain_to.is_some() {
         return adapter;
+    }
+    // Stage 2: a carried exit enters the target's contract entry directly
+    // when every contract register is resident and clean here (strict: no
+    // load just for the contract) and the target shares this host bank.
+    let carried = |t: u16| -> Option<String> {
+        if !matches!(id, BlockId::Fixed(_)) {
+            return None;
+        }
+        let &(tb, cx, cy) = carry.get(&t)?;
+        let (xb, yc) = trace.resident_clean();
+        (tb == host_bank && (!cx || xb) && (!cy || yc)).then(|| format!("    jp nes_{t:04X}_trace ; xy-carry\n"))
+    };
+    if let Some(last) = block.instructions.last() {
+        let taken = if is_branch(last.def.mnemonic)
+            || (last.def.mnemonic == crate::cpu6502::Mnemonic::Jmp && last.def.mode == crate::cpu6502::AddressingMode::Absolute)
+        {
+            block.edges.iter().find(|e| !matches!(e.kind, EdgeKind::Fallthrough)).and_then(|e| e.target)
+        } else {
+            None
+        };
+        if let Some(t) = taken {
+            if let Some(j) = carried(t) {
+                let pat = format!("    ld hl, ${t:04X}\n    jp nes_dispatch_hl\n");
+                if let Some(k) = out[body_start..].rfind(&pat) {
+                    let k = body_start + k;
+                    let tail = out[k + pat.len()..].to_string();
+                    out.truncate(k);
+                    out.push_str(&j);
+                    out.push_str(&tail);
+                }
+            }
+        }
     }
     if !rts_guard.is_empty() {
         // Guarded RTS continuations: HL holds the architectural return PC
@@ -300,8 +340,12 @@ fn emit_block(
                 .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                 .and_then(|edge| edge.target)
             {
-                out.ins("ld", &["hl", format!("${target:04X}").as_str()], None);
-                out.ins("jp", &["nes_dispatch_hl"], None);
+                if let Some(j) = carried(target) {
+                    out.push_str(&j);
+                } else {
+                    out.ins("ld", &["hl", format!("${target:04X}").as_str()], None);
+                    out.ins("jp", &["nes_dispatch_hl"], None);
+                }
             }
         }
     }
@@ -920,6 +964,24 @@ pub fn emit_mapper2_cfgs(
     out.ins("jp", &["nes_dispatch_hl"], None);
     writeln!(out).unwrap();
 
+    // Stage 2 register contracts (fixed-bank blocks; same host bank only).
+    let no_carry: BTreeMap<u16, (u16, bool, bool)> = BTreeMap::new();
+    let mut carry: BTreeMap<u16, (u16, bool, bool)> = BTreeMap::new();
+    let ccfg = crate::state_superblock::carry_cfg();
+    if !options.debug_trace && (ccfg.x || ccfg.y) && std::env::var("NES2GBC_XY_BANKED").as_deref() != Ok("0") {
+        let continuing: BTreeSet<u16> = chain_next.values().copied().collect();
+        for (&pc, block) in &fixed_selected {
+            if fixed_polls.contains(&pc) || continuing.contains(&pc) {
+                continue;
+            }
+            let (ex, ey) = if ccfg.profit { crate::state_superblock::exposed_xy(block) } else { (true, true) };
+            let (cx, cy) = (ccfg.x && ex, ccfg.y && ey);
+            if cx || cy {
+                carry.insert(pc, (assigned[&BlockId::Fixed(pc)], cx, cy));
+            }
+        }
+        println!("xy-carry(banked): {} fixed-bank register-contract entries", carry.len());
+    }
     let mut trace = crate::state_superblock::LocalTrace::default();
     let mut adapters: Vec<(BlockId, String)> = Vec::new();
     let mut prev_chain: Option<u16> = None;
@@ -942,6 +1004,7 @@ pub fn emit_mapper2_cfgs(
             &mut trace,
             continuing,
             prev_chain,
+            &carry,
         );
         if let Some(a) = adapter {
             adapters.push((BlockId::Fixed(pc), a));
@@ -975,6 +1038,7 @@ pub fn emit_mapper2_cfgs(
             &mut crate::state_superblock::LocalTrace::default(),
             false,
             None,
+            &no_carry,
         );
     }
     if let Some(ov) = overlay {
@@ -996,6 +1060,7 @@ pub fn emit_mapper2_cfgs(
                 &mut crate::state_superblock::LocalTrace::default(),
                 false,
                 None,
+                &no_carry,
             );
         }
         let entries: BTreeSet<u16> = ov.blocks.keys().copied().collect();

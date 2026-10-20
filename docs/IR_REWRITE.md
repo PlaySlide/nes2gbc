@@ -166,23 +166,64 @@ into another section head within the same bank.
     with extra scratch registers.
   - A cargo test keeps that list in sync with the pass.
 
+**Profitability rules (stage 2b):**
+
+- A register gets a contract only if the successor block reads it before
+  writing it (`exposed_xy`; `NES2GBC_XY_PROFIT=0` turns this off).
+- Strict mode (`NES2GBC_XY_STRICT=0` turns it off): a predecessor takes the
+  contract entry only when every contract register is already resident and
+  clean, so it never loads a register just to meet a contract.
+- Contracts that no carried predecessor ever reaches are dropped by the
+  fixed-point refinement.
+- Edges are not weighted by profile counts. Under these rules every carried
+  edge saves at least one load and costs nothing extra, so weights would not
+  change which contracts are picked.
+
+**banked.rs:**
+
+- Fixed-bank blocks that are not polled and not trace continuations get the
+  same stub plus `nes_T_trace` contract entry.
+- A fixed-bank block's taken branch, `JMP abs`, or fallthrough to such a block
+  in the same host bank becomes `jp nes_T_trace`.
+- Everything else still goes through `nes_dispatch_hl` (bank-switched and
+  `$8000-$BFFF` targets, thunks, RTS guards) and lands on the canonical stub.
+- `NES2GBC_XY_BANKED=0` turns off the banked part.
+
 **Env:**
 
 | Variable | Effect |
 | --- | --- |
-| `NES2GBC_XY_CARRY=0` | Byte-identical stage-1 output. Verified with `tools/check_byte_identical.sh` on 24 builds. |
-| `NES2GBC_XY_CARRY=x` | X only. This is the default. |
-| `NES2GBC_XY_CARRY=xy` | X and Y. |
+| `NES2GBC_XY_CARRY` unset or `=0` | Default. Byte-identical to stage 1; verified with `tools/check_byte_identical.sh` on 24 builds. |
+| `NES2GBC_XY_CARRY=xy` (or `1`) | X and Y. |
+| `NES2GBC_XY_CARRY=x` | X only. |
 | `NES2GBC_XY_CARRY=y` | Y only. |
 | `NES2GBC_XY_KEEP=0` | No keep across barriers. |
 | `NES2GBC_XY_RANGE=lo-hi` | Debug bisection filter. |
 
-Y is off by default because it measured as a net loss: SMB wcost was +4%.
-Predecessors must materialise C for the contract more often than the
-contract saves reloads.
+**Measured (real GB cycles of non-idle work per NES frame, nwork, 200-800
+frames, XY strict vs stage 1):**
 
-**Not done:** banked.rs (MMC1/UxROM/... games) has no carry yet. Contracts are
-same-bank only. `NES2GBC_DEBUG_TRACE` builds disable it.
+| Game | Change |
+| --- | --- |
+| smb | -0.01% |
+| dk | 0.00% |
+| ic | -0.02% |
+| bf | 0.00% |
+| kf | +0.02% |
+| ih | +0.85% |
+| bm | +0.55% |
+| eb | -0.40% |
+| Zelda | -0.69% |
+| Contra | -0.02% |
+| Mega Man | +0.08% |
+| Castlevania | +0.12% |
+
+GB-frames-per-NES-frame ratios are unchanged (within 0.01). `wcost2`
+estimates of up to -4% (eb, ic) do not show up in real cycles, so carry stays
+off by default.
+
+**Not done:** banked-window ($8000-$BFFF) blocks carry nothing. Contracts are
+same-host-bank only. `NES2GBC_DEBUG_TRACE` builds disable it.
 
 **Stage 3 (A carry), proposed:**
 
