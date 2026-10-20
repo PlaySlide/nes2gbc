@@ -166,6 +166,7 @@ generate:
 			fi; \
 			python3 tools/rts_raw_guard_compare.py runtime/generated.asm; \
 			python3 tools/tighten_ram_test.py runtime/generated.asm; \
+			python3 tools/redundant_zero_test.py runtime/generated.asm; \
 		fi; \
 		# TRACE and partial POSTPASS_THROUGH builds also expand generated blocks. \
 		# Normalize short/long NES-label jumps after the final selected pass so \
