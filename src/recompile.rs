@@ -295,25 +295,33 @@ fn emit_known_target(
 
 fn nmi_poll_points(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTreeSet<u16> {
     let mut points = BTreeSet::new();
-
     for &entry in &graph.entry_points {
         if selected.contains(&entry) {
             points.insert(entry);
         }
     }
-
+    // Backward targets only when the edge lies on a cycle (same rule as banked
+    // views): an acyclic backward edge cannot repeat without passing another
+    // poll. NES2GBC_NROM_CYCLIC_POLLS=0 (or NES2GBC_POLL_ALL_BACK) polls every
+    // backward target as before.
+    let cyclic = if std::env::var("NES2GBC_NROM_CYCLIC_POLLS").map(|v| v == "0").unwrap_or(false) {
+        None
+    } else {
+        crate::banked::cyclic_back_targets(graph)
+    };
     for (&start, block) in &graph.blocks {
         if !selected.contains(&start) {
             continue;
         }
-
         for target in block.edges.iter().filter_map(|edge| edge.target) {
-            if selected.contains(&target) && target <= start {
+            if selected.contains(&target)
+                && target <= start
+                && cyclic.as_ref().map_or(true, |c| c.contains(&(start, target)))
+            {
                 points.insert(target);
             }
         }
     }
-
     points
 }
 

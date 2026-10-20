@@ -70,7 +70,7 @@ fn assign_bank(
 /// view CFG. A backward edge on no cycle cannot repeat without passing a
 /// polled point (vector, dynamic entry, or another cyclic back target).
 /// None (poll every backward target) under NES2GBC_POLL_ALL_BACK.
-fn cyclic_back_targets(graph: &ControlFlowGraph) -> Option<BTreeSet<(u16, u16)>> {
+pub(crate) fn cyclic_back_targets(graph: &ControlFlowGraph) -> Option<BTreeSet<(u16, u16)>> {
     if std::env::var("NES2GBC_POLL_ALL_BACK").is_ok() {
         return None;
     }
