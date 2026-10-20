@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
+use crate::emit_common::{emit_pc_dispatch, estimated_block_size, flag_mask};
+use crate::polls::nmi_poll_points;
+
 use crate::{
     cfg::{ControlFlowGraph, EdgeKind},
     ir::{self, ArithmeticOp, Flag, IrOp, LogicOp, ModifyOp, ModifyTarget, Operand, Register},
@@ -63,9 +66,6 @@ fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTree
     selected
 }
 
-fn estimated_block_size(block: &crate::cfg::BasicBlock) -> usize {
-    64 + block.instructions.len() * 96
-}
 
 fn assign_code_banks(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTreeMap<u16, u16> {
     let mut assigned = BTreeMap::new();
@@ -123,21 +123,7 @@ fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
     }
 }
 
-fn emit_pc_dispatch(out: &mut String, target: u16) {
-    writeln!(out, "    ld hl, ${target:04X}").unwrap();
-    writeln!(out, "    jp nes_dispatch_hl").unwrap();
-}
 
-fn flag_mask(flag: Flag) -> u8 {
-    match flag {
-        Flag::Carry => 0x01,
-        Flag::Zero => 0x02,
-        Flag::InterruptDisable => 0x04,
-        Flag::Decimal => 0x08,
-        Flag::Overflow => 0x40,
-        Flag::Negative => 0x80,
-    }
-}
 
 fn approx_code_bytes(asm: &str) -> usize {
     asm.lines()
@@ -255,44 +241,6 @@ fn emit_known_target(
     }
 }
 
-fn nmi_poll_points(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTreeSet<u16> {
-    let mut points = BTreeSet::new();
-    for &entry in &graph.entry_points {
-        if selected.contains(&entry) {
-            points.insert(entry);
-        }
-    }
-    // Backward targets only when the edge lies on a cycle (same rule as banked
-    // views): an acyclic backward edge cannot repeat without passing another
-    // poll. NES2GBC_NROM_CYCLIC_POLLS=0 (or NES2GBC_POLL_ALL_BACK) polls every
-    // backward target as before.
-    let cyclic = if std::env::var("NES2GBC_NROM_CYCLIC_POLLS").map(|v| v == "0").unwrap_or(false) {
-        None
-    } else {
-        crate::banked::cyclic_back_targets(graph)
-    };
-    for (&start, block) in &graph.blocks {
-        if !selected.contains(&start) {
-            continue;
-        }
-        for target in block.edges.iter().filter_map(|edge| edge.target) {
-            if selected.contains(&target)
-                && target <= start
-                && cyclic.as_ref().map_or(true, |c| c.contains(&(start, target)))
-            {
-                points.insert(target);
-            }
-        }
-    }
-    if cyclic.is_some() {
-        for exit in crate::banked::counted_loop_exit_polls(graph) {
-            if selected.contains(&exit) {
-                points.insert(exit);
-            }
-        }
-    }
-    points
-}
 
 fn reachable_from_roots(
     graph: &ControlFlowGraph,
