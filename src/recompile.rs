@@ -991,7 +991,16 @@ mod tests {
         let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
         let selected: BTreeSet<u16> = graph.blocks.keys().copied().collect();
         let points = nmi_poll_points(&graph, &selected);
-        assert!(points.contains(&0x8002));
+        // DEX/BNE is a provably counted loop: the head poll moves to the exit.
+        assert!(!points.contains(&0x8002));
+        assert!(points.contains(&0x8005));
+
+        // LDA $2002 / BPL loop is not counted: its head keeps the poll.
+        let mut prg = vec![0xEA; 0x8000];
+        prg[0..6].copy_from_slice(&[0xAD, 0x02, 0x20, 0x10, 0xFB, 0x60]);
+        let graph = cfg::discover(0, &prg, &[0x8000]).unwrap();
+        let selected: BTreeSet<u16> = graph.blocks.keys().copied().collect();
+        assert!(nmi_poll_points(&graph, &selected).contains(&0x8000));
     }
 
     #[test]
