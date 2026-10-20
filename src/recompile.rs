@@ -322,6 +322,13 @@ fn nmi_poll_points(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTreeS
             }
         }
     }
+    if cyclic.is_some() {
+        for exit in crate::banked::counted_loop_exit_polls(graph) {
+            if selected.contains(&exit) {
+                points.insert(exit);
+            }
+        }
+    }
     points
 }
 
