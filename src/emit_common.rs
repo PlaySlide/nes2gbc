@@ -263,6 +263,12 @@ pub(crate) fn emit_known_target(
 /// Shadow-flag test of a 6502 conditional branch: jumps to the following
 /// anonymous label (`:+`) when the branch is NOT taken.
 pub(crate) fn emit_branch_skip(out: &mut MirBuf, flag: Flag, when: bool) {
+    let host_c = crate::state_superblock::HOST_C_BRANCH.with(|c| c.replace(false));
+    if host_c && flag == Flag::Carry {
+        // Stage 3: the GB carry flag holds the 6502 C here.
+        out.ins("jr", &[if when { "nc" } else { "c" }, ":+"], Some("6502 C in host carry (stage 3)"));
+        return;
+    }
     match flag {
         Flag::Carry => {
             out.ins("ldh", &["a", "[nes_c_shadow]"], None);

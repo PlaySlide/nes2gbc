@@ -304,6 +304,15 @@ struct TraceState {
 
 #[derive(Debug, Default)]
 struct StateStats {
+    /// Stage 3 (NES2GBC_HOST_C): MIR text offset after which the GB carry
+    /// flag equals the 6502 C (set by a shift/rotate/ADC/SBC producer). Kept
+    /// here rather than in TraceState so trace-entry contract comparisons are
+    /// unaffected; validity is re-proven by scanning the emitted text.
+    host_c_at: Option<usize>,
+    /// Text range of the pending 0/1 carry capture (`ld a, $00` / `rl a`)
+    /// that a host-carry consumer rewrites to `sbc a` (0/$FF, carry kept).
+    host_c_cap: Option<(usize, usize)>,
+    host_c_used: usize,
     a_seed_loads: usize,
     a_reload_avoided: usize,
     a_stores_deferred: usize,
@@ -335,6 +344,75 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
     } else {
         None
     }
+}
+
+pub(crate) fn host_c_enabled() -> bool {
+    static E: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *E.get_or_init(|| std::env::var("NES2GBC_HOST_C").as_deref() == Ok("1"))
+}
+
+/// Does the emitted text since `pos` provably leave the GB carry flag
+/// unchanged? Any flag-writing instruction, control transfer, call, label or
+/// directive breaks it.
+fn host_c_valid(out: &MirBuf, stats: &StateStats) -> bool {
+    let Some(pos) = stats.host_c_at else { return false };
+    if !host_c_enabled() || pos > out.len() {
+        return false;
+    }
+    let mut ok = true;
+    for line in out[pos..].lines() {
+        let c = line.split(';').next().unwrap_or("").trim();
+        if c.is_empty() {
+            continue;
+        }
+        if c.ends_with(':') || c.starts_with(|ch: char| ch.is_ascii_uppercase()) {
+            return false;
+        }
+        let mn = c.split_whitespace().next().unwrap_or("");
+        match mn {
+            // No credit for push af / pop af restoring flags: text passes may
+            // drop such pairs when A is dead, exposing the clobber inside.
+            "pop" if c == "pop af" => ok = false,
+            // sbc a: A = -C, borrow out = C, so the carry flag survives.
+            "sbc" if c == "sbc a" => {}
+            "add" | "adc" | "sub" | "sbc" | "cp" | "and" | "or" | "xor" | "rla" | "rra" | "rlca" | "rrca"
+            | "rl" | "rr" | "rlc" | "rrc" | "sla" | "sra" | "srl" | "swap" | "scf" | "ccf" | "daa" => ok = false,
+            "call" | "rst" | "jp" | "jr" | "ret" | "reti" | "halt" | "stop" | "di" | "ei" => return false,
+            "ld" if c.starts_with("ld hl, sp") => ok = false,
+            _ => {}
+        }
+    }
+    ok
+}
+
+/// Record a just-emitted `ld a, $00` / `rl a|rla` capture at [start, now):
+/// it destroys the host carry, but a later consumer may rewrite it to
+/// `sbc a`, so validity is scanned from its end.
+fn note_capture(out: &MirBuf, stats: &mut StateStats, start: usize) {
+    if stats.host_c_at.is_some() {
+        stats.host_c_cap = Some((start, out.len()));
+        stats.host_c_at = Some(out.len());
+    }
+}
+
+/// Consume the host carry: if a 0/1 capture sits between the producer and
+/// here, rewrite it in place to the carry-preserving `sbc a` form (the shadow
+/// readers accept 0/$FF; see tools/sbc_carry_capture.py).
+fn take_host_c(out: &mut MirBuf, stats: &mut StateStats) {
+    if let Some((a, b)) = stats.host_c_cap.take() {
+        let tail = out[b..].to_string();
+        out.truncate(a);
+        out.ins("sbc", &["a"], Some("capture 6502 C as 0/$FF, host C preserved (stage 3)"));
+        out.push_str(&tail);
+    }
+    stats.host_c_at = None;
+    stats.host_c_used += 1;
+}
+
+thread_local! {
+    /// Set right before a carry branch is lowered when the GB carry flag is
+    /// proven to hold the 6502 C (consumed by emit_branch_skip).
+    pub(crate) static HOST_C_BRANCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn emit_update_nz(out: &mut MirBuf) {
@@ -727,6 +805,10 @@ fn emit_fast_modify_value(
                     Some(true) => {
                         out.ins("scf", &[], Some("known 6502 C=1"));
                     }
+                    None if host_c_valid(out, stats) => {
+                        take_host_c(out, stats);
+                        writeln!(out, "    ; 6502 C already in host carry (stage 3)").unwrap();
+                    }
                     None => {
                         out.ins("ld", &["d", "a"], Some("superblock rotate input"));
                         out.ins("ldh", &["a", "[nes_c_shadow]"], None);
@@ -757,6 +839,8 @@ fn emit_fast_modify_value(
                 _ => unreachable!(),
             };
             let _ = name;
+            stats.host_c_at = host_c_enabled().then_some(out.len());
+            stats.host_c_cap = None;
             if c_dead {
                 writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
             } else {
@@ -764,8 +848,10 @@ fn emit_fast_modify_value(
 
                 // Branchless carry capture: LD preserves carry and RL moves C into
                 // bit 0, yielding the canonical normalized 0/1 shadow.
+                let cap = out.len();
                 out.ins("ld", &["a", "$00"], None);
                 out.ins("rl", &["a"], Some("capture shift/rotate carry"));
+                note_capture(out, stats, cap);
                 out.ins("ldh", &["[nes_c_shadow]", "a"], None);
 
                 out.ins("ld", &["a", "e"], None);
@@ -801,6 +887,10 @@ fn emit_fast_modify_hl(
                 match known_carry {
                     Some(false) => out.ins("and", &["a"], Some("known 6502 C=0")),
                     Some(true) => out.ins("scf", &[], Some("known 6502 C=1")),
+                    None if host_c_valid(out, stats) => {
+                        take_host_c(out, stats);
+                        writeln!(out, "    ; 6502 C already in host carry (stage 3)").unwrap();
+                    }
                     None => {
                         out.ins("ldh", &["a", "[nes_c_shadow]"], None);
                         out.ins("rra", &[], Some("seed host carry from 6502 C"));
@@ -814,11 +904,15 @@ fn emit_fast_modify_hl(
                 _ => "rr",
             };
             writeln!(out, "    {op} [hl] ; native RMW shift/rotate").unwrap();
+            stats.host_c_at = host_c_enabled().then_some(out.len());
+            stats.host_c_cap = None;
             if c_dead {
                 writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
             } else {
+                let cap = out.len();
                 out.ins("ld", &["a", "$00"], None);
                 out.ins("rl", &["a"], Some("capture shift/rotate carry"));
+                note_capture(out, stats, cap);
                 out.ins("ldh", &["[nes_c_shadow]", "a"], None);
             }
             stats.fast_shifts += 1;
@@ -1180,6 +1274,10 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
                 Some(true) => {
                     out.ins("scf", &[], Some("known 6502 C=1 (SEC)"));
                 }
+                None if host_c_valid(out, stats) => {
+                    take_host_c(out, stats);
+                    writeln!(out, "    ; 6502 C already in host carry (stage 3)").unwrap();
+                }
                 None => {
                     // nes_c_shadow is normalized to 0/1: RRA seeds host C.
                     out.ins("ldh", &["a", "[nes_c_shadow]"], None);
@@ -1193,13 +1291,17 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
                 Some(if op == ArithmeticOp::Adc { "superblock fast ADC" } else { "superblock fast SBC" }),
             );
             out.ins("ld", &["l", "a"], Some("arithmetic result"));
+            stats.host_c_at = host_c_enabled().then_some(out.len());
+            stats.host_c_cap = None;
 
             // Capture 6502 carry before any flag-clobbering status work.
             if state.c_dead {
                 writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
             } else if regalloc_level() >= 2 {
+                let cap = out.len();
                 out.ins("ld", &["a", "$00"], None);
                 out.ins("rla", &[], Some("branchless carry capture"));
+                note_capture(out, stats, cap);
             } else {
                 out.ins("ld", &["a", "$00"], None);
                 out.ins("jr", &["nc", ":+"], None);
@@ -1530,6 +1632,8 @@ fn emit_barrier_ops(
     if ops.is_empty() {
         return;
     }
+    stats.host_c_at = None;
+    stats.host_c_cap = None;
     sync_state(out, state, stats);
     // A lone conditional branch lowers to a shadow-flag test (A) and a taken
     // exit through HL; B/C are untouched, so clean X/Y residency survives
@@ -2044,6 +2148,10 @@ pub fn emit_cfg_with_interrupts(
                                 write_insn_comment(&mut out, instruction);
                                 let before = out.len();
                                 if let [IrOp::Branch { flag, when, .. }] = ops.as_slice() {
+                                    if *flag == Flag::Carry && host_c_valid(&out, &stats) {
+                                        take_host_c(&mut out, &mut stats);
+                                        HOST_C_BRANCH.with(|c| c.set(true));
+                                    }
                                     emit_branch_skip(&mut out, *flag, *when);
                                     let pc_now = section_pc + approx_code_bytes(&out[before..]);
                                     emit_local_jump(&mut out, &label, rc_offs.get(&t).copied(), pc_now);
@@ -2057,6 +2165,10 @@ pub fn emit_cfg_with_interrupts(
                         }
                         sync_state(&mut out, &mut state, &mut stats);
                         write_insn_comment(&mut out, instruction);
+                        if matches!(ops.as_slice(), [IrOp::Branch { flag: Flag::Carry, .. }]) && host_c_valid(&out, &stats) {
+                            take_host_c(&mut out, &mut stats);
+                            HOST_C_BRANCH.with(|c| c.set(true));
+                        }
                         let before = out.len();
                         let _ = emit_static_control(
                             &mut out,
@@ -2210,6 +2322,9 @@ pub fn emit_cfg_with_interrupts(
             stats.x_kept_across_barrier,
             stats.y_kept_across_barrier
         );
+    }
+    if host_c_enabled() {
+        println!("host-c: {} 6502 C consumer(s) fed from the host carry flag (no seed reload)", stats.host_c_used);
     }
 
     println!(
