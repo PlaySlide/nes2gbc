@@ -1,4 +1,3 @@
-use std::fmt::Write;
 
 use crate::mir::MirBuf;
 
@@ -58,37 +57,37 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
 fn emit_add_a_to_hl(out: &mut MirBuf) {
     // Exact inline equivalent of runtime nes_add_a_to_hl. A contains the
     // unsigned 8-bit index and HL the base address.
-    writeln!(out, "    add l").unwrap();
-    writeln!(out, "    ld l, a").unwrap();
-    writeln!(out, "    jr nc, :+").unwrap();
-    writeln!(out, "    inc h").unwrap();
-    writeln!(out, ":").unwrap();
+    out.ins("add", &["l"], None);
+    out.ins("ld", &["l", "a"], None);
+    out.ins("jr", &["nc", ":+"], None);
+    out.ins("inc", &["h"], None);
+    out.label("");
 }
 
 fn emit_effective_addr(out: &mut MirBuf, op: Operand) -> bool {
     match op {
         Operand::ZeroPage(zp) => {
-            writeln!(out, "    ld h, $C0").unwrap();
-            writeln!(out, "    ld l, ${zp:02X}").unwrap();
+            out.ins("ld", &["h", "$C0"], None);
+            out.ins("ld", &["l", format!("${zp:02X}").as_str()], None);
             true
         }
         Operand::ZeroPageX(zp) => {
-            writeln!(out, "    ldh a, [nes_x]").unwrap();
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
+            out.ins("ldh", &["a", "[nes_x]"], None);
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
             true
         }
         Operand::ZeroPageY(zp) => {
-            writeln!(out, "    ldh a, [nes_y]").unwrap();
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
+            out.ins("ldh", &["a", "[nes_y]"], None);
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
             true
         }
         Operand::Absolute(addr) => {
             if let Some(mapped) = direct_ram_addr(addr) {
-                writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
+                out.ins("ld", &["hl", format!("${mapped:04X}").as_str()], None);
                 true
             } else {
                 false
@@ -97,8 +96,8 @@ fn emit_effective_addr(out: &mut MirBuf, op: Operand) -> bool {
         Operand::AbsoluteX(addr) => {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
-                writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
-                writeln!(out, "    ldh a, [nes_x]").unwrap();
+                out.ins("ld", &["hl", format!("${mapped:04X}").as_str()], None);
+                out.ins("ldh", &["a", "[nes_x]"], None);
                 emit_add_a_to_hl(out);
                 true
             } else {
@@ -108,8 +107,8 @@ fn emit_effective_addr(out: &mut MirBuf, op: Operand) -> bool {
         Operand::AbsoluteY(addr) => {
             if addr < 0x0800 && addr + 0x00FF < 0x0800 {
                 let mapped = NES_RAM_BASE + addr;
-                writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
-                writeln!(out, "    ldh a, [nes_y]").unwrap();
+                out.ins("ld", &["hl", format!("${mapped:04X}").as_str()], None);
+                out.ins("ldh", &["a", "[nes_y]"], None);
                 emit_add_a_to_hl(out);
                 true
             } else {
@@ -125,60 +124,60 @@ fn emit_dynamic_cpu_read_hl(out: &mut MirBuf) {
     // Runtime profiling shows the overwhelming majority of dynamic CPU reads
     // resolve to $0000-$1FFF internal RAM. Handle that case inline and only
     // pay the generic bus helper for PPU/APU/PRG addresses.
-    writeln!(out, "    ld a, h").unwrap();
-    writeln!(out, "    cp $20").unwrap();
-    writeln!(out, "    jr nc, :+").unwrap();
-    writeln!(out, "    and $07").unwrap();
-    writeln!(out, "    or $C0").unwrap();
-    writeln!(out, "    ld h, a").unwrap();
-    writeln!(out, "    ld a, [hl]").unwrap();
-    writeln!(out, "    jr :++").unwrap();
-    writeln!(out, ":").unwrap();
-    writeln!(out, "    call nes_cpu_read").unwrap();
-    writeln!(out, ":").unwrap();
+    out.ins("ld", &["a", "h"], None);
+    out.ins("cp", &["$20"], None);
+    out.ins("jr", &["nc", ":+"], None);
+    out.ins("and", &["$07"], None);
+    out.ins("or", &["$C0"], None);
+    out.ins("ld", &["h", "a"], None);
+    out.ins("ld", &["a", "[hl]"], None);
+    out.ins("jr", &[":++"], None);
+    out.label("");
+    out.ins("call", &["nes_cpu_read"], None);
+    out.label("");
 }
 
 fn emit_dynamic_cpu_write_hl(out: &mut MirBuf) {
     // A = value, HL = dynamic NES CPU address. Most indexed writes land in
     // internal RAM too, so bypass the generic bus ladder for $0000-$1FFF.
-    writeln!(out, "    ld c, a").unwrap();
-    writeln!(out, "    ld a, h").unwrap();
-    writeln!(out, "    cp $20").unwrap();
-    writeln!(out, "    jr nc, :+").unwrap();
-    writeln!(out, "    and $07").unwrap();
-    writeln!(out, "    or $C0").unwrap();
-    writeln!(out, "    ld h, a").unwrap();
-    writeln!(out, "    ld a, c").unwrap();
-    writeln!(out, "    ld [hl], a").unwrap();
-    writeln!(out, "    jr :++").unwrap();
-    writeln!(out, ":").unwrap();
-    writeln!(out, "    ld a, c").unwrap();
-    writeln!(out, "    call nes_cpu_write").unwrap();
-    writeln!(out, ":").unwrap();
+    out.ins("ld", &["c", "a"], None);
+    out.ins("ld", &["a", "h"], None);
+    out.ins("cp", &["$20"], None);
+    out.ins("jr", &["nc", ":+"], None);
+    out.ins("and", &["$07"], None);
+    out.ins("or", &["$C0"], None);
+    out.ins("ld", &["h", "a"], None);
+    out.ins("ld", &["a", "c"], None);
+    out.ins("ld", &["[hl]", "a"], None);
+    out.ins("jr", &[":++"], None);
+    out.label("");
+    out.ins("ld", &["a", "c"], None);
+    out.ins("call", &["nes_cpu_write"], None);
+    out.label("");
 }
 
 fn emit_indirect_addr(out: &mut MirBuf, src: Operand) {
     match src {
         Operand::IndexedIndirect(zp) => {
-            writeln!(out, "    ldh a, [nes_x]").unwrap();
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld e, a").unwrap();
-            writeln!(out, "    ld d, $C0").unwrap();
-            writeln!(out, "    ld a, [de]").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    inc e").unwrap();
-            writeln!(out, "    ld a, [de]").unwrap();
-            writeln!(out, "    ld h, a").unwrap();
+            out.ins("ldh", &["a", "[nes_x]"], None);
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["e", "a"], None);
+            out.ins("ld", &["d", "$C0"], None);
+            out.ins("ld", &["a", "[de]"], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("inc", &["e"], None);
+            out.ins("ld", &["a", "[de]"], None);
+            out.ins("ld", &["h", "a"], None);
         }
         Operand::IndirectIndexed(zp) => {
-            writeln!(out, "    ld e, ${zp:02X}").unwrap();
-            writeln!(out, "    ld d, $C0").unwrap();
-            writeln!(out, "    ld a, [de]").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    inc e").unwrap();
-            writeln!(out, "    ld a, [de]").unwrap();
-            writeln!(out, "    ld h, a").unwrap();
-            writeln!(out, "    ldh a, [nes_y]").unwrap();
+            out.ins("ld", &["e", format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["d", "$C0"], None);
+            out.ins("ld", &["a", "[de]"], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("inc", &["e"], None);
+            out.ins("ld", &["a", "[de]"], None);
+            out.ins("ld", &["h", "a"], None);
+            out.ins("ldh", &["a", "[nes_y]"], None);
             emit_add_a_to_hl(out);
         }
         _ => unreachable!(),
@@ -186,53 +185,53 @@ fn emit_indirect_addr(out: &mut MirBuf, src: Operand) {
 }
 fn emit_load_operand_to_a(out: &mut MirBuf, src: Operand) {
     match src {
-        Operand::Immediate(v) => { writeln!(out, "    ld a, ${v:02X}").unwrap(); }
+        Operand::Immediate(v) => { out.ins("ld", &["a", format!("${v:02X}").as_str()], None); }
         Operand::ZeroPage(zp) => {
-            writeln!(out, "    ld a, [${:04X}]", NES_RAM_BASE + zp as u16).unwrap();
+            out.ins("ld", &["a", format!("[${:04X}]", NES_RAM_BASE + zp as u16).as_str()], None);
         }
         Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
-            writeln!(out, "    ld a, [${:04X}]", direct_ram_addr(addr).unwrap()).unwrap();
+            out.ins("ld", &["a", format!("[${:04X}]", direct_ram_addr(addr).unwrap()).as_str()], None);
         }
         _ => {
             if emit_effective_addr(out, src) {
-                writeln!(out, "    ld a, [hl]").unwrap();
+                out.ins("ld", &["a", "[hl]"], None);
             } else {
                 match src {
                     Operand::Absolute(0x4016) => {
                         // Controller 1 serial port: skip the generic bus ladder.
-                        writeln!(out, "    ld hl, $4016").unwrap();
-                        writeln!(out, "    call nes_controller_read").unwrap();
+                        out.ins("ld", &["hl", "$4016"], None);
+                        out.ins("call", &["nes_controller_read"], None);
                     }
                     Operand::Absolute(0x4017) => {
                         // No controller 2: nes_cpu_read returns `xor a` here.
-                        writeln!(out, "    ld hl, $4017").unwrap();
-                        writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                        out.ins("ld", &["hl", "$4017"], None);
+                        out.ins("xor", &["a"], Some("$4017 controller 2 not connected"));
                     }
                     Operand::Absolute(addr) => {
-                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    call nes_cpu_read").unwrap();
+                        out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
+                        out.ins("call", &["nes_cpu_read"], None);
                     }
                     Operand::AbsoluteX(addr @ (0x4016 | 0x4017)) => {
-                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ldh a, [nes_x]").unwrap();
+                        out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
+                        out.ins("ldh", &["a", "[nes_x]"], None);
                         emit_add_a_to_hl(out);
-                        writeln!(out, "    call nes_cpu_read_joy_hl").unwrap();
+                        out.ins("call", &["nes_cpu_read_joy_hl"], None);
                     }
                     Operand::AbsoluteY(addr @ (0x4016 | 0x4017)) => {
-                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ldh a, [nes_y]").unwrap();
+                        out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
+                        out.ins("ldh", &["a", "[nes_y]"], None);
                         emit_add_a_to_hl(out);
-                        writeln!(out, "    call nes_cpu_read_joy_hl").unwrap();
+                        out.ins("call", &["nes_cpu_read_joy_hl"], None);
                     }
                     Operand::AbsoluteX(addr) => {
-                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ldh a, [nes_x]").unwrap();
+                        out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
+                        out.ins("ldh", &["a", "[nes_x]"], None);
                         emit_add_a_to_hl(out);
                         emit_dynamic_cpu_read_hl(out);
                     }
                     Operand::AbsoluteY(addr) => {
-                        writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-                        writeln!(out, "    ldh a, [nes_y]").unwrap();
+                        out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
+                        out.ins("ldh", &["a", "[nes_y]"], None);
                         emit_add_a_to_hl(out);
                         emit_dynamic_cpu_read_hl(out);
                     }
@@ -240,7 +239,7 @@ fn emit_load_operand_to_a(out: &mut MirBuf, src: Operand) {
                         emit_indirect_addr(out, src);
                         emit_dynamic_cpu_read_hl(out);
                     }
-                    _ => writeln!(out, "    call nes_unimplemented_operand_read").unwrap(),
+                    _ => out.ins("call", &["nes_unimplemented_operand_read"], None),
                 }
             }
         }
@@ -250,38 +249,38 @@ fn emit_load_operand_to_a(out: &mut MirBuf, src: Operand) {
 fn emit_store_a_to_operand(out: &mut MirBuf, dst: Operand) {
     match dst {
         Operand::ZeroPage(zp) => {
-            writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
+            out.ins("ld", &[format!("[${:04X}]", NES_RAM_BASE + zp as u16).as_str(), "a"], None);
             return;
         }
         Operand::Absolute(addr) if direct_ram_addr(addr).is_some() => {
-            writeln!(out, "    ld [${:04X}], a", direct_ram_addr(addr).unwrap()).unwrap();
+            out.ins("ld", &[format!("[${:04X}]", direct_ram_addr(addr).unwrap()).as_str(), "a"], None);
             return;
         }
         _ => {}
     }
 
-    writeln!(out, "    push af").unwrap();
+    out.ins("push", &["af"], None);
 
     if emit_effective_addr(out, dst) {
-        writeln!(out, "    pop af").unwrap();
-        writeln!(out, "    ld [hl], a").unwrap();
+        out.ins("pop", &["af"], None);
+        out.ins("ld", &["[hl]", "a"], None);
         return;
     }
 
     let dynamic = match dst {
         Operand::Absolute(addr) => {
-            writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+            out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
             false
         }
         Operand::AbsoluteX(addr) => {
-            writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-            writeln!(out, "    ldh a, [nes_x]").unwrap();
+            out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
+            out.ins("ldh", &["a", "[nes_x]"], None);
             emit_add_a_to_hl(out);
             true
         }
         Operand::AbsoluteY(addr) => {
-            writeln!(out, "    ld hl, ${addr:04X}").unwrap();
-            writeln!(out, "    ldh a, [nes_y]").unwrap();
+            out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
+            out.ins("ldh", &["a", "[nes_y]"], None);
             emit_add_a_to_hl(out);
             true
         }
@@ -290,17 +289,17 @@ fn emit_store_a_to_operand(out: &mut MirBuf, dst: Operand) {
             true
         }
         _ => {
-            writeln!(out, "    pop af").unwrap();
-            writeln!(out, "    call nes_unimplemented_operand_write").unwrap();
+            out.ins("pop", &["af"], None);
+            out.ins("call", &["nes_unimplemented_operand_write"], None);
             return;
         }
     };
 
-    writeln!(out, "    pop af").unwrap();
+    out.ins("pop", &["af"], None);
     if dynamic {
         emit_dynamic_cpu_write_hl(out);
     } else {
-        writeln!(out, "    call nes_cpu_write").unwrap();
+        out.ins("call", &["nes_cpu_write"], None);
     }
 }
 
@@ -442,11 +441,16 @@ fn a_commits_live(ops: &[IrOp]) -> Vec<bool> {
 }
 
 fn emit_update_nz(out: &mut MirBuf) {
-    writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
-    writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+    out.ins("ldh", &["[nes_z_shadow]", "a"], None);
+    out.ins("ldh", &["[nes_n_shadow]", "a"], None);
 }
 
 pub fn emit_ops(ops: &[IrOp]) -> String {
+    emit_ops_buf(ops).into_string()
+}
+
+/// Lower IR ops to MIR (see `emit_ops` for the text form).
+pub fn emit_ops_buf(ops: &[IrOp]) -> MirBuf {
     let mut out = MirBuf::new();
     // Host register A often already holds nes_a. Keep it live across ALU/store
     // chains instead of bouncing every result through HRAM.
@@ -462,25 +466,25 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 a_live = false;
                 match flag {
                     Flag::Carry => {
-                        writeln!(out, "    ld a, ${:02X}", if value { 0x01 } else { 0x00 }).unwrap();
-                        writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                        out.ins("ld", &["a", format!("${:02X}", if value { 0x01 } else { 0x00 }).as_str()], None);
+                        out.ins("ldh", &["[nes_c_shadow]", "a"], None);
                     }
                     Flag::Zero => {
-                        writeln!(out, "    ld a, ${:02X}", if value { 0x00 } else { 0x01 }).unwrap();
-                        writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
+                        out.ins("ld", &["a", format!("${:02X}", if value { 0x00 } else { 0x01 }).as_str()], None);
+                        out.ins("ldh", &["[nes_z_shadow]", "a"], None);
                     }
                     Flag::Negative => {
-                        writeln!(out, "    ld a, ${:02X}", if value { 0x80 } else { 0x00 }).unwrap();
-                        writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+                        out.ins("ld", &["a", format!("${:02X}", if value { 0x80 } else { 0x00 }).as_str()], None);
+                        out.ins("ldh", &["[nes_n_shadow]", "a"], None);
                     }
                     _ => {
-                        writeln!(out, "    ldh a, [nes_p]").unwrap();
+                        out.ins("ldh", &["a", "[nes_p]"], None);
                         if value {
-                            writeln!(out, "    or ${:02X}", flag_mask(flag)).unwrap();
+                            out.ins("or", &[format!("${:02X}", flag_mask(flag)).as_str()], None);
                         } else {
-                            writeln!(out, "    and ${:02X}", !flag_mask(flag)).unwrap();
+                            out.ins("and", &[format!("${:02X}", !flag_mask(flag)).as_str()], None);
                         }
-                        writeln!(out, "    ldh [nes_p], a").unwrap();
+                        out.ins("ldh", &["[nes_p]", "a"], None);
                     }
                 }
             }
@@ -489,10 +493,10 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 emit_load_operand_to_a(&mut out, src);
                 if dst == Register::A {
                     if commit_a_here {
-                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                        out.ins("ldh", &["[nes_a]", "a"], None);
                     }
                 } else {
-                    writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                    out.ins("ldh", &[format!("[{}]", state_label(dst)).as_str(), "a"], None);
                 }
                 if update_nz_here { emit_update_nz(&mut out); }
                 a_live = dst == Register::A;
@@ -501,10 +505,10 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Store { src, dst } => {
                 if src == Register::A {
                     if !a_live {
-                        writeln!(out, "    ldh a, [nes_a]").unwrap();
+                        out.ins("ldh", &["a", "[nes_a]"], None);
                     }
                 } else {
-                    writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                    out.ins("ldh", &["a", format!("[{}]", state_label(src)).as_str()], None);
                 }
                 emit_store_a_to_operand(&mut out, dst);
                 // Direct WRAM stores leave A intact; helper/call paths may clobber it.
@@ -519,17 +523,17 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Transfer { src, dst, update_nz } => {
                 if src == Register::A {
                     if !a_live {
-                        writeln!(out, "    ldh a, [nes_a]").unwrap();
+                        out.ins("ldh", &["a", "[nes_a]"], None);
                     }
                 } else {
-                    writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                    out.ins("ldh", &["a", format!("[{}]", state_label(src)).as_str()], None);
                 }
                 if dst == Register::A {
                     if commit_a_here {
-                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                        out.ins("ldh", &["[nes_a]", "a"], None);
                     }
                 } else {
-                    writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                    out.ins("ldh", &[format!("[{}]", state_label(dst)).as_str(), "a"], None);
                 }
                 if update_nz {
                     if update_nz_here { emit_update_nz(&mut out); }
@@ -541,18 +545,18 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Inc(reg) => {
                 if reg == Register::A {
                     if !a_live {
-                        writeln!(out, "    ldh a, [nes_a]").unwrap();
+                        out.ins("ldh", &["a", "[nes_a]"], None);
                     }
-                    writeln!(out, "    inc a").unwrap();
+                    out.ins("inc", &["a"], None);
                     if commit_a_here {
-                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                        out.ins("ldh", &["[nes_a]", "a"], None);
                     }
                     if update_nz_here { emit_update_nz(&mut out); }
                     a_live = true;
                 } else {
-                    writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
-                    writeln!(out, "    inc a").unwrap();
-                    writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
+                    out.ins("ldh", &["a", format!("[{}]", state_label(reg)).as_str()], None);
+                    out.ins("inc", &["a"], None);
+                    out.ins("ldh", &[format!("[{}]", state_label(reg)).as_str(), "a"], None);
                     if update_nz_here { emit_update_nz(&mut out); }
                     a_live = false;
                 }
@@ -561,18 +565,18 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
             IrOp::Dec(reg) => {
                 if reg == Register::A {
                     if !a_live {
-                        writeln!(out, "    ldh a, [nes_a]").unwrap();
+                        out.ins("ldh", &["a", "[nes_a]"], None);
                     }
-                    writeln!(out, "    dec a").unwrap();
+                    out.ins("dec", &["a"], None);
                     if commit_a_here {
-                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                        out.ins("ldh", &["[nes_a]", "a"], None);
                     }
                     if update_nz_here { emit_update_nz(&mut out); }
                     a_live = true;
                 } else {
-                    writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
-                    writeln!(out, "    dec a").unwrap();
-                    writeln!(out, "    ldh [{}], a", state_label(reg)).unwrap();
+                    out.ins("ldh", &["a", format!("[{}]", state_label(reg)).as_str()], None);
+                    out.ins("dec", &["a"], None);
+                    out.ins("ldh", &[format!("[{}]", state_label(reg)).as_str(), "a"], None);
                     if update_nz_here { emit_update_nz(&mut out); }
                     a_live = false;
                 }
@@ -582,34 +586,34 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 match rhs {
                     Operand::Immediate(imm) => {
                         if !a_live {
-                            writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            out.ins("ldh", &["a", "[nes_a]"], None);
                         }
                         match op {
-                            LogicOp::And => writeln!(out, "    and ${imm:02X}").unwrap(),
-                            LogicOp::Ora => writeln!(out, "    or ${imm:02X}").unwrap(),
-                            LogicOp::Eor => writeln!(out, "    xor ${imm:02X}").unwrap(),
+                            LogicOp::And => out.ins("and", &[format!("${imm:02X}").as_str()], None),
+                            LogicOp::Ora => out.ins("or", &[format!("${imm:02X}").as_str()], None),
+                            LogicOp::Eor => out.ins("xor", &[format!("${imm:02X}").as_str()], None),
                         }
                     }
                     _ => {
                         if a_live {
-                            writeln!(out, "    ld c, a").unwrap();
+                            out.ins("ld", &["c", "a"], None);
                             emit_load_operand_to_a(&mut out, rhs);
-                            writeln!(out, "    ld e, a").unwrap();
-                            writeln!(out, "    ld a, c").unwrap();
+                            out.ins("ld", &["e", "a"], None);
+                            out.ins("ld", &["a", "c"], None);
                         } else {
                             emit_load_operand_to_a(&mut out, rhs);
-                            writeln!(out, "    ld e, a").unwrap();
-                            writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            out.ins("ld", &["e", "a"], None);
+                            out.ins("ldh", &["a", "[nes_a]"], None);
                         }
                         match op {
-                            LogicOp::And => writeln!(out, "    and e").unwrap(),
-                            LogicOp::Ora => writeln!(out, "    or e").unwrap(),
-                            LogicOp::Eor => writeln!(out, "    xor e").unwrap(),
+                            LogicOp::And => out.ins("and", &["e"], None),
+                            LogicOp::Ora => out.ins("or", &["e"], None),
+                            LogicOp::Eor => out.ins("xor", &["e"], None),
                         }
                     }
                 }
                 if commit_a_here {
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                    out.ins("ldh", &["[nes_a]", "a"], None);
                 }
                 if update_nz_here { emit_update_nz(&mut out); }
                 a_live = true;
@@ -619,29 +623,29 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 match rhs {
                     Operand::Immediate(imm) => {
                         if !a_live {
-                            writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            out.ins("ldh", &["a", "[nes_a]"], None);
                         }
-                        writeln!(out, "    ld e, ${imm:02X}").unwrap();
+                        out.ins("ld", &["e", format!("${imm:02X}").as_str()], None);
                     }
                     _ => {
                         if a_live {
-                            writeln!(out, "    ld c, a").unwrap();
+                            out.ins("ld", &["c", "a"], None);
                             emit_load_operand_to_a(&mut out, rhs);
-                            writeln!(out, "    ld e, a").unwrap();
-                            writeln!(out, "    ld a, c").unwrap();
+                            out.ins("ld", &["e", "a"], None);
+                            out.ins("ld", &["a", "c"], None);
                         } else {
                             emit_load_operand_to_a(&mut out, rhs);
-                            writeln!(out, "    ld e, a").unwrap();
-                            writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            out.ins("ld", &["e", "a"], None);
+                            out.ins("ldh", &["a", "[nes_a]"], None);
                         }
                     }
                 }
                 match op {
-                    ArithmeticOp::Adc => writeln!(out, "    call nes_adc_a_e").unwrap(),
-                    ArithmeticOp::Sbc => writeln!(out, "    call nes_sbc_a_e").unwrap(),
+                    ArithmeticOp::Adc => out.ins("call", &["nes_adc_a_e"], None),
+                    ArithmeticOp::Sbc => out.ins("call", &["nes_sbc_a_e"], None),
                 }
                 if commit_a_here {
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                    out.ins("ldh", &["[nes_a]", "a"], None);
                 }
                 a_live = true;
             }
@@ -650,7 +654,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 let memory_target = match target {
                     ModifyTarget::Accumulator => {
                         if !a_live {
-                            writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            out.ins("ldh", &["a", "[nes_a]"], None);
                         }
                         None
                     }
@@ -662,24 +666,24 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
 
                 match op {
                     ModifyOp::Inc => {
-                        writeln!(out, "    inc a").unwrap();
+                        out.ins("inc", &["a"], None);
                         if update_nz_here { emit_update_nz(&mut out); }
                     }
                     ModifyOp::Dec => {
-                        writeln!(out, "    dec a").unwrap();
+                        out.ins("dec", &["a"], None);
                         if update_nz_here { emit_update_nz(&mut out); }
                     }
                     ModifyOp::Asl => {
-                        writeln!(out, "    call nes_asl_a").unwrap();
+                        out.ins("call", &["nes_asl_a"], None);
                     }
                     ModifyOp::Lsr => {
-                        writeln!(out, "    call nes_lsr_a").unwrap();
+                        out.ins("call", &["nes_lsr_a"], None);
                     }
                     ModifyOp::Rol => {
-                        writeln!(out, "    call nes_rol_a").unwrap();
+                        out.ins("call", &["nes_rol_a"], None);
                     }
                     ModifyOp::Ror => {
-                        writeln!(out, "    call nes_ror_a").unwrap();
+                        out.ins("call", &["nes_ror_a"], None);
                     }
                 }
 
@@ -688,7 +692,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     a_live = false;
                 } else {
                     if commit_a_here {
-                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                        out.ins("ldh", &["[nes_a]", "a"], None);
                     }
                     a_live = true;
                 }
@@ -698,176 +702,176 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 match rhs {
                     Operand::Immediate(imm) => {
                         if !a_live {
-                            writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            out.ins("ldh", &["a", "[nes_a]"], None);
                         }
-                        writeln!(out, "    ld e, ${imm:02X}").unwrap();
+                        out.ins("ld", &["e", format!("${imm:02X}").as_str()], None);
                     }
                     _ => {
                         if a_live {
-                            writeln!(out, "    ld c, a").unwrap();
+                            out.ins("ld", &["c", "a"], None);
                             emit_load_operand_to_a(&mut out, rhs);
-                            writeln!(out, "    ld e, a").unwrap();
-                            writeln!(out, "    ld a, c").unwrap();
+                            out.ins("ld", &["e", "a"], None);
+                            out.ins("ld", &["a", "c"], None);
                         } else {
                             emit_load_operand_to_a(&mut out, rhs);
-                            writeln!(out, "    ld e, a").unwrap();
-                            writeln!(out, "    ldh a, [nes_a]").unwrap();
+                            out.ins("ld", &["e", "a"], None);
+                            out.ins("ldh", &["a", "[nes_a]"], None);
                         }
                     }
                 }
-                writeln!(out, "    call nes_bit_a_e").unwrap();
+                out.ins("call", &["nes_bit_a_e"], None);
                 a_live = false;
             }
             IrOp::Compare { reg, rhs } => {
                 match rhs {
                     Operand::Immediate(imm) => {
-                        writeln!(out, "    ld e, ${imm:02X}").unwrap();
+                        out.ins("ld", &["e", format!("${imm:02X}").as_str()], None);
                         if reg == Register::A {
                             if !a_live {
-                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                                out.ins("ldh", &["a", "[nes_a]"], None);
                             }
                         } else {
-                            writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
+                            out.ins("ldh", &["a", format!("[{}]", state_label(reg)).as_str()], None);
                         }
                     }
                     _ => {
                         emit_load_operand_to_a(&mut out, rhs);
-                        writeln!(out, "    ld e, a").unwrap();
-                        writeln!(out, "    ldh a, [{}]", state_label(reg)).unwrap();
+                        out.ins("ld", &["e", "a"], None);
+                        out.ins("ldh", &["a", format!("[{}]", state_label(reg)).as_str()], None);
                     }
                 }
-                writeln!(out, "    call nes_compare_a_e").unwrap();
+                out.ins("call", &["nes_compare_a_e"], None);
                 a_live = false;
             }
 
             IrOp::StackPush(StackValue::A) => {
                 if !a_live {
-                    writeln!(out, "    ldh a, [nes_a]").unwrap();
+                    out.ins("ldh", &["a", "[nes_a]"], None);
                 }
-                writeln!(out, "    call nes_stack_push_a").unwrap();
+                out.ins("call", &["nes_stack_push_a"], None);
                 a_live = false;
             }
             IrOp::StackPush(StackValue::Status) => {
-                writeln!(out, "    call nes_materialize_p").unwrap();
-                writeln!(out, "    or $30").unwrap();
-                writeln!(out, "    call nes_stack_push_a").unwrap();
+                out.ins("call", &["nes_materialize_p"], None);
+                out.ins("or", &["$30"], None);
+                out.ins("call", &["nes_stack_push_a"], None);
                 a_live = false;
             }
             IrOp::StackPop(StackValue::A) => {
-                writeln!(out, "    call nes_stack_pop_a").unwrap();
+                out.ins("call", &["nes_stack_pop_a"], None);
                 if commit_a_here {
-                    writeln!(out, "    ldh [nes_a], a").unwrap();
+                    out.ins("ldh", &["[nes_a]", "a"], None);
                 }
                 if update_nz_here { emit_update_nz(&mut out); }
                 a_live = true;
             }
             IrOp::StackPop(StackValue::Status) => {
-                writeln!(out, "    call nes_stack_pop_a").unwrap();
-                writeln!(out, "    call nes_set_p_from_a").unwrap();
+                out.ins("call", &["nes_stack_pop_a"], None);
+                out.ins("call", &["nes_set_p_from_a"], None);
                 a_live = false;
             }
 
             IrOp::Branch { flag, when, target } => {
                 match flag {
                     Flag::Carry => {
-                        writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                        writeln!(out, "    and a").unwrap();
-                        writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                        out.ins("ldh", &["a", "[nes_c_shadow]"], None);
+                        out.ins("and", &["a"], None);
+                        out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                     }
                     Flag::Zero => {
-                        writeln!(out, "    ldh a, [nes_z_shadow]").unwrap();
-                        writeln!(out, "    and a").unwrap();
-                        writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
+                        out.ins("ldh", &["a", "[nes_z_shadow]"], None);
+                        out.ins("and", &["a"], None);
+                        out.ins("jr", &[format!("{}", if when { "nz" } else { "z" }).as_str(), ":+"], None);
                     }
                     Flag::Negative => {
-                        writeln!(out, "    ldh a, [nes_n_shadow]").unwrap();
-                        writeln!(out, "    bit 7, a").unwrap();
-                        writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                        out.ins("ldh", &["a", "[nes_n_shadow]"], None);
+                        out.ins("bit", &["7", "a"], None);
+                        out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                     }
                     _ => {
-                        writeln!(out, "    ldh a, [nes_p]").unwrap();
-                        writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
-                        writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                        out.ins("ldh", &["a", "[nes_p]"], None);
+                        out.ins("and", &[format!("${:02X}", flag_mask(flag)).as_str()], None);
+                        out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                     }
                 }
-                writeln!(out, "    ld hl, ${target:04X}").unwrap();
-                writeln!(out, "    jp nes_dispatch_hl").unwrap();
-                writeln!(out, ":").unwrap();
+                out.ins("ld", &["hl", format!("${target:04X}").as_str()], None);
+                out.ins("jp", &["nes_dispatch_hl"], None);
+                out.label("");
                 a_live = false;
             }
 
             IrOp::Jump(target) => {
-                writeln!(out, "    ld hl, ${target:04X}").unwrap();
-                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+                out.ins("ld", &["hl", format!("${target:04X}").as_str()], None);
+                out.ins("jp", &["nes_dispatch_hl"], None);
                 a_live = false;
             }
 
             IrOp::JumpIndirect { pointer } => {
-                writeln!(out, "    ld hl, ${pointer:04X}").unwrap();
-                writeln!(out, "    call nes_jmp_indirect_hl").unwrap();
-                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+                out.ins("ld", &["hl", format!("${pointer:04X}").as_str()], None);
+                out.ins("call", &["nes_jmp_indirect_hl"], None);
+                out.ins("jp", &["nes_dispatch_hl"], None);
                 a_live = false;
             }
 
             IrOp::Call { target, return_addr } => {
-                writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
-                writeln!(out, "    call nes_stack_push_return_hl").unwrap();
-                writeln!(out, "    ld hl, ${target:04X}").unwrap();
-                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+                out.ins("ld", &["hl", format!("${return_addr:04X}").as_str()], None);
+                out.ins("call", &["nes_stack_push_return_hl"], None);
+                out.ins("ld", &["hl", format!("${target:04X}").as_str()], None);
+                out.ins("jp", &["nes_dispatch_hl"], None);
                 a_live = false;
             }
 
             IrOp::Return => {
-                writeln!(out, "    call nes_stack_pop_return_hl").unwrap();
-                writeln!(out, "    inc hl").unwrap();
-                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+                out.ins("call", &["nes_stack_pop_return_hl"], None);
+                out.ins("inc", &["hl"], None);
+                out.ins("jp", &["nes_dispatch_hl"], None);
                 a_live = false;
             }
 
             IrOp::ReturnInterrupt => {
-                writeln!(out, "    call nes_rti_pop_hl").unwrap();
-                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+                out.ins("call", &["nes_rti_pop_hl"], None);
+                out.ins("jp", &["nes_dispatch_hl"], None);
                 a_live = false;
             }
 
             IrOp::Break { return_pc } => {
-                writeln!(out, "    ld hl, ${return_pc:04X}").unwrap();
-                writeln!(out, "    call nes_brk_hl").unwrap();
-                writeln!(out, "    jp nes_irq_entry").unwrap();
+                out.ins("ld", &["hl", format!("${return_pc:04X}").as_str()], None);
+                out.ins("call", &["nes_brk_hl"], None);
+                out.ins("jp", &["nes_irq_entry"], None);
                 a_live = false;
             }
 
             IrOp::ReadIo { addr, dst } => {
                 match addr {
                     0x2000..=0x3FFF => {
-                        writeln!(out, "    ld l, ${:02X}", addr as u8 & 0x07).unwrap();
-                        writeln!(out, "    call nes_ppu_cpu_read").unwrap();
+                        out.ins("ld", &["l", format!("${:02X}", addr as u8 & 0x07).as_str()], None);
+                        out.ins("call", &["nes_ppu_cpu_read"], None);
                     }
                     0x4011 => {
-                        writeln!(out, "    ld a, [nes_dac]").unwrap();
+                        out.ins("ld", &["a", "[nes_dac]"], None);
                     }
                     0x4015 if apu_enabled() => {
-                        writeln!(out, "    call nes_apu_read_status").unwrap();
+                        out.ins("call", &["nes_apu_read_status"], None);
                     }
                     0x4016 => {
-                        writeln!(out, "    call nes_controller_read").unwrap();
+                        out.ins("call", &["nes_controller_read"], None);
                     }
                     0x4017 => {
                         // No controller 2: must match nes_cpu_read's `xor a`.
                         // A constant $01 makes games that OR both ports
                         // (Contra) see every button held.
-                        writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                        out.ins("xor", &["a"], Some("$4017 controller 2 not connected"));
                     }
                     _ => {
-                        writeln!(out, "    xor a").unwrap();
+                        out.ins("xor", &["a"], None);
                     }
                 }
                 if dst == Register::A {
                     if commit_a_here {
-                        writeln!(out, "    ldh [nes_a], a").unwrap();
+                        out.ins("ldh", &["[nes_a]", "a"], None);
                     }
                 } else {
-                    writeln!(out, "    ldh [{}], a", state_label(dst)).unwrap();
+                    out.ins("ldh", &[format!("[{}]", state_label(dst)).as_str(), "a"], None);
                 }
                 if update_nz_here { emit_update_nz(&mut out); }
                 a_live = dst == Register::A;
@@ -878,60 +882,60 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                     0x2000..=0x3FFF => {
                         if src == Register::A {
                             if !a_live {
-                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                                out.ins("ldh", &["a", "[nes_a]"], None);
                             }
                         } else {
-                            writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                            out.ins("ldh", &["a", format!("[{}]", state_label(src)).as_str()], None);
                         }
-                        writeln!(out, "    ld e, a").unwrap();
-                        writeln!(out, "    ld l, ${:02X}", addr as u8 & 0x07).unwrap();
-                        writeln!(out, "    call nes_ppu_cpu_write").unwrap();
+                        out.ins("ld", &["e", "a"], None);
+                        out.ins("ld", &["l", format!("${:02X}", addr as u8 & 0x07).as_str()], None);
+                        out.ins("call", &["nes_ppu_cpu_write"], None);
                         a_live = false;
                     }
                     0x4011 => {
                         if src == Register::A {
                             if !a_live {
-                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                                out.ins("ldh", &["a", "[nes_a]"], None);
                             }
                         } else {
-                            writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                            out.ins("ldh", &["a", format!("[{}]", state_label(src)).as_str()], None);
                         }
-                        writeln!(out, "    ld [nes_dac], a").unwrap();
+                        out.ins("ld", &["[nes_dac]", "a"], None);
                         a_live = src == Register::A;
                     }
                     0x4014 => {
                         if src == Register::A {
                             if !a_live {
-                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                                out.ins("ldh", &["a", "[nes_a]"], None);
                             }
                         } else {
-                            writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                            out.ins("ldh", &["a", format!("[{}]", state_label(src)).as_str()], None);
                         }
-                        writeln!(out, "    call nes_oam_dma").unwrap();
+                        out.ins("call", &["nes_oam_dma"], None);
                         a_live = false;
                     }
                     0x4016 => {
                         if src == Register::A {
                             if !a_live {
-                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                                out.ins("ldh", &["a", "[nes_a]"], None);
                             }
                         } else {
-                            writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                            out.ins("ldh", &["a", format!("[{}]", state_label(src)).as_str()], None);
                         }
-                        writeln!(out, "    call nes_controller_write").unwrap();
+                        out.ins("call", &["nes_controller_write"], None);
                         a_live = false;
                     }
                     0x4000..=0x4013 | 0x4015 | 0x4017 if apu_enabled() => {
                         if src == Register::A {
                             if !a_live {
-                                writeln!(out, "    ldh a, [nes_a]").unwrap();
+                                out.ins("ldh", &["a", "[nes_a]"], None);
                             }
                         } else {
-                            writeln!(out, "    ldh a, [{}]", state_label(src)).unwrap();
+                            out.ins("ldh", &["a", format!("[{}]", state_label(src)).as_str()], None);
                         }
-                        writeln!(out, "    ld e, a").unwrap();
-                        writeln!(out, "    ld l, ${:02X}", addr as u8).unwrap();
-                        writeln!(out, "    call nes_apu_write").unwrap();
+                        out.ins("ld", &["e", "a"], None);
+                        out.ins("ld", &["l", format!("${:02X}", addr as u8).as_str()], None);
+                        out.ins("call", &["nes_apu_write"], None);
                         a_live = false;
                     }
                     _ => {
@@ -945,7 +949,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
     }
 
     let _ = a_live;
-    out.into_string()
+    out
 }
 
 #[cfg(test)]

@@ -157,18 +157,18 @@ fn emit_static_target(
                 if let Some(&target_off) = offs.get(&target) {
                     let delta = target_off as isize - (section_pc + 2) as isize;
                     if (-128..128).contains(&delta) {
-                        writeln!(out, "    jr nes_{target:04X}").unwrap();
+                        out.ins("jr", &[format!("nes_{target:04X}").as_str()], None);
                         return true;
                     }
                 }
             }
-            writeln!(out, "    jp nes_{target:04X}").unwrap();
+            out.ins("jp", &[format!("nes_{target:04X}").as_str()], None);
             true
         }
         Some(bank) => {
-            writeln!(out, "    ld a, ${bank:02X}").unwrap();
-            writeln!(out, "    ld hl, nes_{target:04X}").unwrap();
-            writeln!(out, "    jp nes_jump_known_hl_a").unwrap();
+            out.ins("ld", &["a", format!("${bank:02X}").as_str()], None);
+            out.ins("ld", &["hl", format!("nes_{target:04X}").as_str()], None);
+            out.ins("jp", &["nes_jump_known_hl_a"], None);
             true
         }
         None => false,
@@ -190,28 +190,28 @@ fn emit_static_control(
         IrOp::Branch { flag, when, target } if banks.contains_key(&target) => {
             match flag {
                 Flag::Carry => {
-                    writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_c_shadow]"], None);
+                    out.ins("and", &["a"], None);
+                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                 }
                 Flag::Zero => {
-                    writeln!(out, "    ldh a, [nes_z_shadow]").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_z_shadow]"], None);
+                    out.ins("and", &["a"], None);
+                    out.ins("jr", &[format!("{}", if when { "nz" } else { "z" }).as_str(), ":+"], None);
                 }
                 Flag::Negative => {
-                    writeln!(out, "    ldh a, [nes_n_shadow]").unwrap();
-                    writeln!(out, "    bit 7, a").unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_n_shadow]"], None);
+                    out.ins("bit", &["7", "a"], None);
+                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                 }
                 _ => {
-                    writeln!(out, "    ldh a, [nes_p]").unwrap();
-                    writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_p]"], None);
+                    out.ins("and", &[format!("${:02X}", flag_mask(flag)).as_str()], None);
+                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                 }
             }
             emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
-            writeln!(out, ":").unwrap();
+            out.label("");
             true
         }
         IrOp::Jump(target) if banks.contains_key(&target) => {
@@ -221,8 +221,8 @@ fn emit_static_control(
             target,
             return_addr,
         } if banks.contains_key(&target) => {
-            writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
-            writeln!(out, "    call nes_stack_push_return_hl").unwrap();
+            out.ins("ld", &["hl", format!("${return_addr:04X}").as_str()], None);
+            out.ins("call", &["nes_stack_push_return_hl"], None);
             emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             true
         }
@@ -591,8 +591,8 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
 }
 
 fn emit_update_nz(out: &mut MirBuf) {
-    writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
-    writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+    out.ins("ldh", &["[nes_z_shadow]", "a"], None);
+    out.ins("ldh", &["[nes_n_shadow]", "a"], None);
 }
 
 fn ensure_a(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
@@ -600,7 +600,7 @@ fn ensure_a(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
         stats.a_reload_avoided += 1;
         return;
     }
-    writeln!(out, "    ldh a, [nes_a] ; superblock A cache seed").unwrap();
+    out.ins("ldh", &["a", "[nes_a]"], Some("superblock A cache seed"));
     state.a_live = true;
     state.a_dirty = false;
     stats.a_seed_loads += 1;
@@ -622,7 +622,7 @@ fn materialize_a(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStat
         return;
     }
     debug_assert!(state.a_live);
-    writeln!(out, "    ldh [nes_a], a ; superblock materialize A").unwrap();
+    out.ins("ldh", &["[nes_a]", "a"], Some("superblock materialize A"));
     state.a_dirty = false;
     stats.a_materialized += 1;
 }
@@ -636,8 +636,8 @@ fn ensure_x(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if state.x_b {
         return;
     }
-    writeln!(out, "    ldh a, [nes_x]").unwrap();
-    writeln!(out, "    ld b, a ; superblock X cache seed").unwrap();
+    out.ins("ldh", &["a", "[nes_x]"], None);
+    out.ins("ld", &["b", "a"], Some("superblock X cache seed"));
     state.x_b = true;
     state.x_dirty = false;
     stats.x_seed_loads += 1;
@@ -647,8 +647,8 @@ fn ensure_y(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if state.y_c {
         return;
     }
-    writeln!(out, "    ldh a, [nes_y]").unwrap();
-    writeln!(out, "    ld c, a ; superblock Y cache seed").unwrap();
+    out.ins("ldh", &["a", "[nes_y]"], None);
+    out.ins("ld", &["c", "a"], Some("superblock Y cache seed"));
     state.y_c = true;
     state.y_dirty = false;
     stats.y_seed_loads += 1;
@@ -657,15 +657,15 @@ fn ensure_y(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
 fn sync_xy(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if state.x_dirty {
         debug_assert!(state.x_b);
-        writeln!(out, "    ld a, b ; superblock materialize X").unwrap();
-        writeln!(out, "    ldh [nes_x], a").unwrap();
+        out.ins("ld", &["a", "b"], Some("superblock materialize X"));
+        out.ins("ldh", &["[nes_x]", "a"], None);
         state.x_dirty = false;
         stats.x_materialized += 1;
     }
     if state.y_dirty {
         debug_assert!(state.y_c);
-        writeln!(out, "    ld a, c ; superblock materialize Y").unwrap();
-        writeln!(out, "    ldh [nes_y], a").unwrap();
+        out.ins("ld", &["a", "c"], Some("superblock materialize Y"));
+        out.ins("ldh", &["[nes_y]", "a"], None);
         state.y_dirty = false;
         stats.y_materialized += 1;
     }
@@ -687,11 +687,11 @@ fn invalidate_state(state: &mut TraceState) {
 }
 
 fn emit_add_a_to_hl(out: &mut MirBuf) {
-    writeln!(out, "    add l").unwrap();
-    writeln!(out, "    ld l, a").unwrap();
-    writeln!(out, "    jr nc, :+").unwrap();
-    writeln!(out, "    inc h").unwrap();
-    writeln!(out, ":").unwrap();
+    out.ins("add", &["l"], None);
+    out.ins("ld", &["l", "a"], None);
+    out.ins("jr", &["nc", ":+"], None);
+    out.ins("inc", &["h"], None);
+    out.label("");
 }
 
 fn fast_operand_supported(op: Operand) -> bool {
@@ -713,19 +713,19 @@ fn fast_store_supported(op: Operand) -> bool {
 /// HL = ($zp),Y with Y from host C (ensured resident). Clobbers A, DE, HL.
 fn emit_indirect_y_addr(out: &mut MirBuf, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
     let cached = state.y_c;
-    writeln!(out, "    ld e, ${zp:02X}").unwrap();
-    writeln!(out, "    ld d, $C0").unwrap();
-    writeln!(out, "    ld a, [de]").unwrap();
-    writeln!(out, "    ld l, a").unwrap();
-    writeln!(out, "    inc e").unwrap();
-    writeln!(out, "    ld a, [de]").unwrap();
-    writeln!(out, "    ld h, a").unwrap();
+    out.ins("ld", &["e", format!("${zp:02X}").as_str()], None);
+    out.ins("ld", &["d", "$C0"], None);
+    out.ins("ld", &["a", "[de]"], None);
+    out.ins("ld", &["l", "a"], None);
+    out.ins("inc", &["e"], None);
+    out.ins("ld", &["a", "[de]"], None);
+    out.ins("ld", &["h", "a"], None);
     if cached {
-        writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+        out.ins("ld", &["a", "c"], Some("superblock cached Y index"));
         stats.y_reload_avoided += 1;
         stats.y_index_uses += 1;
     } else {
-        writeln!(out, "    ldh a, [nes_y]").unwrap();
+        out.ins("ldh", &["a", "[nes_y]"], None);
     }
     emit_add_a_to_hl(out);
 }
@@ -734,52 +734,52 @@ fn emit_indirect_y_addr(out: &mut MirBuf, zp: u8, state: &mut TraceState, stats:
 /// through nes_cpu_read_hi with BC saved around the call.
 fn emit_indirect_y_load(out: &mut MirBuf, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
     emit_indirect_y_addr(out, zp, state, stats);
-    writeln!(out, "    ld a, h").unwrap();
-    writeln!(out, "    cp $20").unwrap();
-    writeln!(out, "    jr nc, :+").unwrap();
-    writeln!(out, "    and $07").unwrap();
-    writeln!(out, "    or $C0").unwrap();
-    writeln!(out, "    ld h, a").unwrap();
-    writeln!(out, "    ld a, [hl]").unwrap();
-    writeln!(out, "    jr :++").unwrap();
-    writeln!(out, ":").unwrap();
+    out.ins("ld", &["a", "h"], None);
+    out.ins("cp", &["$20"], None);
+    out.ins("jr", &["nc", ":+"], None);
+    out.ins("and", &["$07"], None);
+    out.ins("or", &["$C0"], None);
+    out.ins("ld", &["h", "a"], None);
+    out.ins("ld", &["a", "[hl]"], None);
+    out.ins("jr", &[":++"], None);
+    out.label("");
     let keep = state.x_b || state.y_c;
     if keep {
-        writeln!(out, "    push bc ; superblock (zp),Y: keep cached X/Y").unwrap();
+        out.ins("push", &["bc"], Some("superblock (zp),Y: keep cached X/Y"));
     }
-    writeln!(out, "    call nes_cpu_read_hi ; inline RAM test failed: H >= $20").unwrap();
+    out.ins("call", &["nes_cpu_read_hi"], Some("inline RAM test failed: H >= $20"));
     if keep {
-        writeln!(out, "    pop bc").unwrap();
+        out.ins("pop", &["bc"], None);
     }
-    writeln!(out, ":").unwrap();
+    out.label("");
 }
 
 /// STA ($zp),Y with the value in host A; A is clobbered afterwards.
 fn emit_indirect_y_store(out: &mut MirBuf, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
-    writeln!(out, "    push af").unwrap();
+    out.ins("push", &["af"], None);
     emit_indirect_y_addr(out, zp, state, stats);
-    writeln!(out, "    ld a, h").unwrap();
-    writeln!(out, "    cp $20").unwrap();
-    writeln!(out, "    jr nc, :+").unwrap();
-    writeln!(out, "    and $07").unwrap();
-    writeln!(out, "    or $C0").unwrap();
-    writeln!(out, "    ld h, a").unwrap();
-    writeln!(out, "    pop af").unwrap();
-    writeln!(out, "    ld [hl], a").unwrap();
-    writeln!(out, "    jr :++").unwrap();
-    writeln!(out, ":").unwrap();
-    writeln!(out, "    pop af").unwrap();
-    writeln!(out, "    push af ; superblock (zp),Y store: A stays resident").unwrap();
+    out.ins("ld", &["a", "h"], None);
+    out.ins("cp", &["$20"], None);
+    out.ins("jr", &["nc", ":+"], None);
+    out.ins("and", &["$07"], None);
+    out.ins("or", &["$C0"], None);
+    out.ins("ld", &["h", "a"], None);
+    out.ins("pop", &["af"], None);
+    out.ins("ld", &["[hl]", "a"], None);
+    out.ins("jr", &[":++"], None);
+    out.label("");
+    out.ins("pop", &["af"], None);
+    out.ins("push", &["af"], Some("superblock (zp),Y store: A stays resident"));
     let keep = state.x_b || state.y_c;
     if keep {
-        writeln!(out, "    push bc ; superblock (zp),Y: keep cached X/Y").unwrap();
+        out.ins("push", &["bc"], Some("superblock (zp),Y: keep cached X/Y"));
     }
-    writeln!(out, "    call nes_cpu_write").unwrap();
+    out.ins("call", &["nes_cpu_write"], None);
     if keep {
-        writeln!(out, "    pop bc").unwrap();
+        out.ins("pop", &["bc"], None);
     }
-    writeln!(out, "    pop af").unwrap();
-    writeln!(out, ":").unwrap();
+    out.ins("pop", &["af"], None);
+    out.label("");
 }
 
 fn emit_operand_load(
@@ -789,51 +789,51 @@ fn emit_operand_load(
     stats: &mut StateStats,
 ) {
     match src {
-        Operand::Immediate(v) => writeln!(out, "    ld a, ${v:02X}").unwrap(),
+        Operand::Immediate(v) => out.ins("ld", &["a", format!("${v:02X}").as_str()], None),
         Operand::IndirectIndexed(zp) => emit_indirect_y_load(out, zp, state, stats),
         Operand::ZeroPage(zp) => {
-            writeln!(out, "    ld a, [${:04X}]", NES_RAM_BASE + zp as u16).unwrap();
+            out.ins("ld", &["a", format!("[${:04X}]", NES_RAM_BASE + zp as u16).as_str()], None);
         }
         Operand::Absolute(addr) => {
-            writeln!(out, "    ld a, [${:04X}]", direct_ram_addr(addr).unwrap()).unwrap();
+            out.ins("ld", &["a", format!("[${:04X}]", direct_ram_addr(addr).unwrap()).as_str()], None);
         }
         Operand::ZeroPageX(zp) => {
             ensure_x(out, state, stats);
-            writeln!(out, "    ld a, b ; superblock cached X index").unwrap();
+            out.ins("ld", &["a", "b"], Some("superblock cached X index"));
             stats.x_reload_avoided += 1;
             stats.x_index_uses += 1;
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
-            writeln!(out, "    ld a, [hl]").unwrap();
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
+            out.ins("ld", &["a", "[hl]"], None);
         }
         Operand::ZeroPageY(zp) => {
             ensure_y(out, state, stats);
-            writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+            out.ins("ld", &["a", "c"], Some("superblock cached Y index"));
             stats.y_reload_avoided += 1;
             stats.y_index_uses += 1;
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
-            writeln!(out, "    ld a, [hl]").unwrap();
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
+            out.ins("ld", &["a", "[hl]"], None);
         }
         Operand::AbsoluteX(addr) => {
             ensure_x(out, state, stats);
-            writeln!(out, "    ld hl, ${:04X}", NES_RAM_BASE + addr).unwrap();
-            writeln!(out, "    ld a, b ; superblock cached X index").unwrap();
+            out.ins("ld", &["hl", format!("${:04X}", NES_RAM_BASE + addr).as_str()], None);
+            out.ins("ld", &["a", "b"], Some("superblock cached X index"));
             stats.x_reload_avoided += 1;
             stats.x_index_uses += 1;
             emit_add_a_to_hl(out);
-            writeln!(out, "    ld a, [hl]").unwrap();
+            out.ins("ld", &["a", "[hl]"], None);
         }
         Operand::AbsoluteY(addr) => {
             ensure_y(out, state, stats);
-            writeln!(out, "    ld hl, ${:04X}", NES_RAM_BASE + addr).unwrap();
-            writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+            out.ins("ld", &["hl", format!("${:04X}", NES_RAM_BASE + addr).as_str()], None);
+            out.ins("ld", &["a", "c"], Some("superblock cached Y index"));
             stats.y_reload_avoided += 1;
             stats.y_index_uses += 1;
             emit_add_a_to_hl(out);
-            writeln!(out, "    ld a, [hl]").unwrap();
+            out.ins("ld", &["a", "[hl]"], None);
         }
         Operand::IndexedIndirect(_) => unreachable!(),
     }
@@ -847,56 +847,56 @@ fn emit_operand_store(
 ) {
     match dst {
         Operand::ZeroPage(zp) => {
-            writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
+            out.ins("ld", &[format!("[${:04X}]", NES_RAM_BASE + zp as u16).as_str(), "a"], None);
         }
         Operand::Absolute(addr) => {
-            writeln!(out, "    ld [${:04X}], a", direct_ram_addr(addr).unwrap()).unwrap();
+            out.ins("ld", &[format!("[${:04X}]", direct_ram_addr(addr).unwrap()).as_str(), "a"], None);
         }
         Operand::ZeroPageX(zp) => {
-            writeln!(out, "    push af").unwrap();
+            out.ins("push", &["af"], None);
             ensure_x(out, state, stats);
-            writeln!(out, "    ld a, b ; superblock cached X index").unwrap();
+            out.ins("ld", &["a", "b"], Some("superblock cached X index"));
             stats.x_reload_avoided += 1;
             stats.x_index_uses += 1;
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
-            writeln!(out, "    pop af").unwrap();
-            writeln!(out, "    ld [hl], a").unwrap();
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
+            out.ins("pop", &["af"], None);
+            out.ins("ld", &["[hl]", "a"], None);
         }
         Operand::ZeroPageY(zp) => {
-            writeln!(out, "    push af").unwrap();
+            out.ins("push", &["af"], None);
             ensure_y(out, state, stats);
-            writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+            out.ins("ld", &["a", "c"], Some("superblock cached Y index"));
             stats.y_reload_avoided += 1;
             stats.y_index_uses += 1;
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
-            writeln!(out, "    pop af").unwrap();
-            writeln!(out, "    ld [hl], a").unwrap();
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
+            out.ins("pop", &["af"], None);
+            out.ins("ld", &["[hl]", "a"], None);
         }
         Operand::AbsoluteX(addr) => {
-            writeln!(out, "    push af").unwrap();
+            out.ins("push", &["af"], None);
             ensure_x(out, state, stats);
-            writeln!(out, "    ld hl, ${:04X}", NES_RAM_BASE + addr).unwrap();
-            writeln!(out, "    ld a, b ; superblock cached X index").unwrap();
+            out.ins("ld", &["hl", format!("${:04X}", NES_RAM_BASE + addr).as_str()], None);
+            out.ins("ld", &["a", "b"], Some("superblock cached X index"));
             stats.x_reload_avoided += 1;
             stats.x_index_uses += 1;
             emit_add_a_to_hl(out);
-            writeln!(out, "    pop af").unwrap();
-            writeln!(out, "    ld [hl], a").unwrap();
+            out.ins("pop", &["af"], None);
+            out.ins("ld", &["[hl]", "a"], None);
         }
         Operand::AbsoluteY(addr) => {
-            writeln!(out, "    push af").unwrap();
+            out.ins("push", &["af"], None);
             ensure_y(out, state, stats);
-            writeln!(out, "    ld hl, ${:04X}", NES_RAM_BASE + addr).unwrap();
-            writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+            out.ins("ld", &["hl", format!("${:04X}", NES_RAM_BASE + addr).as_str()], None);
+            out.ins("ld", &["a", "c"], Some("superblock cached Y index"));
             stats.y_reload_avoided += 1;
             stats.y_index_uses += 1;
             emit_add_a_to_hl(out);
-            writeln!(out, "    pop af").unwrap();
-            writeln!(out, "    ld [hl], a").unwrap();
+            out.ins("pop", &["af"], None);
+            out.ins("ld", &["[hl]", "a"], None);
         }
         Operand::Immediate(_) | Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
             unreachable!()
@@ -914,12 +914,12 @@ fn load_reg_to_a(
         Register::A => ensure_a(out, state, stats),
         Register::X => {
             ensure_x(out, state, stats);
-            writeln!(out, "    ld a, b ; superblock cached X").unwrap();
+            out.ins("ld", &["a", "b"], Some("superblock cached X"));
             stats.x_reload_avoided += 1;
         }
         Register::Y => {
             ensure_y(out, state, stats);
-            writeln!(out, "    ld a, c ; superblock cached Y").unwrap();
+            out.ins("ld", &["a", "c"], Some("superblock cached Y"));
             stats.y_reload_avoided += 1;
         }
         Register::Sp => return false,
@@ -936,13 +936,13 @@ fn write_reg_from_a(
     match reg {
         Register::A => write_a_resident(state, stats),
         Register::X => {
-            writeln!(out, "    ld b, a ; superblock X becomes resident").unwrap();
+            out.ins("ld", &["b", "a"], Some("superblock X becomes resident"));
             state.x_b = true;
             state.x_dirty = true;
             stats.x_stores_deferred += 1;
         }
         Register::Y => {
-            writeln!(out, "    ld c, a ; superblock Y becomes resident").unwrap();
+            out.ins("ld", &["c", "a"], Some("superblock Y becomes resident"));
             state.y_c = true;
             state.y_dirty = true;
             stats.y_stores_deferred += 1;
@@ -961,11 +961,11 @@ fn emit_fast_modify_value(
 ) {
     match modify {
         ModifyOp::Inc => {
-            writeln!(out, "    inc a").unwrap();
+            out.ins("inc", &["a"], None);
             emit_update_nz(out);
         }
         ModifyOp::Dec => {
-            writeln!(out, "    dec a").unwrap();
+            out.ins("dec", &["a"], None);
             emit_update_nz(out);
         }
         ModifyOp::Asl | ModifyOp::Lsr | ModifyOp::Rol | ModifyOp::Ror => {
@@ -975,16 +975,16 @@ fn emit_fast_modify_value(
                 // B/C remain untouched because they belong to resident X/Y.
                 match known_carry {
                     Some(false) => {
-                        writeln!(out, "    and a ; known 6502 C=0").unwrap();
+                        out.ins("and", &["a"], Some("known 6502 C=0"));
                     }
                     Some(true) => {
-                        writeln!(out, "    scf ; known 6502 C=1").unwrap();
+                        out.ins("scf", &[], Some("known 6502 C=1"));
                     }
                     None => {
-                        writeln!(out, "    ld d, a ; superblock rotate input").unwrap();
-                        writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                        writeln!(out, "    rra ; seed host carry from 6502 C").unwrap();
-                        writeln!(out, "    ld a, d").unwrap();
+                        out.ins("ld", &["d", "a"], Some("superblock rotate input"));
+                        out.ins("ldh", &["a", "[nes_c_shadow]"], None);
+                        out.ins("rra", &[], Some("seed host carry from 6502 C"));
+                        out.ins("ld", &["a", "d"], None);
                     }
                 }
             }
@@ -992,19 +992,19 @@ fn emit_fast_modify_value(
             let name = match modify {
                 ModifyOp::Asl => {
                     // ADD A,A is the one-byte/one-M-cycle LR35902 form of ASL.
-                    writeln!(out, "    add a ; superblock fast ASL").unwrap();
+                    out.ins("add", &["a"], Some("superblock fast ASL"));
                     "ASL"
                 }
                 ModifyOp::Lsr => {
-                    writeln!(out, "    srl a ; superblock fast LSR").unwrap();
+                    out.ins("srl", &["a"], Some("superblock fast LSR"));
                     "LSR"
                 }
                 ModifyOp::Rol => {
-                    writeln!(out, "    rl a ; superblock fast ROL").unwrap();
+                    out.ins("rl", &["a"], Some("superblock fast ROL"));
                     "ROL"
                 }
                 ModifyOp::Ror => {
-                    writeln!(out, "    rr a ; superblock fast ROR").unwrap();
+                    out.ins("rr", &["a"], Some("superblock fast ROR"));
                     "ROR"
                 }
                 _ => unreachable!(),
@@ -1013,15 +1013,15 @@ fn emit_fast_modify_value(
             if c_dead {
                 writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
             } else {
-                writeln!(out, "    ld e, a ; superblock shift/rotate result").unwrap();
+                out.ins("ld", &["e", "a"], Some("superblock shift/rotate result"));
 
                 // Branchless carry capture: LD preserves carry and RL moves C into
                 // bit 0, yielding the canonical normalized 0/1 shadow.
-                writeln!(out, "    ld a, $00").unwrap();
-                writeln!(out, "    rl a ; capture shift/rotate carry").unwrap();
-                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                out.ins("ld", &["a", "$00"], None);
+                out.ins("rl", &["a"], Some("capture shift/rotate carry"));
+                out.ins("ldh", &["[nes_c_shadow]", "a"], None);
 
-                writeln!(out, "    ld a, e").unwrap();
+                out.ins("ld", &["a", "e"], None);
             }
             emit_update_nz(out);
             stats.fast_shifts += 1;
@@ -1047,16 +1047,16 @@ fn emit_fast_modify_hl(
     stats: &mut StateStats,
 ) {
     match modify {
-        ModifyOp::Inc => writeln!(out, "    inc [hl] ; native RMW INC").unwrap(),
-        ModifyOp::Dec => writeln!(out, "    dec [hl] ; native RMW DEC").unwrap(),
+        ModifyOp::Inc => out.ins("inc", &["[hl]"], Some("native RMW INC")),
+        ModifyOp::Dec => out.ins("dec", &["[hl]"], Some("native RMW DEC")),
         ModifyOp::Asl | ModifyOp::Lsr | ModifyOp::Rol | ModifyOp::Ror => {
             if matches!(modify, ModifyOp::Rol | ModifyOp::Ror) {
                 match known_carry {
-                    Some(false) => writeln!(out, "    and a ; known 6502 C=0").unwrap(),
-                    Some(true) => writeln!(out, "    scf ; known 6502 C=1").unwrap(),
+                    Some(false) => out.ins("and", &["a"], Some("known 6502 C=0")),
+                    Some(true) => out.ins("scf", &[], Some("known 6502 C=1")),
                     None => {
-                        writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                        writeln!(out, "    rra ; seed host carry from 6502 C").unwrap();
+                        out.ins("ldh", &["a", "[nes_c_shadow]"], None);
+                        out.ins("rra", &[], Some("seed host carry from 6502 C"));
                     }
                 }
             }
@@ -1070,14 +1070,14 @@ fn emit_fast_modify_hl(
             if c_dead {
                 writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
             } else {
-                writeln!(out, "    ld a, $00").unwrap();
-                writeln!(out, "    rl a ; capture shift/rotate carry").unwrap();
-                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                out.ins("ld", &["a", "$00"], None);
+                out.ins("rl", &["a"], Some("capture shift/rotate carry"));
+                out.ins("ldh", &["[nes_c_shadow]", "a"], None);
             }
             stats.fast_shifts += 1;
         }
     }
-    writeln!(out, "    ld a, [hl] ; RMW result for Z/N").unwrap();
+    out.ins("ld", &["a", "[hl]"], Some("RMW result for Z/N"));
     emit_update_nz(out);
 }
 
@@ -1092,88 +1092,88 @@ fn emit_fast_modify_memory(
         Operand::ZeroPage(zp) => {
             let addr = NES_RAM_BASE + zp as u16;
             if rmw_hl_enabled() {
-                writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+                out.ins("ld", &["hl", format!("${addr:04X}").as_str()], None);
                 emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
                 return;
             }
-            writeln!(out, "    ld a, [${addr:04X}]").unwrap();
+            out.ins("ld", &["a", format!("[${addr:04X}]").as_str()], None);
             emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-            writeln!(out, "    ld [${addr:04X}], a").unwrap();
+            out.ins("ld", &[format!("[${addr:04X}]").as_str(), "a"], None);
         }
         Operand::Absolute(addr) => {
             let mapped = direct_ram_addr(addr).unwrap();
             if rmw_hl_enabled() {
-                writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
+                out.ins("ld", &["hl", format!("${mapped:04X}").as_str()], None);
                 emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
                 return;
             }
-            writeln!(out, "    ld a, [${mapped:04X}]").unwrap();
+            out.ins("ld", &["a", format!("[${mapped:04X}]").as_str()], None);
             emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-            writeln!(out, "    ld [${mapped:04X}], a").unwrap();
+            out.ins("ld", &[format!("[${mapped:04X}]").as_str(), "a"], None);
         }
         Operand::ZeroPageX(zp) => {
             ensure_x(out, state, stats);
-            writeln!(out, "    ld a, b ; superblock cached X index").unwrap();
+            out.ins("ld", &["a", "b"], Some("superblock cached X index"));
             stats.x_reload_avoided += 1;
             stats.x_index_uses += 1;
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
             if rmw_hl_enabled() {
                 emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
             } else {
-                writeln!(out, "    ld a, [hl]").unwrap();
+                out.ins("ld", &["a", "[hl]"], None);
                 emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+                out.ins("ld", &["[hl]", "a"], Some("reuse indexed RMW address"));
             }
             stats.fast_rmw_addr_reuse += 1;
         }
         Operand::ZeroPageY(zp) => {
             ensure_y(out, state, stats);
-            writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+            out.ins("ld", &["a", "c"], Some("superblock cached Y index"));
             stats.y_reload_avoided += 1;
             stats.y_index_uses += 1;
-            writeln!(out, "    add ${zp:02X}").unwrap();
-            writeln!(out, "    ld l, a").unwrap();
-            writeln!(out, "    ld h, $C0").unwrap();
+            out.ins("add", &[format!("${zp:02X}").as_str()], None);
+            out.ins("ld", &["l", "a"], None);
+            out.ins("ld", &["h", "$C0"], None);
             if rmw_hl_enabled() {
                 emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
             } else {
-                writeln!(out, "    ld a, [hl]").unwrap();
+                out.ins("ld", &["a", "[hl]"], None);
                 emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+                out.ins("ld", &["[hl]", "a"], Some("reuse indexed RMW address"));
             }
             stats.fast_rmw_addr_reuse += 1;
         }
         Operand::AbsoluteX(addr) => {
             ensure_x(out, state, stats);
-            writeln!(out, "    ld hl, ${:04X}", NES_RAM_BASE + addr).unwrap();
-            writeln!(out, "    ld a, b ; superblock cached X index").unwrap();
+            out.ins("ld", &["hl", format!("${:04X}", NES_RAM_BASE + addr).as_str()], None);
+            out.ins("ld", &["a", "b"], Some("superblock cached X index"));
             stats.x_reload_avoided += 1;
             stats.x_index_uses += 1;
             emit_add_a_to_hl(out);
             if rmw_hl_enabled() {
                 emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
             } else {
-                writeln!(out, "    ld a, [hl]").unwrap();
+                out.ins("ld", &["a", "[hl]"], None);
                 emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+                out.ins("ld", &["[hl]", "a"], Some("reuse indexed RMW address"));
             }
             stats.fast_rmw_addr_reuse += 1;
         }
         Operand::AbsoluteY(addr) => {
             ensure_y(out, state, stats);
-            writeln!(out, "    ld hl, ${:04X}", NES_RAM_BASE + addr).unwrap();
-            writeln!(out, "    ld a, c ; superblock cached Y index").unwrap();
+            out.ins("ld", &["hl", format!("${:04X}", NES_RAM_BASE + addr).as_str()], None);
+            out.ins("ld", &["a", "c"], Some("superblock cached Y index"));
             stats.y_reload_avoided += 1;
             stats.y_index_uses += 1;
             emit_add_a_to_hl(out);
             if rmw_hl_enabled() {
                 emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
             } else {
-                writeln!(out, "    ld a, [hl]").unwrap();
+                out.ins("ld", &["a", "[hl]"], None);
                 emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+                out.ins("ld", &["[hl]", "a"], Some("reuse indexed RMW address"));
             }
             stats.fast_rmw_addr_reuse += 1;
         }
@@ -1247,7 +1247,7 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
         && park_enabled()
         && matches!(*op, IrOp::Inc(Register::X | Register::Y) | IrOp::Dec(Register::X | Register::Y));
     if park {
-        writeln!(out, "    ld d, a ; superblock park A across INX/INY/DEX/DEY").unwrap();
+        out.ins("ld", &["d", "a"], Some("superblock park A across INX/INY/DEX/DEY"));
     }
 
     match *op {
@@ -1285,28 +1285,28 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
     match *op {
         IrOp::SetFlag { flag, value } => match flag {
             Flag::Carry => {
-                writeln!(out, "    ld a, ${:02X}", if value { 1 } else { 0 }).unwrap();
-                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                out.ins("ld", &["a", format!("${:02X}", if value { 1 } else { 0 }).as_str()], None);
+                out.ins("ldh", &["[nes_c_shadow]", "a"], None);
                 if regalloc_level() >= 1 {
                     state.carry = Some(value);
                 }
             }
             Flag::Zero => {
-                writeln!(out, "    ld a, ${:02X}", if value { 0 } else { 1 }).unwrap();
-                writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
+                out.ins("ld", &["a", format!("${:02X}", if value { 0 } else { 1 }).as_str()], None);
+                out.ins("ldh", &["[nes_z_shadow]", "a"], None);
             }
             Flag::Negative => {
-                writeln!(out, "    ld a, ${:02X}", if value { 0x80 } else { 0 }).unwrap();
-                writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+                out.ins("ld", &["a", format!("${:02X}", if value { 0x80 } else { 0 }).as_str()], None);
+                out.ins("ldh", &["[nes_n_shadow]", "a"], None);
             }
             _ => {
-                writeln!(out, "    ldh a, [nes_p]").unwrap();
+                out.ins("ldh", &["a", "[nes_p]"], None);
                 if value {
-                    writeln!(out, "    or ${:02X}", flag_mask(flag)).unwrap();
+                    out.ins("or", &[format!("${:02X}", flag_mask(flag)).as_str()], None);
                 } else {
-                    writeln!(out, "    and ${:02X}", !flag_mask(flag)).unwrap();
+                    out.ins("and", &[format!("${:02X}", !flag_mask(flag)).as_str()], None);
                 }
-                writeln!(out, "    ldh [nes_p], a").unwrap();
+                out.ins("ldh", &["[nes_p]", "a"], None);
             }
         },
         IrOp::Load { dst: Register::A, src: Operand::IndirectIndexed(zp) } => {
@@ -1349,14 +1349,14 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
                 Register::X => {
                     ensure_x(out, state, stats);
                     writeln!(out, "    {} b", if inc { "inc" } else { "dec" }).unwrap();
-                    writeln!(out, "    ld a, b").unwrap();
+                    out.ins("ld", &["a", "b"], None);
                     state.x_dirty = true;
                     stats.x_stores_deferred += 1;
                 }
                 Register::Y => {
                     ensure_y(out, state, stats);
                     writeln!(out, "    {} c", if inc { "inc" } else { "dec" }).unwrap();
-                    writeln!(out, "    ld a, c").unwrap();
+                    out.ins("ld", &["a", "c"], None);
                     state.y_dirty = true;
                     stats.y_stores_deferred += 1;
                 }
@@ -1364,7 +1364,7 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
             }
             emit_update_nz(out);
             if park {
-                writeln!(out, "    ld a, d ; superblock unpark A").unwrap();
+                out.ins("ld", &["a", "d"], Some("superblock unpark A"));
             }
         }
         IrOp::Logic {
@@ -1372,14 +1372,14 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
             rhs: Operand::IndirectIndexed(zp),
         } => {
             ensure_a(out, state, stats);
-            writeln!(out, "    push af ; superblock (zp),Y logic lhs").unwrap();
+            out.ins("push", &["af"], Some("superblock (zp),Y logic lhs"));
             emit_indirect_y_load(out, zp, state, stats);
-            writeln!(out, "    ld e, a").unwrap();
-            writeln!(out, "    pop af").unwrap();
+            out.ins("ld", &["e", "a"], None);
+            out.ins("pop", &["af"], None);
             match op {
-                LogicOp::And => writeln!(out, "    and e").unwrap(),
-                LogicOp::Ora => writeln!(out, "    or e").unwrap(),
-                LogicOp::Eor => writeln!(out, "    xor e").unwrap(),
+                LogicOp::And => out.ins("and", &["e"], None),
+                LogicOp::Ora => out.ins("or", &["e"], None),
+                LogicOp::Eor => out.ins("xor", &["e"], None),
             }
             write_a_resident(state, stats);
             emit_update_nz(out);
@@ -1390,9 +1390,9 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
         } => {
             ensure_a(out, state, stats);
             match op {
-                LogicOp::And => writeln!(out, "    and ${imm:02X}").unwrap(),
-                LogicOp::Ora => writeln!(out, "    or ${imm:02X}").unwrap(),
-                LogicOp::Eor => writeln!(out, "    xor ${imm:02X}").unwrap(),
+                LogicOp::And => out.ins("and", &[format!("${imm:02X}").as_str()], None),
+                LogicOp::Ora => out.ins("or", &[format!("${imm:02X}").as_str()], None),
+                LogicOp::Eor => out.ins("xor", &[format!("${imm:02X}").as_str()], None),
             }
             write_a_resident(state, stats);
             emit_update_nz(out);
@@ -1402,74 +1402,69 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
             // B/C remain reserved for resident X/Y; D holds the 6502 lhs.
             ensure_a(out, state, stats);
             if let Operand::IndirectIndexed(zp) = rhs {
-                writeln!(out, "    push af ; superblock (zp),Y arithmetic lhs").unwrap();
+                out.ins("push", &["af"], Some("superblock (zp),Y arithmetic lhs"));
                 emit_indirect_y_load(out, zp, state, stats);
-                writeln!(out, "    ld e, a ; superblock arithmetic RHS").unwrap();
-                writeln!(out, "    pop af").unwrap();
+                out.ins("ld", &["e", "a"], Some("superblock arithmetic RHS"));
+                out.ins("pop", &["af"], None);
             }
-            writeln!(out, "    ld d, a ; superblock resident arithmetic lhs").unwrap();
+            out.ins("ld", &["d", "a"], Some("superblock resident arithmetic lhs"));
             match rhs {
                 Operand::IndirectIndexed(_) => {}
                 Operand::Immediate(imm) => {
-                    writeln!(out, "    ld e, ${imm:02X}").unwrap();
+                    out.ins("ld", &["e", format!("${imm:02X}").as_str()], None);
                 }
                 _ => {
                     emit_operand_load(out, rhs, state, stats);
-                    writeln!(out, "    ld e, a ; superblock arithmetic RHS").unwrap();
+                    out.ins("ld", &["e", "a"], Some("superblock arithmetic RHS"));
                 }
             }
             if op == ArithmeticOp::Sbc {
                 // 6502 SBC is A + (~rhs) + C; using complemented E lets the
                 // ADC overflow identity below match SBC exactly as well.
-                writeln!(out, "    ld a, e").unwrap();
-                writeln!(out, "    cpl").unwrap();
-                writeln!(out, "    ld e, a").unwrap();
+                out.ins("ld", &["a", "e"], None);
+                out.ins("cpl", &[], None);
+                out.ins("ld", &["e", "a"], None);
             }
 
             match state.carry {
                 Some(false) => {
-                    writeln!(out, "    and a ; known 6502 C=0 (CLC)").unwrap();
+                    out.ins("and", &["a"], Some("known 6502 C=0 (CLC)"));
                 }
                 Some(true) => {
-                    writeln!(out, "    scf ; known 6502 C=1 (SEC)").unwrap();
+                    out.ins("scf", &[], Some("known 6502 C=1 (SEC)"));
                 }
                 None => {
                     // nes_c_shadow is normalized to 0/1: RRA seeds host C.
-                    writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                    writeln!(out, "    rra ; seed host carry from 6502 C").unwrap();
+                    out.ins("ldh", &["a", "[nes_c_shadow]"], None);
+                    out.ins("rra", &[], Some("seed host carry from 6502 C"));
                 }
             }
-            writeln!(out, "    ld a, d").unwrap();
-            writeln!(
-                out,
-                "    adc e ; superblock fast {}",
-                if op == ArithmeticOp::Adc {
-                    "ADC"
-                } else {
-                    "SBC"
-                }
-            )
-            .unwrap();
-            writeln!(out, "    ld l, a ; arithmetic result").unwrap();
+            out.ins("ld", &["a", "d"], None);
+            out.ins(
+                "adc",
+                &["e"],
+                Some(if op == ArithmeticOp::Adc { "superblock fast ADC" } else { "superblock fast SBC" }),
+            );
+            out.ins("ld", &["l", "a"], Some("arithmetic result"));
 
             // Capture 6502 carry before any flag-clobbering status work.
             if state.c_dead {
                 writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
             } else if regalloc_level() >= 2 {
-                writeln!(out, "    ld a, $00").unwrap();
-                writeln!(out, "    rla ; branchless carry capture").unwrap();
+                out.ins("ld", &["a", "$00"], None);
+                out.ins("rla", &[], Some("branchless carry capture"));
             } else {
-                writeln!(out, "    ld a, $00").unwrap();
-                writeln!(out, "    jr nc, :+").unwrap();
-                writeln!(out, "    inc a").unwrap();
-                writeln!(out, ":").unwrap();
+                out.ins("ld", &["a", "$00"], None);
+                out.ins("jr", &["nc", ":+"], None);
+                out.ins("inc", &["a"], None);
+                out.label("");
             }
             if !state.c_dead {
-                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                out.ins("ldh", &["[nes_c_shadow]", "a"], None);
             }
             if state.v_dead {
                 writeln!(out, "    ; V dead on every path (compiler overflow liveness)").unwrap();
-                writeln!(out, "    ld a, l").unwrap();
+                out.ins("ld", &["a", "l"], None);
                 write_a_resident(state, stats);
                 emit_update_nz(out);
                 stats.fast_arithmetic += 1;
@@ -1481,24 +1476,24 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
             // Only V remains material in nes_p. For SBC, E is ~rhs, so the
             // normal ADC identity ~(lhs^E)&(lhs^result) becomes the SBC
             // identity (lhs^rhs)&(lhs^result).
-            writeln!(out, "    ldh a, [nes_p]").unwrap();
-            writeln!(out, "    and $BF").unwrap();
-            writeln!(out, "    ldh [nes_p], a").unwrap();
-            writeln!(out, "    ld a, d").unwrap();
-            writeln!(out, "    xor e").unwrap();
-            writeln!(out, "    cpl").unwrap();
-            writeln!(out, "    ld h, a").unwrap();
-            writeln!(out, "    ld a, d").unwrap();
-            writeln!(out, "    xor l").unwrap();
-            writeln!(out, "    and h").unwrap();
-            writeln!(out, "    and $80").unwrap();
-            writeln!(out, "    jr z, :+").unwrap();
-            writeln!(out, "    ldh a, [nes_p]").unwrap();
-            writeln!(out, "    or $40").unwrap();
-            writeln!(out, "    ldh [nes_p], a").unwrap();
-            writeln!(out, ":").unwrap();
+            out.ins("ldh", &["a", "[nes_p]"], None);
+            out.ins("and", &["$BF"], None);
+            out.ins("ldh", &["[nes_p]", "a"], None);
+            out.ins("ld", &["a", "d"], None);
+            out.ins("xor", &["e"], None);
+            out.ins("cpl", &[], None);
+            out.ins("ld", &["h", "a"], None);
+            out.ins("ld", &["a", "d"], None);
+            out.ins("xor", &["l"], None);
+            out.ins("and", &["h"], None);
+            out.ins("and", &["$80"], None);
+            out.ins("jr", &["z", ":+"], None);
+            out.ins("ldh", &["a", "[nes_p]"], None);
+            out.ins("or", &["$40"], None);
+            out.ins("ldh", &["[nes_p]", "a"], None);
+            out.label("");
 
-            writeln!(out, "    ld a, l").unwrap();
+            out.ins("ld", &["a", "l"], None);
             write_a_resident(state, stats);
             emit_update_nz(out);
             stats.fast_arithmetic += 1;
@@ -1516,40 +1511,40 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
         IrOp::Compare { reg, rhs } => {
             match rhs {
                 Operand::Immediate(imm) => {
-                    writeln!(out, "    ld e, ${imm:02X}").unwrap();
+                    out.ins("ld", &["e", format!("${imm:02X}").as_str()], None);
                 }
                 _ => {
                     emit_operand_load(out, rhs, state, stats);
-                    writeln!(out, "    ld e, a ; superblock compare RHS").unwrap();
+                    out.ins("ld", &["e", "a"], Some("superblock compare RHS"));
                 }
             }
             match reg {
-                Register::A => writeln!(out, "    ldh a, [nes_a]").unwrap(),
+                Register::A => out.ins("ldh", &["a", "[nes_a]"], None),
                 Register::X => {
                     ensure_x(out, state, stats);
-                    writeln!(out, "    ld a, b ; superblock compare cached X").unwrap();
+                    out.ins("ld", &["a", "b"], Some("superblock compare cached X"));
                     stats.x_reload_avoided += 1;
                 }
                 Register::Y => {
                     ensure_y(out, state, stats);
-                    writeln!(out, "    ld a, c ; superblock compare cached Y").unwrap();
+                    out.ins("ld", &["a", "c"], Some("superblock compare cached Y"));
                     stats.y_reload_avoided += 1;
                 }
                 Register::Sp => unreachable!(),
             }
             // 6502 CMP/CPX/CPY: C is set when lhs >= rhs; Z/N follow lhs-rhs.
             // Inline it so resident B/C survive instead of forcing a barrier.
-            writeln!(out, "    sub e ; superblock fast compare").unwrap();
-            writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
-            writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
+            out.ins("sub", &["e"], Some("superblock fast compare"));
+            out.ins("ldh", &["[nes_z_shadow]", "a"], None);
+            out.ins("ldh", &["[nes_n_shadow]", "a"], None);
             if state.c_dead {
                 writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
             } else {
-                writeln!(out, "    ld a, $00").unwrap();
-                writeln!(out, "    jr c, :+").unwrap();
-                writeln!(out, "    inc a").unwrap();
-                writeln!(out, ":").unwrap();
-                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+                out.ins("ld", &["a", "$00"], None);
+                out.ins("jr", &["c", ":+"], None);
+                out.ins("inc", &["a"], None);
+                out.label("");
+                out.ins("ldh", &["[nes_c_shadow]", "a"], None);
             }
             stats.fast_compares += 1;
         }
@@ -1591,7 +1586,7 @@ fn emit_barrier_ops(
         invalidate_state(state);
     }
     state.carry = None;
-    out.push_str(&lr35902::emit_ops(ops));
+    out.append(lr35902::emit_ops_buf(ops));
     stats.barriers += 1;
 }
 
@@ -1635,13 +1630,15 @@ impl LocalTrace {
         self.state.carry = None;
         let mut a = MirBuf::new();
         if self.state.x_b {
-            a.push_str("    ldh a, [nes_x]\n    ld b, a ; canonical adapter X\n");
+            a.ins("ldh", &["a", "[nes_x]"], None);
+            a.ins("ld", &["b", "a"], Some("canonical adapter X"));
         }
         if self.state.y_c {
-            a.push_str("    ldh a, [nes_y]\n    ld c, a ; canonical adapter Y\n");
+            a.ins("ldh", &["a", "[nes_y]"], None);
+            a.ins("ld", &["c", "a"], Some("canonical adapter Y"));
         }
         if self.state.a_live {
-            a.push_str("    ldh a, [nes_a] ; canonical adapter A\n");
+            a.ins("ldh", &["a", "[nes_a]"], Some("canonical adapter A"));
         }
         a.into_string()
     }
@@ -1718,11 +1715,11 @@ fn emit_block_body_core(
                 sync_state(out, &mut state, &mut stats);
                 out.push_str(&comment);
                 writeln!(out, "    ; TODO {err}").unwrap();
-                writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
-                writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
-                writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
-                writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
-                writeln!(out, "    jp nes_unimplemented").unwrap();
+                out.ins("ld", &["a", format!("${:02X}", instruction.pc as u8).as_str()], None);
+                out.ins("ldh", &["[nes_fault_pc_lo]", "a"], None);
+                out.ins("ld", &["a", format!("${:02X}", (instruction.pc >> 8) as u8).as_str()], None);
+                out.ins("ldh", &["[nes_fault_pc_hi]", "a"], None);
+                out.ins("jp", &["nes_unimplemented"], None);
                 *state_ref = state;
                 *stats_ref = stats;
                 return false;
@@ -1799,10 +1796,10 @@ pub fn emit_cfg_with_interrupts(
     }
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
-    writeln!(out, "nes_reset:").unwrap();
-    writeln!(out, "    ld a, [nes_reset_count]").unwrap();
-    writeln!(out, "    inc a").unwrap();
-    writeln!(out, "    ld [nes_reset_count], a").unwrap();
+    out.label("nes_reset");
+    out.ins("ld", &["a", "[nes_reset_count]"], None);
+    out.ins("inc", &["a"], None);
+    out.ins("ld", &["[nes_reset_count]", "a"], None);
     emit_pc_dispatch(&mut out, options.reset);
     writeln!(out).unwrap();
 
@@ -1848,38 +1845,34 @@ pub fn emit_cfg_with_interrupts(
         state.carry = None;
         if continuing {
             entry_contracts.insert(addr, (bank, state));
-            writeln!(out, "nes_{addr:04X}_trace:").unwrap();
+            out.nes_label(&format!("nes_{addr:04X}_trace"), crate::mir::BlockMeta { pc: addr, bank: None, kind: crate::mir::EntryKind::Trace, poll: poll_points.contains(&addr) && !nmi_exclusive.contains(&addr) });
         } else {
             section_offs.insert(block.start, section_pc);
-            writeln!(out, "nes_{:04X}:", block.start).unwrap();
+            out.nes_label(&format!("nes_{:04X}", block.start), crate::mir::BlockMeta { pc: block.start, bank: None, kind: crate::mir::EntryKind::Canonical, poll: poll_points.contains(&block.start) && !nmi_exclusive.contains(&block.start) });
         }
 
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
         if continuing && state.a_live {
-            writeln!(
-                out,
-                "    push af ; preserve resident A across profile trace"
-            )
-            .unwrap();
+            out.ins("push", &["af"], Some("preserve resident A across profile trace"));
         }
-        writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-        writeln!(out, "    call nes_profile_trace_pc").unwrap();
+        out.ins("ld", &["hl", format!("${:04X}", block.start).as_str()], None);
+        out.ins("call", &["nes_profile_trace_pc"], None);
         if continuing && state.a_live {
-            writeln!(out, "    pop af").unwrap();
+            out.ins("pop", &["af"], None);
         }
         writeln!(out, "ENDC").unwrap();
 
         if options.debug_trace {
             let before = out.len();
             if continuing && state.a_live {
-                writeln!(out, "    push af ; preserve resident A across debug trace").unwrap();
+                out.ins("push", &["af"], Some("preserve resident A across debug trace"));
             }
-            writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
-            writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
-            writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
-            writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+            out.ins("ld", &["a", format!("${:02X}", (block.start >> 8) as u8).as_str()], None);
+            out.ins("ld", &["[nes_debug_pc_hi]", "a"], None);
+            out.ins("ld", &["a", format!("${:02X}", block.start as u8).as_str()], None);
+            out.ins("ld", &["[nes_debug_pc_lo]", "a"], None);
             if continuing && state.a_live {
-                writeln!(out, "    pop af").unwrap();
+                out.ins("pop", &["af"], None);
             }
             section_pc += approx_code_bytes(&out[before..]);
         }
@@ -1901,14 +1894,14 @@ pub fn emit_cfg_with_interrupts(
                     writeln!(out, "IF 0").unwrap();
                 }
                 let before = out.len();
-                writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
-                writeln!(out, "    and a").unwrap();
-                writeln!(out, "    jr z, :+").unwrap();
-                writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-                writeln!(out, "    call nes_poll_nmi_hl").unwrap();
-                writeln!(out, "    and a").unwrap();
-                writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
-                writeln!(out, ":").unwrap();
+                out.ins("ldh", &["a", "[nes_host_vblank_pending]"], None);
+                out.ins("and", &["a"], None);
+                out.ins("jr", &["z", ":+"], None);
+                out.ins("ld", &["hl", format!("${:04X}", block.start).as_str()], None);
+                out.ins("call", &["nes_poll_nmi_hl"], None);
+                out.ins("and", &["a"], None);
+                out.ins("jp", &["nz", "nes_nmi_entry"], None);
+                out.label("");
                 section_pc += approx_code_bytes(&out[before..]);
                 if exclusive {
                     writeln!(out, "ENDC").unwrap();
@@ -1939,12 +1932,12 @@ pub fn emit_cfg_with_interrupts(
                 // nes_fault_hram is debug-only scratch during normal execution;
                 // nes_unimplemented overwrites it with $FF before reporting a fault.
                 let before = out.len();
-                writeln!(out, "    ldh [nes_fault_hram], a ; TRACE scratch: preserve resident A").unwrap();
-                writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
-                writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
-                writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
-                writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
-                writeln!(out, "    ldh a, [nes_fault_hram] ; restore A; flags preserved").unwrap();
+                out.ins("ldh", &["[nes_fault_hram]", "a"], Some("TRACE scratch: preserve resident A"));
+                out.ins("ld", &["a", format!("${:02X}", (instruction.pc >> 8) as u8).as_str()], None);
+                out.ins("ld", &["[nes_debug_pc_hi]", "a"], None);
+                out.ins("ld", &["a", format!("${:02X}", instruction.pc as u8).as_str()], None);
+                out.ins("ld", &["[nes_debug_pc_lo]", "a"], None);
+                out.ins("ldh", &["a", "[nes_fault_hram]"], Some("restore A; flags preserved"));
                 section_pc += approx_code_bytes(&out[before..]);
             }
 
@@ -2021,11 +2014,11 @@ pub fn emit_cfg_with_interrupts(
                     write_insn_comment(&mut out, instruction);
                     let before = out.len();
                     writeln!(out, "    ; TODO {err}").unwrap();
-                    writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
-                    writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
-                    writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
-                    writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
-                    writeln!(out, "    jp nes_unimplemented").unwrap();
+                    out.ins("ld", &["a", format!("${:02X}", instruction.pc as u8).as_str()], None);
+                    out.ins("ldh", &["[nes_fault_pc_lo]", "a"], None);
+                    out.ins("ld", &["a", format!("${:02X}", (instruction.pc >> 8) as u8).as_str()], None);
+                    out.ins("ldh", &["[nes_fault_pc_hi]", "a"], None);
+                    out.ins("jp", &["nes_unimplemented"], None);
                     section_pc += approx_code_bytes(&out[before..]);
                     break;
                 }
@@ -2085,19 +2078,19 @@ pub fn emit_cfg_with_interrupts(
             "SECTION \"NES canonical superblock entry {addr:04X}\", ROMX, BANK[{bank}]"
         )
         .unwrap();
-        writeln!(out, "nes_{addr:04X}:").unwrap();
+        out.nes_label(&format!("nes_{addr:04X}"), crate::mir::BlockMeta { pc: *addr, bank: None, kind: crate::mir::EntryKind::Canonical, poll: false });
         if contract.x_b {
-            writeln!(out, "    ldh a, [nes_x]").unwrap();
-            writeln!(out, "    ld b, a ; canonical adapter X").unwrap();
+            out.ins("ldh", &["a", "[nes_x]"], None);
+            out.ins("ld", &["b", "a"], Some("canonical adapter X"));
         }
         if contract.y_c {
-            writeln!(out, "    ldh a, [nes_y]").unwrap();
-            writeln!(out, "    ld c, a ; canonical adapter Y").unwrap();
+            out.ins("ldh", &["a", "[nes_y]"], None);
+            out.ins("ld", &["c", "a"], Some("canonical adapter Y"));
         }
         if contract.a_live {
-            writeln!(out, "    ldh a, [nes_a] ; canonical adapter A").unwrap();
+            out.ins("ldh", &["a", "[nes_a]"], Some("canonical adapter A"));
         }
-        writeln!(out, "    jp nes_{addr:04X}_trace").unwrap();
+        out.ins("jp", &[format!("nes_{addr:04X}_trace").as_str()], None);
         writeln!(out).unwrap();
         stats.canonical_adapters += 1;
     }

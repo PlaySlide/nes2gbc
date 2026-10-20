@@ -87,6 +87,30 @@ pub struct Line {
     pub item: Item,
 }
 
+/// How a translated NES block is entered at a given label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Canonical entry: NES state is in HRAM (dispatch tables, polls,
+    /// RTS returns, cross-section jumps).
+    Canonical,
+    /// `_trace` continuation of the previous block: the emitter's resident
+    /// registers (A/X/Y in A/B/C) are live on entry.
+    Trace,
+    /// Overlay entry that skips the PRG-RAM byte check (`nes_r_XXXX_nc`).
+    Unchecked,
+}
+
+/// Emitter-supplied identity of a NES block label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockMeta {
+    pub pc: u16,
+    /// Switchable PRG bank for banked views; None for fixed/NROM code.
+    pub bank: Option<u16>,
+    pub kind: EntryKind,
+    /// The block carries an NMI safe-point poll.
+    pub poll: bool,
+}
+
 /// A straight-line region between global labels, with its successors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
@@ -98,6 +122,8 @@ pub struct Block {
     pub succs: Vec<String>,
     /// True when the last instruction can fall through to the next block.
     pub falls_through: bool,
+    /// NES block identity, when the label was emitted with [`MirBuf::nes_label`].
+    pub meta: Option<BlockMeta>,
 }
 
 /// Emission buffer: exact text plus parsed structure.
@@ -109,6 +135,9 @@ pub struct MirBuf {
     parsed_to: usize,
     /// Start offset of each parsed line.
     starts: Vec<usize>,
+    built: usize,
+    /// (line index, meta) for NES block labels.
+    metas: Vec<(usize, BlockMeta)>,
 }
 
 impl MirBuf {
@@ -121,6 +150,100 @@ impl MirBuf {
         self.parse_new();
     }
     pub fn into_string(self) -> String { self.text }
+
+    /// Typed instruction builder: construct the MIR instruction and render
+    /// its text (`    mn op1, op2[ ; comment]`). Emitters use this instead of
+    /// formatting assembly text; the rendered line is what the pre-IR
+    /// `writeln!` produced, so output stays byte-identical.
+    pub fn ins(&mut self, mn: &str, ops: &[&str], comment: Option<&str>) {
+        let mut line = String::with_capacity(40);
+        line.push_str("    ");
+        line.push_str(mn);
+        for (k, op) in ops.iter().enumerate() {
+            line.push_str(if k == 0 { " " } else { ", " });
+            line.push_str(op);
+        }
+        if let Some(c) = comment {
+            line.push_str(" ; ");
+            line.push_str(c);
+        }
+        if self.parsed_to != self.text.len() {
+            // Mid-line (a caller is still assembling text): stay textual.
+            line.push('\n');
+            self.push_str(&line);
+            return;
+        }
+        let owned: Vec<String> = ops.iter().map(|o| o.to_string()).collect();
+        let item = match decode(mn, &owned) {
+            Some(i) => Item::Inst(i),
+            None => parse_line(&line),
+        };
+        let start = self.text.len();
+        self.text.push_str(&line);
+        self.text.push('\n');
+        self.parsed_to = self.text.len();
+        self.starts.push(start);
+        self.lines.push(Line { raw: line, item });
+        self.built += 1;
+    }
+
+    /// Label builder (`name:`; `:` for an anonymous label).
+    pub fn label(&mut self, name: &str) {
+        let mut line = String::with_capacity(name.len() + 2);
+        line.push_str(name);
+        line.push(':');
+        line.push('\n');
+        self.push_str(&line);
+    }
+
+    /// Label of a translated NES block, recording its identity for
+    /// [`MirBuf::blocks`].
+    pub fn nes_label(&mut self, name: &str, meta: BlockMeta) {
+        self.label(name);
+        let idx = self.lines.len() - 1;
+        self.metas.push((idx, meta));
+    }
+
+    pub fn block_metas(&self) -> &[(usize, BlockMeta)] { &self.metas }
+
+    /// Append another buffer, keeping its constructed items and metadata.
+    pub fn append(&mut self, other: MirBuf) {
+        if self.parsed_to != self.text.len() || other.parsed_to != other.text.len() {
+            self.push_str(&other.text);
+            return;
+        }
+        let base_off = self.text.len();
+        let base_line = self.lines.len();
+        self.text.push_str(&other.text);
+        self.parsed_to = self.text.len();
+        self.starts.extend(other.starts.iter().map(|s| s + base_off));
+        self.lines.extend(other.lines);
+        self.metas.extend(other.metas.into_iter().map(|(i, m)| (i + base_line, m)));
+        self.built += other.built;
+    }
+
+    /// Copy of this buffer without line `idx` (all lines must be complete).
+    pub fn without_line(&self, idx: usize) -> MirBuf {
+        assert_eq!(self.parsed_to, self.text.len());
+        let mut out = MirBuf::new();
+        for (i, line) in self.lines.iter().enumerate() {
+            if i == idx { continue; }
+            let start = out.text.len();
+            out.text.push_str(&line.raw);
+            out.text.push('\n');
+            out.starts.push(start);
+            out.lines.push(line.clone());
+            if let Some((_, m)) = self.metas.iter().find(|(k, _)| *k == i) {
+                out.metas.push((out.lines.len() - 1, *m));
+            }
+        }
+        out.parsed_to = out.text.len();
+        out.built = self.built;
+        out
+    }
+
+    /// Lines constructed through [`MirBuf::ins`] (vs parsed from text).
+    pub fn built_count(&self) -> usize { self.built }
     /// Drop everything from byte offset `n` on (like `String::truncate`).
     pub fn truncate(&mut self, n: usize) {
         self.text.truncate(n);
@@ -129,6 +252,8 @@ impl MirBuf {
             self.starts.pop();
             self.lines.pop();
         }
+        let keep = self.lines.len();
+        self.metas.retain(|(i, _)| *i < keep);
         self.parsed_to = match (self.starts.last(), self.lines.last()) {
             (Some(&st), Some(l)) => st + l.raw.len() + 1,
             _ => 0,
@@ -155,7 +280,8 @@ impl MirBuf {
     /// Split into blocks at global labels.
     pub fn blocks(&self) -> Vec<Block> {
         let mut out: Vec<Block> = Vec::new();
-        let mut cur = Block { label: None, start: 0, end: 0, succs: Vec::new(), falls_through: true };
+        let mut cur = Block { label: None, start: 0, end: 0, succs: Vec::new(), falls_through: true, meta: None };
+        let meta_at = |i: usize| self.metas.iter().find(|(k, _)| *k == i).map(|(_, m)| *m);
         for (i, line) in self.lines.iter().enumerate() {
             match &line.item {
                 Item::Label { name, global: true } => {
@@ -163,7 +289,7 @@ impl MirBuf {
                     if cur.end > cur.start || cur.label.is_some() {
                         out.push(cur);
                     }
-                    cur = Block { label: Some(name.clone()), start: i, end: i, succs: Vec::new(), falls_through: true };
+                    cur = Block { label: Some(name.clone()), start: i, end: i, succs: Vec::new(), falls_through: true, meta: meta_at(i) };
                 }
                 Item::Inst(inst) => {
                     if let Some(t) = &inst.target {
@@ -211,8 +337,10 @@ pub fn report_entry_reloads(tag: &str, m: &MirBuf) {
             if i.defs != LocSet::ALL { written = written.union(i.defs); }
         }
     }
+    let parsed: Vec<&str> = m.lines().iter().skip(0).filter(|l| matches!(l.item, Item::Inst(_))).map(|l| l.raw.as_str()).collect();
     eprintln!(
-        "mir-stats[{tag}]: {blocks} blocks, {insts} insts; entry reloads A {} X {} Y {} SP {}",
+        "mir-stats[{tag}]: {blocks} blocks, {insts} insts ({} built, {} parsed from text); entry reloads A {} X {} Y {} SP {}",
+        m.built_count(), parsed.len().saturating_sub(m.built_count()),
         reloads[0], reloads[1], reloads[2], reloads[3]
     );
 }
@@ -449,6 +577,27 @@ mod tests {
     }
 
     #[test]
+    fn builder_matches_text_parse() {
+        let cases: &[(&str, &[&str], Option<&str>)] = &[
+            ("ldh", &["a", "[nes_x]"], Some("superblock X cache seed")),
+            ("ld", &["b", "a"], None),
+            ("jr", &["nz", ":+"], None),
+            ("rr", &["[hl]"], Some("native RMW shift/rotate")),
+            ("call", &["nes_poll_nmi_hl"], None),
+            ("ret", &[], None),
+        ];
+        for (mn, ops, c) in cases {
+            let mut a = MirBuf::new();
+            a.ins(mn, ops, *c);
+            let mut b = MirBuf::new();
+            b.push_str(a.as_str());
+            assert_eq!(a.as_str(), b.as_str());
+            assert_eq!(a.lines(), b.lines(), "{mn}");
+            assert_eq!(a.built_count(), 1);
+        }
+    }
+
+    #[test]
     fn def_use_and_blocks() {
         let mut m = MirBuf::new();
         m.push_str("nes_8000:\n    ldh a, [nes_x]\n    ld b, a\n    add $10\n    ldh [nes_z_shadow], a\n    jr nz, nes_8000\n    jp nes_9000\nnes_8010:\n    ret\n");
@@ -460,6 +609,11 @@ mod tests {
         assert!(insts[4].conditional && insts[4].uses.contains(Loc::FlagZ));
         let b = m.blocks();
         assert_eq!(b.len(), 2);
+        let mut n = MirBuf::new();
+        n.nes_label("nes_8000", BlockMeta { pc: 0x8000, bank: None, kind: EntryKind::Canonical, poll: true });
+        n.ins("ret", &[], None);
+        assert_eq!(n.as_str(), "nes_8000:\n    ret\n");
+        assert_eq!(n.blocks()[0].meta.unwrap().pc, 0x8000);
         assert_eq!(b[0].label.as_deref(), Some("nes_8000"));
         assert_eq!(b[0].succs, vec!["nes_8000".to_string(), "nes_9000".to_string()]);
         assert!(!b[0].falls_through);

@@ -164,18 +164,18 @@ fn emit_static_target(
                     // `jr` is 2 bytes; offset is from the following instruction.
                     let delta = target_off as isize - (section_pc + 2) as isize;
                     if (-128..128).contains(&delta) {
-                        writeln!(out, "    jr nes_{target:04X}").unwrap();
+                        out.ins("jr", &[format!("nes_{target:04X}").as_str()], None);
                         return true;
                     }
                 }
             }
-            writeln!(out, "    jp nes_{target:04X}").unwrap();
+            out.ins("jp", &[format!("nes_{target:04X}").as_str()], None);
             true
         }
         Some(bank) => {
-            writeln!(out, "    ld a, ${bank:02X}").unwrap();
-            writeln!(out, "    ld hl, nes_{target:04X}").unwrap();
-            writeln!(out, "    jp nes_jump_known_hl_a").unwrap();
+            out.ins("ld", &["a", format!("${bank:02X}").as_str()], None);
+            out.ins("ld", &["hl", format!("nes_{target:04X}").as_str()], None);
+            out.ins("jp", &["nes_jump_known_hl_a"], None);
             true
         }
         None => false,
@@ -196,16 +196,16 @@ fn emit_fast_a_target(
     // so instrumented builds deliberately use the canonical entry. Release
     // builds jump past the redundant nes_a reload and keep host A resident.
     writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
-    writeln!(out, "    jp nes_{target:04X}").unwrap();
+    out.ins("jp", &[format!("nes_{target:04X}").as_str()], None);
     writeln!(out, "ELSE").unwrap();
-    writeln!(out, "    jp nes_{target:04X}_fast_a").unwrap();
+    out.ins("jp", &[format!("nes_{target:04X}_fast_a").as_str()], None);
     writeln!(out, "ENDC").unwrap();
 
     // The bank-locality repacker only understands canonical nes_XXXX labels.
     // Keep a compile-time-dead canonical edge so its must-link analysis keeps
     // the source and the private fast entry in the same ROM bank.
     writeln!(out, "IF 0").unwrap();
-    writeln!(out, "    jp nes_{target:04X} ; A-residency bank-locality relation").unwrap();
+    out.ins("jp", &[format!("nes_{target:04X}").as_str()], Some("A-residency bank-locality relation"));
     writeln!(out, "ENDC").unwrap();
     true
 }
@@ -227,28 +227,28 @@ fn emit_static_control(
         IrOp::Branch { flag, when, target } if banks.contains_key(&target) => {
             match flag {
                 Flag::Carry => {
-                    writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_c_shadow]"], None);
+                    out.ins("and", &["a"], None);
+                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                 }
                 Flag::Zero => {
-                    writeln!(out, "    ldh a, [nes_z_shadow]").unwrap();
-                    writeln!(out, "    and a").unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "nz" } else { "z" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_z_shadow]"], None);
+                    out.ins("and", &["a"], None);
+                    out.ins("jr", &[format!("{}", if when { "nz" } else { "z" }).as_str(), ":+"], None);
                 }
                 Flag::Negative => {
-                    writeln!(out, "    ldh a, [nes_n_shadow]").unwrap();
-                    writeln!(out, "    bit 7, a").unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_n_shadow]"], None);
+                    out.ins("bit", &["7", "a"], None);
+                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                 }
                 _ => {
-                    writeln!(out, "    ldh a, [nes_p]").unwrap();
-                    writeln!(out, "    and ${:02X}", flag_mask(flag)).unwrap();
-                    writeln!(out, "    jr {}, :+", if when { "z" } else { "nz" }).unwrap();
+                    out.ins("ldh", &["a", "[nes_p]"], None);
+                    out.ins("and", &[format!("${:02X}", flag_mask(flag)).as_str()], None);
+                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
                 }
             }
             emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
-            writeln!(out, ":").unwrap();
+            out.label("");
             true
         }
         IrOp::Jump(target) if banks.contains_key(&target) => {
@@ -259,8 +259,8 @@ fn emit_static_control(
             }
         }
         IrOp::Call { target, return_addr } if banks.contains_key(&target) => {
-            writeln!(out, "    ld hl, ${return_addr:04X}").unwrap();
-            writeln!(out, "    call nes_stack_push_return_hl").unwrap();
+            out.ins("ld", &["hl", format!("${return_addr:04X}").as_str()], None);
+            out.ins("call", &["nes_stack_push_return_hl"], None);
             emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             true
         }
@@ -402,8 +402,9 @@ fn ops_exit_with_clean_a(ops: &[IrOp]) -> bool {
     live
 }
 
-fn seeded_a_asm(ops: &[IrOp]) -> Option<String> {
-    let asm = lr35902::emit_ops(ops);
+fn seeded_a_asm(ops: &[IrOp]) -> Option<MirBuf> {
+    let buf = lr35902::emit_ops_buf(ops);
+    let asm = buf.as_str();
     let needle = "    ldh a, [nes_a]\n";
     let pos = asm.find(needle)?;
     let prefix = &asm[..pos];
@@ -418,10 +419,9 @@ fn seeded_a_asm(ops: &[IrOp]) -> Option<String> {
         return None;
     }
 
-    let mut out = String::with_capacity(asm.len() - needle.len());
-    out.push_str(prefix);
-    out.push_str(&asm[pos + needle.len()..]);
-    Some(out)
+    // `pos` starts a line (every MIR line ends in '\n'), so drop that line.
+    let idx = buf.lines().iter().scan(0usize, |off, l| { let s = *off; *off += l.raw.len() + 1; Some(s) }).position(|s| s == pos)?;
+    Some(buf.without_line(idx))
 }
 
 fn unconditional_static_successor(block: &BasicBlock) -> Option<(u16, bool)> {
@@ -545,10 +545,10 @@ fn emit_cfg_impl(
     }
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
-    writeln!(out, "nes_reset:").unwrap();
-    writeln!(out, "    ld a, [nes_reset_count]").unwrap();
-    writeln!(out, "    inc a").unwrap();
-    writeln!(out, "    ld [nes_reset_count], a").unwrap();
+    out.label("nes_reset");
+    out.ins("ld", &["a", "[nes_reset_count]"], None);
+    out.ins("inc", &["a"], None);
+    out.ins("ld", &["[nes_reset_count]", "a"], None);
     emit_pc_dispatch(&mut out, options.reset);
     writeln!(out).unwrap();
 
@@ -591,11 +591,11 @@ fn emit_cfg_impl(
         }
 
         section_offs.insert(block.start, section_pc);
-        writeln!(out, "nes_{:04X}:", block.start).unwrap();
+        out.nes_label(&format!("nes_{:04X}", block.start), crate::mir::BlockMeta { pc: block.start, bank: None, kind: crate::mir::EntryKind::Canonical, poll: poll_points.contains(&block.start) });
 
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
-        writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-        writeln!(out, "    call nes_profile_trace_pc").unwrap();
+        out.ins("ld", &["hl", format!("${:04X}", block.start).as_str()], None);
+        out.ins("call", &["nes_profile_trace_pc"], None);
         writeln!(out, "ENDC").unwrap();
         // Profile-trace body is stripped in release; do not charge section_pc.
 
@@ -603,10 +603,10 @@ fn emit_cfg_impl(
             // Keep an exact current NES-PC breadcrumb even when optimized direct
             // jumps bypass the dynamic dispatcher.
             let before = out.len();
-            writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
-            writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
-            writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
-            writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+            out.ins("ld", &["a", format!("${:02X}", (block.start >> 8) as u8).as_str()], None);
+            out.ins("ld", &["[nes_debug_pc_hi]", "a"], None);
+            out.ins("ld", &["a", format!("${:02X}", block.start as u8).as_str()], None);
+            out.ins("ld", &["[nes_debug_pc_lo]", "a"], None);
             section_pc += approx_code_bytes(&out[before..]);
         }
 
@@ -624,14 +624,14 @@ fn emit_cfg_impl(
             // Usually there is no pending frame, so loop safe-points pay only
             // an HRAM byte test instead of a helper call and live LY polling.
             let before = out.len();
-            writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
-            writeln!(out, "    and a").unwrap();
-            writeln!(out, "    jr z, :+").unwrap();
-            writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-            writeln!(out, "    call nes_poll_nmi_hl").unwrap();
-            writeln!(out, "    and a").unwrap();
-            writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
-            writeln!(out, ":").unwrap();
+            out.ins("ldh", &["a", "[nes_host_vblank_pending]"], None);
+            out.ins("and", &["a"], None);
+            out.ins("jr", &["z", ":+"], None);
+            out.ins("ld", &["hl", format!("${:04X}", block.start).as_str()], None);
+            out.ins("call", &["nes_poll_nmi_hl"], None);
+            out.ins("and", &["a"], None);
+            out.ins("jp", &["nz", "nes_nmi_entry"], None);
+            out.label("");
             section_pc += approx_code_bytes(&out[before..]);
             if exclusive {
                 writeln!(out, "ENDC").unwrap();
@@ -645,7 +645,7 @@ fn emit_cfg_impl(
             // static predecessors enter at the private label with the same clean
             // architectural value already resident in A.
             let before = out.len();
-            writeln!(out, "    ldh a, [nes_a]").unwrap();
+            out.ins("ldh", &["a", "[nes_a]"], None);
             writeln!(out, "nes_{:04X}_fast_a:", block.start).unwrap();
             section_pc += approx_code_bytes(&out[before..]);
         }
@@ -667,10 +667,10 @@ fn emit_cfg_impl(
             if *seed {
                 let asm = seeded_a_asm(pending)
                     .expect("A-resident target must have the precomputed seedable first batch");
-                out.push_str(&asm);
+                out.append(asm);
                 *seed = false;
             } else {
-                out.push_str(&lr35902::emit_ops(pending));
+                out.append(lr35902::emit_ops_buf(pending));
             }
         };
 
@@ -714,11 +714,11 @@ fn emit_cfg_impl(
                     write_insn_comment(&mut out, instruction);
                     let before = out.len();
                     writeln!(out, "    ; TODO {err}").unwrap();
-                    writeln!(out, "    ld a, ${:02X}", instruction.pc as u8).unwrap();
-                    writeln!(out, "    ldh [nes_fault_pc_lo], a").unwrap();
-                    writeln!(out, "    ld a, ${:02X}", (instruction.pc >> 8) as u8).unwrap();
-                    writeln!(out, "    ldh [nes_fault_pc_hi], a").unwrap();
-                    writeln!(out, "    jp nes_unimplemented").unwrap();
+                    out.ins("ld", &["a", format!("${:02X}", instruction.pc as u8).as_str()], None);
+                    out.ins("ldh", &["[nes_fault_pc_lo]", "a"], None);
+                    out.ins("ld", &["a", format!("${:02X}", (instruction.pc >> 8) as u8).as_str()], None);
+                    out.ins("ldh", &["[nes_fault_pc_hi]", "a"], None);
+                    out.ins("jp", &["nes_unimplemented"], None);
                     section_pc += approx_code_bytes(&out[before..]);
                     break;
                 }
@@ -839,56 +839,56 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
 
     writeln!(out, "; Cartridge/runtime metadata").unwrap();
     writeln!(out, "SECTION \"Generated runtime metadata\", ROM0").unwrap();
-    writeln!(out, "nes_generated_init:").unwrap();
-    writeln!(out, "    ld a, ${:02X}", config.mapper as u8).unwrap();
-    writeln!(out, "    ld [nes_mapper], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", config.submapper).unwrap();
-    writeln!(out, "    ld [nes_submapper], a").unwrap();
-    writeln!(out, "    ld a, ${mirroring:02X}").unwrap();
-    writeln!(out, "    ld [nes_mirroring], a").unwrap();
-    writeln!(out, "    ld a, ${prg_16k_mirror:02X}").unwrap();
-    writeln!(out, "    ld [nes_prg_16k_mirror], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", prg_bank_mask as u8).unwrap();
-    writeln!(out, "    ld [nes_prg_bank_mask], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", prg_fixed_bank as u8).unwrap();
-    writeln!(out, "    ld [nes_prg_fixed_bank], a").unwrap();
-    writeln!(out, "    ld [nes_prg_hi_bank], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", chr_mask as u8).unwrap();
-    writeln!(out, "    ld [nes_chr_bank_mask], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", chr_bank_base as u8).unwrap();
-    writeln!(out, "    ld [nes_chr_rom_bank_base], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", if chr_is_ram { 1 } else { 0 }).unwrap();
-    writeln!(out, "    ld [nes_chr_is_ram], a").unwrap();
-    writeln!(out, "    ld a, ${:02X}", chr_gbc_bank_base as u8).unwrap();
-    writeln!(out, "    ld [nes_chr_gbc_bank_base], a").unwrap();
-    writeln!(out, "    xor a").unwrap();
-    writeln!(out, "    ld [nes_prg_bank], a").unwrap();
-    writeln!(out, "    ld [nes_chr_bank], a").unwrap();
-    writeln!(out, "    ld [nes_mmc1_chr0], a").unwrap();
-    writeln!(out, "    ld [nes_mmc1_chr1], a").unwrap();
-    writeln!(out, "    ld [nes_mmc1_prg], a").unwrap();
-    writeln!(out, "    ld a, $10").unwrap();
-    writeln!(out, "    ld [nes_mmc1_shift], a").unwrap();
-    writeln!(out, "    ld a, $0C").unwrap();
-    writeln!(out, "    ld [nes_mmc1_control], a").unwrap();
+    out.label("nes_generated_init");
+    out.ins("ld", &["a", format!("${:02X}", config.mapper as u8).as_str()], None);
+    out.ins("ld", &["[nes_mapper]", "a"], None);
+    out.ins("ld", &["a", format!("${:02X}", config.submapper).as_str()], None);
+    out.ins("ld", &["[nes_submapper]", "a"], None);
+    out.ins("ld", &["a", format!("${mirroring:02X}").as_str()], None);
+    out.ins("ld", &["[nes_mirroring]", "a"], None);
+    out.ins("ld", &["a", format!("${prg_16k_mirror:02X}").as_str()], None);
+    out.ins("ld", &["[nes_prg_16k_mirror]", "a"], None);
+    out.ins("ld", &["a", format!("${:02X}", prg_bank_mask as u8).as_str()], None);
+    out.ins("ld", &["[nes_prg_bank_mask]", "a"], None);
+    out.ins("ld", &["a", format!("${:02X}", prg_fixed_bank as u8).as_str()], None);
+    out.ins("ld", &["[nes_prg_fixed_bank]", "a"], None);
+    out.ins("ld", &["[nes_prg_hi_bank]", "a"], None);
+    out.ins("ld", &["a", format!("${:02X}", chr_mask as u8).as_str()], None);
+    out.ins("ld", &["[nes_chr_bank_mask]", "a"], None);
+    out.ins("ld", &["a", format!("${:02X}", chr_bank_base as u8).as_str()], None);
+    out.ins("ld", &["[nes_chr_rom_bank_base]", "a"], None);
+    out.ins("ld", &["a", format!("${:02X}", if chr_is_ram { 1 } else { 0 }).as_str()], None);
+    out.ins("ld", &["[nes_chr_is_ram]", "a"], None);
+    out.ins("ld", &["a", format!("${:02X}", chr_gbc_bank_base as u8).as_str()], None);
+    out.ins("ld", &["[nes_chr_gbc_bank_base]", "a"], None);
+    out.ins("xor", &["a"], None);
+    out.ins("ld", &["[nes_prg_bank]", "a"], None);
+    out.ins("ld", &["[nes_chr_bank]", "a"], None);
+    out.ins("ld", &["[nes_mmc1_chr0]", "a"], None);
+    out.ins("ld", &["[nes_mmc1_chr1]", "a"], None);
+    out.ins("ld", &["[nes_mmc1_prg]", "a"], None);
+    out.ins("ld", &["a", "$10"], None);
+    out.ins("ld", &["[nes_mmc1_shift]", "a"], None);
+    out.ins("ld", &["a", "$0C"], None);
+    out.ins("ld", &["[nes_mmc1_control]", "a"], None);
     if config.mapper == 1 {
-        writeln!(out, "    call nes_mmc1_apply").unwrap();
+        out.ins("call", &["nes_mmc1_apply"], None);
     }
     if chr_is_ram {
-        writeln!(out, "    call nes_clear_chr_ram").unwrap();
+        out.ins("call", &["nes_clear_chr_ram"], None);
     }
     if prg_16k_mirror != 0 {
-        writeln!(out, "    call nes_cache_prg16_to_wram").unwrap();
+        out.ins("call", &["nes_cache_prg16_to_wram"], None);
     }
-    writeln!(out, "    ret").unwrap();
+    out.ins("ret", &[], None);
     writeln!(out).unwrap();
 
-    writeln!(out, "nes_nmi_entry:").unwrap();
-    writeln!(out, "    ld hl, ${:04X}", config.nmi).unwrap();
-    writeln!(out, "    jp nes_dispatch_hl").unwrap();
-    writeln!(out, "nes_irq_entry:").unwrap();
-    writeln!(out, "    ld hl, ${:04X}", config.irq).unwrap();
-    writeln!(out, "    jp nes_dispatch_hl").unwrap();
+    out.label("nes_nmi_entry");
+    out.ins("ld", &["hl", format!("${:04X}", config.nmi).as_str()], None);
+    out.ins("jp", &["nes_dispatch_hl"], None);
+    out.label("nes_irq_entry");
+    out.ins("ld", &["hl", format!("${:04X}", config.irq).as_str()], None);
+    out.ins("jp", &["nes_dispatch_hl"], None);
     writeln!(out).unwrap();
 
     if config.prg_len == 0x4000 {

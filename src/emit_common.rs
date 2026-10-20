@@ -1,7 +1,6 @@
 //! Emission helpers shared by the plain (recompile.rs) and superblock
 //! (state_superblock.rs) translators. Stage 1 of docs/IR_REWRITE.md moves
 //! duplicated logic here; behaviour and output are unchanged.
-use std::fmt::Write;
 
 use crate::mir::MirBuf;
 
@@ -12,8 +11,8 @@ pub(crate) fn estimated_block_size(block: &crate::cfg::BasicBlock) -> usize {
 }
 
 pub(crate) fn emit_pc_dispatch(out: &mut MirBuf, target: u16) {
-    writeln!(out, "    ld hl, ${target:04X}").unwrap();
-    writeln!(out, "    jp nes_dispatch_hl").unwrap();
+    out.ins("ld", &["hl", format!("${target:04X}").as_str()], None);
+    out.ins("jp", &["nes_dispatch_hl"], None);
 }
 
 pub(crate) fn flag_mask(flag: Flag) -> u8 {

@@ -110,6 +110,14 @@ fn bank_stable(block: &BasicBlock) -> bool {
     })
 }
 
+fn block_meta(id: BlockId, kind: crate::mir::EntryKind, poll: bool) -> crate::mir::BlockMeta {
+    let (pc, bank) = match id {
+        BlockId::Fixed(pc) | BlockId::Stub(pc) | BlockId::Overlay(pc) => (pc, None),
+        BlockId::Banked(bank, pc) => (pc, Some(bank as u16)),
+    };
+    crate::mir::BlockMeta { pc, bank, kind, poll }
+}
+
 fn label(id: BlockId) -> String {
     match id {
         BlockId::Fixed(pc) | BlockId::Stub(pc) => format!("nes_{pc:04X}"),
@@ -152,14 +160,14 @@ fn emit_dispatch_tables(out: &mut MirBuf, addresses: &BTreeSet<u16>) {
 }
 
 fn emit_poll(out: &mut MirBuf, pc: u16) {
-    writeln!(out, "    ldh a, [nes_host_vblank_pending]").unwrap();
-    writeln!(out, "    and a").unwrap();
-    writeln!(out, "    jr z, :+").unwrap();
-    writeln!(out, "    ld hl, ${pc:04X}").unwrap();
-    writeln!(out, "    call nes_poll_nmi_hl").unwrap();
-    writeln!(out, "    and a").unwrap();
-    writeln!(out, "    jp nz, nes_nmi_entry").unwrap();
-    writeln!(out, ":").unwrap();
+    out.ins("ldh", &["a", "[nes_host_vblank_pending]"], None);
+    out.ins("and", &["a"], None);
+    out.ins("jr", &["z", ":+"], None);
+    out.ins("ld", &["hl", format!("${pc:04X}").as_str()], None);
+    out.ins("call", &["nes_poll_nmi_hl"], None);
+    out.ins("and", &["a"], None);
+    out.ins("jp", &["nz", "nes_nmi_entry"], None);
+    out.label("");
 }
 
 fn emit_block(
@@ -186,16 +194,16 @@ fn emit_block(
         let loads = trace.enter_chained();
         let name = label(id);
         adapter = Some(format!("{loads}    jp {name}_trace\n"));
-        writeln!(out, "{name}_trace:").unwrap();
+        out.nes_label(&format!("{name}_trace"), block_meta(id, crate::mir::EntryKind::Trace, do_poll));
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
         let a = trace.a_live();
         if a {
-            writeln!(out, "    push af").unwrap();
+            out.ins("push", &["af"], None);
         }
-        writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-        writeln!(out, "    call nes_profile_trace_pc").unwrap();
+        out.ins("ld", &["hl", format!("${:04X}", block.start).as_str()], None);
+        out.ins("call", &["nes_profile_trace_pc"], None);
         if a {
-            writeln!(out, "    pop af").unwrap();
+            out.ins("pop", &["af"], None);
         }
         writeln!(out, "ENDC").unwrap();
     } else {
@@ -217,13 +225,13 @@ fn emit_block(
         BlockId::Stub(_) => unreachable!(),
     }
     let name = label(id);
-    writeln!(out, "{name}:").unwrap();
+    out.nes_label(&name, block_meta(id, crate::mir::EntryKind::Canonical, do_poll));
     if let (BlockId::Overlay(pc), Some(expect)) = (id, expect) {
         emit_overlay_check(out, pc, expect);
         // Unchecked entry for static edges from overlay blocks that cannot
         // store into PRG RAM (`; ovl-pure`): the bytes they were entered
         // with are still intact. NMI resumes and other entries use nes_r_.
-        writeln!(out, "nes_r_{pc:04X}_nc:").unwrap();
+        out.nes_label(&format!("nes_r_{pc:04X}_nc"), block_meta(id, crate::mir::EntryKind::Unchecked, do_poll));
         if !block_may_write_prg_ram(block) {
             writeln!(out, "    ; ovl-pure").unwrap();
         }
@@ -235,15 +243,15 @@ fn emit_block(
     }
 
     writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
-    writeln!(out, "    ld hl, ${:04X}", block.start).unwrap();
-    writeln!(out, "    call nes_profile_trace_pc").unwrap();
+    out.ins("ld", &["hl", format!("${:04X}", block.start).as_str()], None);
+    out.ins("call", &["nes_profile_trace_pc"], None);
     writeln!(out, "ENDC").unwrap();
 
     if debug_trace {
-        writeln!(out, "    ld a, ${:02X}", (block.start >> 8) as u8).unwrap();
-        writeln!(out, "    ld [nes_debug_pc_hi], a").unwrap();
-        writeln!(out, "    ld a, ${:02X}", block.start as u8).unwrap();
-        writeln!(out, "    ld [nes_debug_pc_lo], a").unwrap();
+        out.ins("ld", &["a", format!("${:02X}", (block.start >> 8) as u8).as_str()], None);
+        out.ins("ld", &["[nes_debug_pc_hi]", "a"], None);
+        out.ins("ld", &["a", format!("${:02X}", block.start as u8).as_str()], None);
+        out.ins("ld", &["[nes_debug_pc_lo]", "a"], None);
     }
 
     if do_poll {
@@ -265,23 +273,22 @@ fn emit_block(
         // rest take nes_dispatch_hl exactly as before.
         let tail = "    inc hl\n    jp nes_dispatch_hl\n";
         if out[body_start..].ends_with(tail) {
-            let mut g = String::from("    inc hl\n");
-            for &r in rts_guard {
-                writeln!(g, "    ld a, l ; m2 RTS guard ${r:04X}").unwrap();
-                writeln!(g, "    cp ${:02X}", r as u8).unwrap();
-                writeln!(g, "    jr nz, :+").unwrap();
-                writeln!(g, "    ld a, h").unwrap();
-                writeln!(g, "    cp ${:02X}", (r >> 8) as u8).unwrap();
-                writeln!(g, "    jr nz, :+").unwrap();
-                writeln!(g, "    ld a, BANK(nes_{r:04X})").unwrap();
-                writeln!(g, "    ld hl, nes_{r:04X}").unwrap();
-                writeln!(g, "    jp nes_jump_known_hl_a").unwrap();
-                writeln!(g, ":").unwrap();
-            }
-            g.push_str("    jp nes_dispatch_hl\n");
             let cut = out.len() - tail.len();
             out.truncate(cut);
-            out.push_str(&g);
+            out.ins("inc", &["hl"], None);
+            for &r in rts_guard {
+                out.ins("ld", &["a", "l"], Some(format!("m2 RTS guard ${r:04X}").as_str()));
+                out.ins("cp", &[format!("${:02X}", r as u8).as_str()], None);
+                out.ins("jr", &["nz", ":+"], None);
+                out.ins("ld", &["a", "h"], None);
+                out.ins("cp", &[format!("${:02X}", (r >> 8) as u8).as_str()], None);
+                out.ins("jr", &["nz", ":+"], None);
+                out.ins("ld", &["a", format!("BANK(nes_{r:04X})").as_str()], None);
+                out.ins("ld", &["hl", format!("nes_{r:04X}").as_str()], None);
+                out.ins("jp", &["nes_jump_known_hl_a"], None);
+                out.label("");
+            }
+            out.ins("jp", &["nes_dispatch_hl"], None);
         }
     }
 
@@ -293,8 +300,8 @@ fn emit_block(
                 .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                 .and_then(|edge| edge.target)
             {
-                writeln!(out, "    ld hl, ${target:04X}").unwrap();
-                writeln!(out, "    jp nes_dispatch_hl").unwrap();
+                out.ins("ld", &["hl", format!("${target:04X}").as_str()], None);
+                out.ins("jp", &["nes_dispatch_hl"], None);
             }
         }
     }
@@ -325,75 +332,75 @@ fn block_may_write_prg_ram(block: &BasicBlock) -> bool {
 /// translated from; otherwise interpret from this PC. $6000-$6FFF lives in
 /// WRAMX bank 4 and $7000-$7FFF in bank 5, both at $D000.
 fn emit_overlay_check(out: &mut MirBuf, pc: u16, expect: &[u8]) {
-    writeln!(out, "    ldh a, [rSVBK]").unwrap();
-    writeln!(out, "    ld b, a").unwrap();
+    out.ins("ldh", &["a", "[rSVBK]"], None);
+    out.ins("ld", &["b", "a"], None);
     let mut cur_bank = None;
     for (k, &byte) in expect.iter().enumerate() {
         let addr = pc.wrapping_add(k as u16);
         let wbank = if addr & 0x1000 != 0 { 5 } else { 4 };
         if cur_bank != Some(wbank) {
-            writeln!(out, "    ld a, {wbank}").unwrap();
-            writeln!(out, "    ldh [rSVBK], a").unwrap();
-            writeln!(out, "    ld hl, ${:04X}", 0xD000 | (addr & 0x0FFF)).unwrap();
+            out.ins("ld", &["a", format!("{wbank}").as_str()], None);
+            out.ins("ldh", &["[rSVBK]", "a"], None);
+            out.ins("ld", &["hl", format!("${:04X}", 0xD000 | (addr & 0x0FFF)).as_str()], None);
             cur_bank = Some(wbank);
         }
-        writeln!(out, "    ld a, [hli]").unwrap();
-        writeln!(out, "    cp ${byte:02X}").unwrap();
-        writeln!(out, "    jp nz, .ovl_stale").unwrap();
+        out.ins("ld", &["a", "[hli]"], None);
+        out.ins("cp", &[format!("${byte:02X}").as_str()], None);
+        out.ins("jp", &["nz", ".ovl_stale"], None);
     }
-    writeln!(out, "    ld a, b").unwrap();
-    writeln!(out, "    ldh [rSVBK], a").unwrap();
-    writeln!(out, "    jr .ovl_ok").unwrap();
-    writeln!(out, ".ovl_stale:").unwrap();
-    writeln!(out, "    ld a, b").unwrap();
-    writeln!(out, "    ldh [rSVBK], a").unwrap();
-    writeln!(out, "    ld hl, ${pc:04X}").unwrap();
-    writeln!(out, "    jp nes_interp_enter").unwrap();
-    writeln!(out, ".ovl_ok:").unwrap();
+    out.ins("ld", &["a", "b"], None);
+    out.ins("ldh", &["[rSVBK]", "a"], None);
+    out.ins("jr", &[".ovl_ok"], None);
+    out.label(".ovl_stale");
+    out.ins("ld", &["a", "b"], None);
+    out.ins("ldh", &["[rSVBK]", "a"], None);
+    out.ins("ld", &["hl", format!("${pc:04X}").as_str()], None);
+    out.ins("jp", &["nes_interp_enter"], None);
+    out.label(".ovl_ok");
 }
 
 /// PRG-RAM overlay dispatch: HL = NES PC in $6000-$7FFF (others go straight
 /// to the interpreter). Two 4 KiB-page tables of (bank, 0, addr) entries.
 fn emit_overlay_dispatch(out: &mut MirBuf, addresses: &BTreeSet<u16>) {
     writeln!(out, "SECTION \"NES overlay dispatch\", ROM0").unwrap();
-    writeln!(out, "nes_overlay_dispatch_hl:").unwrap();
-    writeln!(out, "    ld a, h").unwrap();
-    writeln!(out, "    cp $60").unwrap();
-    writeln!(out, "    jp c, nes_interp_enter").unwrap();
-    writeln!(out, "    ld b, h").unwrap();
-    writeln!(out, "    ld e, l").unwrap();
-    writeln!(out, "    bit 4, a").unwrap();
-    writeln!(out, "    ld a, BANK(nes_overlay_table_6)").unwrap();
-    writeln!(out, "    jr z, :+").unwrap();
-    writeln!(out, "    ld a, BANK(nes_overlay_table_7)").unwrap();
-    writeln!(out, ":").unwrap();
-    writeln!(out, "    ld [$2000], a").unwrap();
-    writeln!(out, "    xor a").unwrap();
-    writeln!(out, "    ld a, h").unwrap();
-    writeln!(out, "    and $0F").unwrap();
-    writeln!(out, "    ld h, a").unwrap();
-    writeln!(out, "    add hl, hl").unwrap();
-    writeln!(out, "    add hl, hl").unwrap();
-    writeln!(out, "    set 6, h").unwrap();
-    writeln!(out, "    ld a, [hli]").unwrap();
-    writeln!(out, "    and a").unwrap();
-    writeln!(out, "    jr z, .miss").unwrap();
-    writeln!(out, "    ld c, a").unwrap();
-    writeln!(out, "    inc hl").unwrap();
-    writeln!(out, "    ld a, [hli]").unwrap();
-    writeln!(out, "    ld h, [hl]").unwrap();
-    writeln!(out, "    ld l, a").unwrap();
-    writeln!(out, "    ld a, c").unwrap();
-    writeln!(out, "    jp nes_jump_known_hl_a").unwrap();
-    writeln!(out, ".miss:").unwrap();
-    writeln!(out, "    ld h, b").unwrap();
-    writeln!(out, "    ld l, e").unwrap();
-    writeln!(out, "    jp nes_interp_enter").unwrap();
+    out.label("nes_overlay_dispatch_hl");
+    out.ins("ld", &["a", "h"], None);
+    out.ins("cp", &["$60"], None);
+    out.ins("jp", &["c", "nes_interp_enter"], None);
+    out.ins("ld", &["b", "h"], None);
+    out.ins("ld", &["e", "l"], None);
+    out.ins("bit", &["4", "a"], None);
+    out.ins("ld", &["a", "BANK(nes_overlay_table_6)"], None);
+    out.ins("jr", &["z", ":+"], None);
+    out.ins("ld", &["a", "BANK(nes_overlay_table_7)"], None);
+    out.label("");
+    out.ins("ld", &["[$2000]", "a"], None);
+    out.ins("xor", &["a"], None);
+    out.ins("ld", &["a", "h"], None);
+    out.ins("and", &["$0F"], None);
+    out.ins("ld", &["h", "a"], None);
+    out.ins("add", &["hl", "hl"], None);
+    out.ins("add", &["hl", "hl"], None);
+    out.ins("set", &["6", "h"], None);
+    out.ins("ld", &["a", "[hli]"], None);
+    out.ins("and", &["a"], None);
+    out.ins("jr", &["z", ".miss"], None);
+    out.ins("ld", &["c", "a"], None);
+    out.ins("inc", &["hl"], None);
+    out.ins("ld", &["a", "[hli]"], None);
+    out.ins("ld", &["h", "[hl]"], None);
+    out.ins("ld", &["l", "a"], None);
+    out.ins("ld", &["a", "c"], None);
+    out.ins("jp", &["nes_jump_known_hl_a"], None);
+    out.label(".miss");
+    out.ins("ld", &["h", "b"], None);
+    out.ins("ld", &["l", "e"], None);
+    out.ins("jp", &["nes_interp_enter"], None);
     writeln!(out).unwrap();
     for page in [6u16, 7] {
         let base = page << 12;
         writeln!(out, "SECTION \"NES overlay dispatch table {page}\", ROMX[$4000]").unwrap();
-        writeln!(out, "nes_overlay_table_{page}:").unwrap();
+        out.label(format!("nes_overlay_table_{page}").as_str());
         let mut cursor = 0usize;
         for addr in addresses.range(base..base + 0x1000).copied() {
             let offset = (addr - base) as usize;
@@ -423,27 +430,27 @@ fn emit_stub(
     )
     .unwrap();
     writeln!(out, "nes_{pc:04X}:").unwrap();
-    writeln!(out, "    ld a, [nes_prg_bank]").unwrap();
+    out.ins("ld", &["a", "[nes_prg_bank]"], None);
     for &(bank, _, _) in variants {
-        writeln!(out, "    cp ${bank:02X}").unwrap();
-        writeln!(out, "    jp z, .m2_b{bank:02X}").unwrap();
+        out.ins("cp", &[format!("${bank:02X}").as_str()], None);
+        out.ins("jp", &["z", format!(".m2_b{bank:02X}").as_str()], None);
     }
     // No translation for the mapped bank: interpret from this PC (the
     // runtime interpreter re-enters translated code at the next transfer).
     writeln!(out, "IF DEF(NES2GBC_RAM_INTERP)").unwrap();
-    writeln!(out, "    ld hl, ${pc:04X}").unwrap();
-    writeln!(out, "    jp nes_interp_enter_rom").unwrap();
+    out.ins("ld", &["hl", format!("${pc:04X}").as_str()], None);
+    out.ins("jp", &["nes_interp_enter_rom"], None);
     writeln!(out, "ELSE").unwrap();
-    writeln!(out, "    jp nes_unimplemented").unwrap();
+    out.ins("jp", &["nes_unimplemented"], None);
     writeln!(out, "ENDC").unwrap();
 
     for &(bank, target_bank, label_bank) in variants {
         // label_bank != bank: byte-identical code shared from another bank.
         let target = label(BlockId::Banked(label_bank, pc));
         writeln!(out, ".m2_b{bank:02X}:").unwrap();
-        writeln!(out, "    ld a, ${target_bank:02X}").unwrap();
-        writeln!(out, "    ld hl, {target}").unwrap();
-        writeln!(out, "    jp nes_jump_known_hl_a").unwrap();
+        out.ins("ld", &["a", format!("${target_bank:02X}").as_str()], None);
+        out.ins("ld", &["hl", format!("{target}").as_str()], None);
+        out.ins("jp", &["nes_jump_known_hl_a"], None);
     }
     writeln!(out).unwrap();
 }
@@ -905,12 +912,12 @@ pub fn emit_mapper2_cfgs(
     writeln!(out).unwrap();
 
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
-    writeln!(out, "nes_reset:").unwrap();
-    writeln!(out, "    ld a, [nes_reset_count]").unwrap();
-    writeln!(out, "    inc a").unwrap();
-    writeln!(out, "    ld [nes_reset_count], a").unwrap();
-    writeln!(out, "    ld hl, ${:04X}", options.reset).unwrap();
-    writeln!(out, "    jp nes_dispatch_hl").unwrap();
+    out.label("nes_reset");
+    out.ins("ld", &["a", "[nes_reset_count]"], None);
+    out.ins("inc", &["a"], None);
+    out.ins("ld", &["[nes_reset_count]", "a"], None);
+    out.ins("ld", &["hl", format!("${:04X}", options.reset).as_str()], None);
+    out.ins("jp", &["nes_dispatch_hl"], None);
     writeln!(out).unwrap();
 
     let mut trace = crate::state_superblock::LocalTrace::default();
@@ -946,7 +953,7 @@ pub fn emit_mapper2_cfgs(
         // Same section name as the NROM emitter's adapters so the final
         // repack keeps adapter jumps (`jp nes_X_trace`) bank-correct.
         writeln!(out, "SECTION \"NES canonical superblock entry {apc:04X}\", ROMX, BANK[{}]", assigned[id]).unwrap();
-        writeln!(out, "{name}:").unwrap();
+        out.nes_label(&name, block_meta(*id, crate::mir::EntryKind::Canonical, false));
         out.push_str(a);
         writeln!(out).unwrap();
     }
