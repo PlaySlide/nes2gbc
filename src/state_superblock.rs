@@ -1072,6 +1072,58 @@ fn emit_fast_modify_value(
     }
 }
 
+fn rmw_hl_enabled() -> bool {
+    std::env::var("NES2GBC_RMW_HL").map(|v| v != "0").unwrap_or(true)
+}
+
+/// Native read-modify-write on [hl] (HL already holds the GB address):
+/// INC/DEC [hl], SLA/SRL/RL/RR [hl]. Host carry is seeded from the 6502 C
+/// only for ROL/ROR, captured only when C is live, and the result is
+/// reloaded into A only for the Z/N shadows (dead stores are removed by the
+/// global dead-HRAM passes). A is clobbered exactly as in the load/op/store
+/// form. NES2GBC_RMW_HL=0 restores the old form.
+fn emit_fast_modify_hl(
+    out: &mut String,
+    modify: ModifyOp,
+    known_carry: Option<bool>,
+    c_dead: bool,
+    stats: &mut StateStats,
+) {
+    match modify {
+        ModifyOp::Inc => writeln!(out, "    inc [hl] ; native RMW INC").unwrap(),
+        ModifyOp::Dec => writeln!(out, "    dec [hl] ; native RMW DEC").unwrap(),
+        ModifyOp::Asl | ModifyOp::Lsr | ModifyOp::Rol | ModifyOp::Ror => {
+            if matches!(modify, ModifyOp::Rol | ModifyOp::Ror) {
+                match known_carry {
+                    Some(false) => writeln!(out, "    and a ; known 6502 C=0").unwrap(),
+                    Some(true) => writeln!(out, "    scf ; known 6502 C=1").unwrap(),
+                    None => {
+                        writeln!(out, "    ldh a, [nes_c_shadow]").unwrap();
+                        writeln!(out, "    rra ; seed host carry from 6502 C").unwrap();
+                    }
+                }
+            }
+            let op = match modify {
+                ModifyOp::Asl => "sla",
+                ModifyOp::Lsr => "srl",
+                ModifyOp::Rol => "rl",
+                _ => "rr",
+            };
+            writeln!(out, "    {op} [hl] ; native RMW shift/rotate").unwrap();
+            if c_dead {
+                writeln!(out, "    ; C dead on every path (compiler carry liveness)").unwrap();
+            } else {
+                writeln!(out, "    ld a, $00").unwrap();
+                writeln!(out, "    rl a ; capture shift/rotate carry").unwrap();
+                writeln!(out, "    ldh [nes_c_shadow], a").unwrap();
+            }
+            stats.fast_shifts += 1;
+        }
+    }
+    writeln!(out, "    ld a, [hl] ; RMW result for Z/N").unwrap();
+    emit_update_nz(out);
+}
+
 fn emit_fast_modify_memory(
     out: &mut String,
     mem: Operand,
@@ -1082,12 +1134,22 @@ fn emit_fast_modify_memory(
     match mem {
         Operand::ZeroPage(zp) => {
             let addr = NES_RAM_BASE + zp as u16;
+            if rmw_hl_enabled() {
+                writeln!(out, "    ld hl, ${addr:04X}").unwrap();
+                emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
+                return;
+            }
             writeln!(out, "    ld a, [${addr:04X}]").unwrap();
             emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [${addr:04X}], a").unwrap();
         }
         Operand::Absolute(addr) => {
             let mapped = direct_ram_addr(addr).unwrap();
+            if rmw_hl_enabled() {
+                writeln!(out, "    ld hl, ${mapped:04X}").unwrap();
+                emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
+                return;
+            }
             writeln!(out, "    ld a, [${mapped:04X}]").unwrap();
             emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
             writeln!(out, "    ld [${mapped:04X}], a").unwrap();
@@ -1100,9 +1162,13 @@ fn emit_fast_modify_memory(
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
-            writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-            writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            if rmw_hl_enabled() {
+                emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
+            } else {
+                writeln!(out, "    ld a, [hl]").unwrap();
+                emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
+                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            }
             stats.fast_rmw_addr_reuse += 1;
         }
         Operand::ZeroPageY(zp) => {
@@ -1113,9 +1179,13 @@ fn emit_fast_modify_memory(
             writeln!(out, "    add ${zp:02X}").unwrap();
             writeln!(out, "    ld l, a").unwrap();
             writeln!(out, "    ld h, $C0").unwrap();
-            writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-            writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            if rmw_hl_enabled() {
+                emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
+            } else {
+                writeln!(out, "    ld a, [hl]").unwrap();
+                emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
+                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            }
             stats.fast_rmw_addr_reuse += 1;
         }
         Operand::AbsoluteX(addr) => {
@@ -1125,9 +1195,13 @@ fn emit_fast_modify_memory(
             stats.x_reload_avoided += 1;
             stats.x_index_uses += 1;
             emit_add_a_to_hl(out);
-            writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-            writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            if rmw_hl_enabled() {
+                emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
+            } else {
+                writeln!(out, "    ld a, [hl]").unwrap();
+                emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
+                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            }
             stats.fast_rmw_addr_reuse += 1;
         }
         Operand::AbsoluteY(addr) => {
@@ -1137,9 +1211,13 @@ fn emit_fast_modify_memory(
             stats.y_reload_avoided += 1;
             stats.y_index_uses += 1;
             emit_add_a_to_hl(out);
-            writeln!(out, "    ld a, [hl]").unwrap();
-            emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
-            writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            if rmw_hl_enabled() {
+                emit_fast_modify_hl(out, modify, state.carry, state.c_dead, stats);
+            } else {
+                writeln!(out, "    ld a, [hl]").unwrap();
+                emit_fast_modify_value(out, modify, state.carry, state.c_dead, stats);
+                writeln!(out, "    ld [hl], a ; reuse indexed RMW address").unwrap();
+            }
             stats.fast_rmw_addr_reuse += 1;
         }
         Operand::Immediate(_) | Operand::IndexedIndirect(_) | Operand::IndirectIndexed(_) => {
@@ -2217,7 +2295,9 @@ mod tests {
         assert!(between.contains("rra ; seed host carry from 6502 C"));
         assert!(between.contains("rl a ; capture shift/rotate carry"));
         assert_eq!(between.matches("superblock cached X index").count(), 4);
-        assert_eq!(between.matches("reuse indexed RMW address").count(), 4);
+        assert_eq!(between.matches("native RMW shift/rotate").count(), 4);
+        assert!(between.contains("sla [hl]") && between.contains("srl [hl]"));
+        assert!(between.contains("rl [hl]") && between.contains("rr [hl]"));
         assert!(!between.contains("push af"));
         assert!(!between.contains("superblock materialize X"));
         assert!(asm[store_x..].contains("superblock cached X"));

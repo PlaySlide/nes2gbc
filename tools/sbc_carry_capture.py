@@ -162,6 +162,12 @@ def main(path):
                 and FULL_WRITE_C_READ.match(code(lines[j + 3])):
             ok = True
             drop = [j, j + 1]
+        elif code(lines[j]) == "ldh a, [nes_c_shadow]" and code(lines[j + 1]) == "rra" \
+                and re.match(r"^(rl|rr) \[hl\]", code(lines[j + 2])):
+            # native RMW rotate re-seed (state_superblock emit_fast_modify_hl):
+            # RL/RR [hl] reads C and rewrites C/Z; A is reloaded after it.
+            ok = True
+            drop = [j, j + 1]
         else:
             ok = dead_after(lines, i + 3, True, is_rla)
         if is_rla and ok and drop:
