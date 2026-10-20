@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
+use crate::mir::MirBuf;
+
 use crate::emit_common::{emit_pc_dispatch, estimated_block_size, flag_mask};
 use crate::polls::nmi_poll_points;
 
@@ -92,7 +94,7 @@ fn assign_code_banks(graph: &ControlFlowGraph, selected: &BTreeSet<u16>) -> BTre
     assigned
 }
 
-fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
+fn emit_dispatch_tables(out: &mut MirBuf, selected: &BTreeSet<u16>) {
     for segment in 0u16..8 {
         let bank = DISPATCH_BANK_START + segment;
         let base = 0x8000u16 + segment * 0x1000;
@@ -142,7 +144,7 @@ fn approx_code_bytes(asm: &str) -> usize {
 }
 
 fn emit_static_target(
-    out: &mut String,
+    out: &mut MirBuf,
     target: u16,
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
@@ -174,7 +176,7 @@ fn emit_static_target(
 }
 
 fn emit_static_control(
-    out: &mut String,
+    out: &mut MirBuf,
     ops: &[IrOp],
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
@@ -229,7 +231,7 @@ fn emit_static_control(
 }
 
 fn emit_known_target(
-    out: &mut String,
+    out: &mut MirBuf,
     target: u16,
     current_bank: u16,
     banks: &BTreeMap<u16, u16>,
@@ -588,12 +590,12 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
     }
 }
 
-fn emit_update_nz(out: &mut String) {
+fn emit_update_nz(out: &mut MirBuf) {
     writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
     writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
 }
 
-fn ensure_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+fn ensure_a(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if state.a_live {
         stats.a_reload_avoided += 1;
         return;
@@ -615,7 +617,7 @@ fn discard_a(state: &mut TraceState) {
     state.a_dirty = false;
 }
 
-fn materialize_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+fn materialize_a(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if !state.a_dirty {
         return;
     }
@@ -625,12 +627,12 @@ fn materialize_a(out: &mut String, state: &mut TraceState, stats: &mut StateStat
     stats.a_materialized += 1;
 }
 
-fn clobber_a(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+fn clobber_a(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     materialize_a(out, state, stats);
     state.a_live = false;
 }
 
-fn ensure_x(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+fn ensure_x(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if state.x_b {
         return;
     }
@@ -641,7 +643,7 @@ fn ensure_x(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
     stats.x_seed_loads += 1;
 }
 
-fn ensure_y(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+fn ensure_y(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if state.y_c {
         return;
     }
@@ -652,7 +654,7 @@ fn ensure_y(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
     stats.y_seed_loads += 1;
 }
 
-fn sync_xy(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+fn sync_xy(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     if state.x_dirty {
         debug_assert!(state.x_b);
         writeln!(out, "    ld a, b ; superblock materialize X").unwrap();
@@ -669,7 +671,7 @@ fn sync_xy(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
     }
 }
 
-fn sync_state(out: &mut String, state: &mut TraceState, stats: &mut StateStats) {
+fn sync_state(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
     // A must be published before X/Y because their materialization uses host A.
     materialize_a(out, state, stats);
     sync_xy(out, state, stats);
@@ -684,7 +686,7 @@ fn invalidate_state(state: &mut TraceState) {
     state.y_c = false;
 }
 
-fn emit_add_a_to_hl(out: &mut String) {
+fn emit_add_a_to_hl(out: &mut MirBuf) {
     writeln!(out, "    add l").unwrap();
     writeln!(out, "    ld l, a").unwrap();
     writeln!(out, "    jr nc, :+").unwrap();
@@ -709,7 +711,7 @@ fn fast_store_supported(op: Operand) -> bool {
 }
 
 /// HL = ($zp),Y with Y from host C (ensured resident). Clobbers A, DE, HL.
-fn emit_indirect_y_addr(out: &mut String, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
+fn emit_indirect_y_addr(out: &mut MirBuf, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
     let cached = state.y_c;
     writeln!(out, "    ld e, ${zp:02X}").unwrap();
     writeln!(out, "    ld d, $C0").unwrap();
@@ -730,7 +732,7 @@ fn emit_indirect_y_addr(out: &mut String, zp: u8, state: &mut TraceState, stats:
 
 /// LDA ($zp),Y keeping X/Y resident in B/C: RAM inline, everything else
 /// through nes_cpu_read_hi with BC saved around the call.
-fn emit_indirect_y_load(out: &mut String, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
+fn emit_indirect_y_load(out: &mut MirBuf, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
     emit_indirect_y_addr(out, zp, state, stats);
     writeln!(out, "    ld a, h").unwrap();
     writeln!(out, "    cp $20").unwrap();
@@ -753,7 +755,7 @@ fn emit_indirect_y_load(out: &mut String, zp: u8, state: &mut TraceState, stats:
 }
 
 /// STA ($zp),Y with the value in host A; A is clobbered afterwards.
-fn emit_indirect_y_store(out: &mut String, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
+fn emit_indirect_y_store(out: &mut MirBuf, zp: u8, state: &mut TraceState, stats: &mut StateStats) {
     writeln!(out, "    push af").unwrap();
     emit_indirect_y_addr(out, zp, state, stats);
     writeln!(out, "    ld a, h").unwrap();
@@ -781,7 +783,7 @@ fn emit_indirect_y_store(out: &mut String, zp: u8, state: &mut TraceState, stats
 }
 
 fn emit_operand_load(
-    out: &mut String,
+    out: &mut MirBuf,
     src: Operand,
     state: &mut TraceState,
     stats: &mut StateStats,
@@ -838,7 +840,7 @@ fn emit_operand_load(
 }
 
 fn emit_operand_store(
-    out: &mut String,
+    out: &mut MirBuf,
     dst: Operand,
     state: &mut TraceState,
     stats: &mut StateStats,
@@ -903,7 +905,7 @@ fn emit_operand_store(
 }
 
 fn load_reg_to_a(
-    out: &mut String,
+    out: &mut MirBuf,
     reg: Register,
     state: &mut TraceState,
     stats: &mut StateStats,
@@ -926,7 +928,7 @@ fn load_reg_to_a(
 }
 
 fn write_reg_from_a(
-    out: &mut String,
+    out: &mut MirBuf,
     reg: Register,
     state: &mut TraceState,
     stats: &mut StateStats,
@@ -951,7 +953,7 @@ fn write_reg_from_a(
 }
 
 fn emit_fast_modify_value(
-    out: &mut String,
+    out: &mut MirBuf,
     modify: ModifyOp,
     known_carry: Option<bool>,
     c_dead: bool,
@@ -1038,7 +1040,7 @@ fn rmw_hl_enabled() -> bool {
 /// global dead-HRAM passes). A is clobbered exactly as in the load/op/store
 /// form. NES2GBC_RMW_HL=0 restores the old form.
 fn emit_fast_modify_hl(
-    out: &mut String,
+    out: &mut MirBuf,
     modify: ModifyOp,
     known_carry: Option<bool>,
     c_dead: bool,
@@ -1080,7 +1082,7 @@ fn emit_fast_modify_hl(
 }
 
 fn emit_fast_modify_memory(
-    out: &mut String,
+    out: &mut MirBuf,
     mem: Operand,
     modify: ModifyOp,
     state: &mut TraceState,
@@ -1238,7 +1240,7 @@ fn fast_op_supported(op: &IrOp) -> bool {
     }
 }
 
-fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut StateStats) {
+fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut StateStats) {
     debug_assert!(fast_op_supported(op));
 
     let park = state.a_live && state.a_dirty
@@ -1569,7 +1571,7 @@ fn emit_fast_op(out: &mut String, op: &IrOp, state: &mut TraceState, stats: &mut
 }
 
 fn emit_barrier_ops(
-    out: &mut String,
+    out: &mut MirBuf,
     ops: &[IrOp],
     state: &mut TraceState,
     stats: &mut StateStats,
@@ -1599,7 +1601,7 @@ fn emit_barrier_ops(
 /// end, so callers keep canonical HRAM state at every block boundary.
 /// Returns false when an instruction faulted (the fault tail was emitted).
 pub fn emit_block_body_local(
-    out: &mut String,
+    out: &mut MirBuf,
     instructions: &[crate::cpu6502::DecodedInstruction],
 ) -> bool {
     emit_block_body_local_dead(out, instructions, &BTreeSet::new(), &BTreeSet::new())
@@ -1609,7 +1611,7 @@ pub fn emit_block_body_local(
 /// `c_dead` hold the PCs of instructions after which V / C are dead on every
 /// path (computed by the caller over its own CFG model).
 pub fn emit_block_body_local_dead(
-    out: &mut String,
+    out: &mut MirBuf,
     instructions: &[crate::cpu6502::DecodedInstruction],
     v_dead: &BTreeSet<u16>,
     c_dead: &BTreeSet<u16>,
@@ -1631,7 +1633,7 @@ impl LocalTrace {
     /// HRAM is returned (loads only, ends before the jump).
     pub fn enter_chained(&mut self) -> String {
         self.state.carry = None;
-        let mut a = String::new();
+        let mut a = MirBuf::new();
         if self.state.x_b {
             a.push_str("    ldh a, [nes_x]\n    ld b, a ; canonical adapter X\n");
         }
@@ -1641,7 +1643,7 @@ impl LocalTrace {
         if self.state.a_live {
             a.push_str("    ldh a, [nes_a] ; canonical adapter A\n");
         }
-        a
+        a.into_string()
     }
     pub fn a_live(&self) -> bool {
         self.state.a_live
@@ -1653,7 +1655,7 @@ impl LocalTrace {
 /// stay resident (not published) and a final `JMP pc` is elided. Otherwise
 /// all state is published at the end exactly like emit_block_body_local.
 pub fn emit_block_body_chained(
-    out: &mut String,
+    out: &mut MirBuf,
     instructions: &[crate::cpu6502::DecodedInstruction],
     v_dead: &BTreeSet<u16>,
     c_dead: &BTreeSet<u16>,
@@ -1664,7 +1666,7 @@ pub fn emit_block_body_chained(
 }
 
 fn emit_block_body_core(
-    out: &mut String,
+    out: &mut MirBuf,
     instructions: &[crate::cpu6502::DecodedInstruction],
     v_dead: &BTreeSet<u16>,
     c_dead: &BTreeSet<u16>,
@@ -1749,7 +1751,7 @@ pub fn emit_cfg_with_interrupts(
     nmi: u16,
     irq: u16,
 ) -> String {
-    let mut out = String::new();
+    let mut out = MirBuf::new();
     writeln!(out, "; Generated by nes2gbc stateful superblock emitter").unwrap();
     writeln!(out, "; A lives in host A, X in B, Y in C across safe trace edges; dirty canonical HRAM is materialized at barriers").unwrap();
     writeln!(out).unwrap();
@@ -1916,7 +1918,7 @@ pub fn emit_cfg_with_interrupts(
 
         let mut pending: Vec<IrOp> = Vec::new();
         let write_insn_comment =
-            |out: &mut String, instruction: &crate::cpu6502::DecodedInstruction| {
+            |out: &mut MirBuf, instruction: &crate::cpu6502::DecodedInstruction| {
                 writeln!(
                     out,
                     "    ; ${:04X}: ${:02X} {:?} {:?}",
@@ -1964,7 +1966,7 @@ pub fn emit_cfg_with_interrupts(
                         continue;
                     }
 
-                    let mut probe = String::new();
+                    let mut probe = MirBuf::new();
                     if emit_static_control(&mut probe, &ops, bank, &banks, None, 0) {
                         if !pending.is_empty() {
                             let before = out.len();
@@ -2126,7 +2128,8 @@ pub fn emit_cfg_with_interrupts(
     );
 
     emit_dispatch_tables(&mut out, &selected);
-    out
+    crate::mir::report_entry_reloads("state_superblock", &out);
+    out.into_string()
 }
 
 #[cfg(test)]

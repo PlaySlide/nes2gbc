@@ -3,13 +3,15 @@
 //! duplicated logic here; behaviour and output are unchanged.
 use std::fmt::Write;
 
+use crate::mir::MirBuf;
+
 use crate::ir::Flag;
 
 pub(crate) fn estimated_block_size(block: &crate::cfg::BasicBlock) -> usize {
     64 + block.instructions.len() * 96
 }
 
-pub(crate) fn emit_pc_dispatch(out: &mut String, target: u16) {
+pub(crate) fn emit_pc_dispatch(out: &mut MirBuf, target: u16) {
     writeln!(out, "    ld hl, ${target:04X}").unwrap();
     writeln!(out, "    jp nes_dispatch_hl").unwrap();
 }

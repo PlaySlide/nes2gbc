@@ -1,5 +1,7 @@
 use std::fmt::Write;
 
+use crate::mir::MirBuf;
+
 use crate::ir::{ArithmeticOp, Flag, IrOp, LogicOp, ModifyOp, ModifyTarget, Operand, Register, StackValue};
 
 pub const NES_RAM_BASE: u16 = 0xC000;
@@ -53,7 +55,7 @@ fn direct_ram_addr(addr: u16) -> Option<u16> {
     }
 }
 
-fn emit_add_a_to_hl(out: &mut String) {
+fn emit_add_a_to_hl(out: &mut MirBuf) {
     // Exact inline equivalent of runtime nes_add_a_to_hl. A contains the
     // unsigned 8-bit index and HL the base address.
     writeln!(out, "    add l").unwrap();
@@ -63,7 +65,7 @@ fn emit_add_a_to_hl(out: &mut String) {
     writeln!(out, ":").unwrap();
 }
 
-fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
+fn emit_effective_addr(out: &mut MirBuf, op: Operand) -> bool {
     match op {
         Operand::ZeroPage(zp) => {
             writeln!(out, "    ld h, $C0").unwrap();
@@ -119,7 +121,7 @@ fn emit_effective_addr(out: &mut String, op: Operand) -> bool {
     }
 }
 
-fn emit_dynamic_cpu_read_hl(out: &mut String) {
+fn emit_dynamic_cpu_read_hl(out: &mut MirBuf) {
     // Runtime profiling shows the overwhelming majority of dynamic CPU reads
     // resolve to $0000-$1FFF internal RAM. Handle that case inline and only
     // pay the generic bus helper for PPU/APU/PRG addresses.
@@ -136,7 +138,7 @@ fn emit_dynamic_cpu_read_hl(out: &mut String) {
     writeln!(out, ":").unwrap();
 }
 
-fn emit_dynamic_cpu_write_hl(out: &mut String) {
+fn emit_dynamic_cpu_write_hl(out: &mut MirBuf) {
     // A = value, HL = dynamic NES CPU address. Most indexed writes land in
     // internal RAM too, so bypass the generic bus ladder for $0000-$1FFF.
     writeln!(out, "    ld c, a").unwrap();
@@ -155,7 +157,7 @@ fn emit_dynamic_cpu_write_hl(out: &mut String) {
     writeln!(out, ":").unwrap();
 }
 
-fn emit_indirect_addr(out: &mut String, src: Operand) {
+fn emit_indirect_addr(out: &mut MirBuf, src: Operand) {
     match src {
         Operand::IndexedIndirect(zp) => {
             writeln!(out, "    ldh a, [nes_x]").unwrap();
@@ -182,7 +184,7 @@ fn emit_indirect_addr(out: &mut String, src: Operand) {
         _ => unreachable!(),
     }
 }
-fn emit_load_operand_to_a(out: &mut String, src: Operand) {
+fn emit_load_operand_to_a(out: &mut MirBuf, src: Operand) {
     match src {
         Operand::Immediate(v) => { writeln!(out, "    ld a, ${v:02X}").unwrap(); }
         Operand::ZeroPage(zp) => {
@@ -245,7 +247,7 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
     }
 }
 
-fn emit_store_a_to_operand(out: &mut String, dst: Operand) {
+fn emit_store_a_to_operand(out: &mut MirBuf, dst: Operand) {
     match dst {
         Operand::ZeroPage(zp) => {
             writeln!(out, "    ld [${:04X}], a", NES_RAM_BASE + zp as u16).unwrap();
@@ -439,13 +441,13 @@ fn a_commits_live(ops: &[IrOp]) -> Vec<bool> {
     live
 }
 
-fn emit_update_nz(out: &mut String) {
+fn emit_update_nz(out: &mut MirBuf) {
     writeln!(out, "    ldh [nes_z_shadow], a").unwrap();
     writeln!(out, "    ldh [nes_n_shadow], a").unwrap();
 }
 
 pub fn emit_ops(ops: &[IrOp]) -> String {
-    let mut out = String::new();
+    let mut out = MirBuf::new();
     // Host register A often already holds nes_a. Keep it live across ALU/store
     // chains instead of bouncing every result through HRAM.
     let mut a_live = false;
@@ -943,7 +945,7 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
     }
 
     let _ = a_live;
-    out
+    out.into_string()
 }
 
 #[cfg(test)]
