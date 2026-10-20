@@ -57,6 +57,54 @@ LABEL_RE = re.compile(r"^([A-Za-z_.][A-Za-z0-9_.@]*):{1,2}$")
 TRACE_OK = re.compile(r"^(ld hl, \$[0-9A-Fa-f]+|push af|pop af|call nes_profile_trace_pc)$")
 
 
+_CFG_BLOCKS = {}
+
+
+def _cfg_blocks(paths):
+    key = tuple(str(x) for x in paths)
+    if key in _CFG_BLOCKS:
+        return _CFG_BLOCKS[key]
+    blocks = []
+    for path in paths:
+        if not path.exists():
+            continue
+        cur = None
+        for l in path.read_text().splitlines():
+            f = l.split()
+            if not f:
+                continue
+            if f[0] in ("B", "V"):
+                cur = [] if f[0] == "B" else None
+                if cur is not None:
+                    blocks.append(cur)
+            elif f[0] == "I" and cur is not None and len(f) >= 3:
+                cur.append((int(f[1], 16), f[2], f[3] if len(f) > 3 else ""))
+    _CFG_BLOCKS[key] = blocks
+    return blocks
+
+
+def tsx_harmless(pc, paths):
+    """Sound check that TSX at `pc` cannot be used to read stacked bytes:
+    in every CFG block containing it, X (= S) is overwritten before the block
+    ends and is only used meanwhile as a zero-page index (ZeroPageX and
+    (zp,X) stay in $00xx) or for INX/DEX/CPX. Not found -> harmful."""
+    found = False
+    for b in _cfg_blocks(paths):
+        idx = [i for i, ins in enumerate(b) if ins[0] == pc and ins[1] == "Tsx"]
+        for i in idx:
+            found = True
+            clean = False
+            for _, mn, mode in b[i + 1:]:
+                if mode in ("AbsoluteX",) or mn in ("Txa", "Stx", "Txs", "Jsr", "Rts", "Rti", "Brk", "Jmp", "Php", "Pha"):
+                    return False
+                if mn in ("Ldx", "Tax"):
+                    clean = True
+                    break
+            if not clean:
+                return False
+    return found
+
+
 def main(path: str) -> None:
     p = Path(path)
     lines = p.read_text().splitlines(keepends=True)
@@ -215,8 +263,17 @@ def main(path: str) -> None:
     # contains TSX (stack inspection could read the pushed P byte).
     NMI_FLAGS = (BIT["nes_z_shadow"] | BIT["nes_n_shadow"] | BIT["nes_c_shadow"])
     nmi_h = None
-    if (any(l.startswith('SECTION "NES mapper') for l in lines)  # banked builds only
-            and not any(x and x[1] == "Tsx" for x in insn_of)):
+    env = __import__("os").environ
+    # Stage 3: the same model holds for single-view (NROM-style) builds; the
+    # banked-only restriction is lifted unless NES2GBC_NMI_EDGES_NROM=0.
+    nmi_ok = banked_build or env.get("NES2GBC_NMI_EDGES_NROM", "1") != "0"
+    tsx_pcs = sorted({x[0] for x in insn_of if x and x[1] == "Tsx"})
+    if tsx_pcs and env.get("NES2GBC_TSX_TAINT", "1") != "0":
+        # A TSX only matters if the stack pointer it copies can address the
+        # pushed P byte: X must escape (STX/TXA/TXS-free uses that leave the
+        # zero page: AbsoluteX reads/writes) or stay live past the block.
+        tsx_pcs = [pc for pc in tsx_pcs if not tsx_harmless(pc, [cfg, views])]
+    if nmi_ok and not tsx_pcs:
         for k, ck in enumerate(codes):
             if ck == "nes_nmi_entry:":
                 for k2 in range(k + 1, min(n, k + 6)):
