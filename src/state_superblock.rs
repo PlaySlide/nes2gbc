@@ -325,6 +325,8 @@ struct StateStats {
     fast_rmw_addr_reuse: usize,
     barriers: usize,
     canonical_adapters: usize,
+    x_kept_across_barrier: usize,
+    y_kept_across_barrier: usize,
 }
 
 fn direct_ram_addr(addr: u16) -> Option<u16> {
@@ -1310,6 +1312,174 @@ fn emit_fast_op(out: &mut MirBuf, op: &IrOp, state: &mut TraceState, stats: &mut
     stats.fast_ops += 1;
 }
 
+/// Stage-2 X/Y carrying knobs. `NES2GBC_XY_CARRY=0` disables stage 2 and
+/// reproduces stage-1 output byte-identically; `x` / `y` carry one register.
+/// `NES2GBC_XY_KEEP=0` keeps the cross-block contracts but drops the
+/// helper-clobber-table residency across barriers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CarryCfg {
+    pub x: bool,
+    pub y: bool,
+    pub keep: bool,
+    /// NES2GBC_XY_DIRTY=1: allow contracts whose register may be newer than
+    /// HRAM. Off by default: the text post-passes (native loop/leaf
+    /// replacements) assume HRAM is authoritative at every 6502 control
+    /// transfer, which clean contracts preserve.
+    pub dirty: bool,
+}
+
+fn carry_keep() -> (bool, bool) {
+    static K: std::sync::OnceLock<(bool, bool)> = std::sync::OnceLock::new();
+    *K.get_or_init(|| {
+        let c = carry_cfg();
+        (c.keep && c.x, c.keep && c.y)
+    })
+}
+
+pub(crate) fn carry_cfg() -> CarryCfg {
+    let v = std::env::var("NES2GBC_XY_CARRY").unwrap_or_default();
+    let (x, y) = match v.as_str() {
+        "0" => (false, false),
+        "x" => (true, false),
+        "y" => (false, true),
+        "xy" => (true, true),
+        // Default: X only. Carrying Y measured as a net loss (SMB +3% wcost:
+        // predecessors must load C for the contract more often than it saves).
+        _ => (true, false),
+    };
+    let keep = (x || y) && std::env::var("NES2GBC_XY_KEEP").as_deref() != Ok("0");
+    let dirty = (x || y) && std::env::var("NES2GBC_XY_DIRTY").as_deref() == Ok("1");
+    CarryCfg { x, y, keep, dirty }
+}
+
+/// Register contract of a block's `nes_XXXX_rc` entry: for X (in B) and Y
+/// (in C), None = canonical HRAM only, Some(false) = resident and in sync
+/// with HRAM, Some(true) = resident and possibly newer than HRAM (the block
+/// publishes it at its next barrier/exit).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Contract {
+    x: Option<bool>,
+    y: Option<bool>,
+}
+
+impl Contract {
+    fn is_empty(&self) -> bool {
+        self.x.is_none() && self.y.is_none()
+    }
+}
+
+/// Predecessor arrivals observed at a contract entry during one pass.
+#[derive(Debug, Clone, Copy, Default)]
+struct Arrivals {
+    x_res: u32,
+    x_dirty: u32,
+    y_res: u32,
+    y_dirty: u32,
+}
+
+fn refine_contracts(cur: &BTreeMap<u16, Contract>, arr: &BTreeMap<u16, Arrivals>) -> BTreeMap<u16, Contract> {
+    // Monotone: a slot only moves Dirty -> Clean -> None.
+    let lower = |c: Option<bool>, res: u32, dirty: u32| -> Option<bool> {
+        let obs = if dirty > 0 { Some(true) } else if res > 0 { Some(false) } else { None };
+        match (c, obs) {
+            (None, _) | (_, None) => None,
+            (Some(a), Some(b)) => Some(a && b),
+        }
+    };
+    let mut out = BTreeMap::new();
+    for (&t, &c) in cur {
+        let a = arr.get(&t).copied().unwrap_or_default();
+        let n = Contract { x: lower(c.x, a.x_res, a.x_dirty), y: lower(c.y, a.y_res, a.y_dirty) };
+        if !n.is_empty() {
+            out.insert(t, n);
+        }
+    }
+    out
+}
+
+fn materialize_x(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
+    if state.x_dirty {
+        out.ins("ld", &["a", "b"], Some("superblock materialize X"));
+        out.ins("ldh", &["[nes_x]", "a"], None);
+        state.x_dirty = false;
+        stats.x_materialized += 1;
+    }
+}
+
+fn materialize_y(out: &mut MirBuf, state: &mut TraceState, stats: &mut StateStats) {
+    if state.y_dirty {
+        out.ins("ld", &["a", "c"], Some("superblock materialize Y"));
+        out.ins("ldh", &["[nes_y]", "a"], None);
+        state.y_dirty = false;
+        stats.y_materialized += 1;
+    }
+}
+
+/// Exit towards `target` through its register-contract entry when the
+/// target has one in this bank and at least one contract register is
+/// resident: publish A and every non-contract register, reconcile the
+/// contract registers (load the missing one, publish a dirty one the
+/// contract wants clean) and return the label to jump to. None leaves the
+/// state untouched (caller does the canonical sync + jump).
+#[allow(clippy::too_many_arguments)]
+fn carry_exit(
+    out: &mut MirBuf,
+    state: &mut TraceState,
+    stats: &mut StateStats,
+    target: u16,
+    bank: u16,
+    banks: &BTreeMap<u16, u16>,
+    contracts: &BTreeMap<u16, Contract>,
+    arrivals: &mut BTreeMap<u16, Arrivals>,
+) -> Option<String> {
+    let c = contracts.get(&target).copied().filter(|c| !c.is_empty())?;
+    if banks.get(&target).copied() != Some(bank) {
+        return None;
+    }
+    let x_hit = c.x.is_some() && state.x_b;
+    let y_hit = c.y.is_some() && state.y_c;
+    if !x_hit && !y_hit {
+        return None;
+    }
+    let a = arrivals.entry(target).or_default();
+    if x_hit {
+        a.x_res += 1;
+        a.x_dirty += state.x_dirty as u32;
+    }
+    if y_hit {
+        a.y_res += 1;
+        a.y_dirty += state.y_dirty as u32;
+    }
+    materialize_a(out, state, stats);
+    if c.x != Some(true) {
+        materialize_x(out, state, stats);
+    }
+    if c.y != Some(true) {
+        materialize_y(out, state, stats);
+    }
+    if c.x.is_some() {
+        ensure_x(out, state, stats);
+    }
+    if c.y.is_some() {
+        ensure_y(out, state, stats);
+    }
+    state.a_live = false;
+    Some(format!("nes_{target:04X}_trace"))
+}
+
+/// Same-section jump to a private label; `jr` when the (backward) target
+/// offset is known and in range.
+fn emit_local_jump(out: &mut MirBuf, label: &str, target_off: Option<usize>, section_pc: usize) {
+    if let Some(off) = target_off {
+        let delta = off as isize - (section_pc + 2) as isize;
+        if (-128..128).contains(&delta) {
+            out.ins("jr", &[label], None);
+            return;
+        }
+    }
+    out.ins("jp", &[label], None);
+}
+
 fn emit_barrier_ops(
     out: &mut MirBuf,
     ops: &[IrOp],
@@ -1325,13 +1495,25 @@ fn emit_barrier_ops(
     // into a chained fallthrough successor (canonical HRAM is already synced
     // for the taken edge and for the successor's canonical adapter).
     let branch_only = ops.len() == 1 && matches!(ops[0], IrOp::Branch { .. });
+    let buf = lr35902::emit_ops_buf(ops);
     if branch_only {
         state.a_live = false;
     } else {
+        // Stage 2: clean X/Y residency survives a barrier whose lowered MIR
+        // (helper calls via the runtime clobber tables) leaves B/C and the
+        // nes_x/nes_y slots untouched.
+        let (want_x, want_y) = carry_keep();
+        let (kb, kc) = if want_x || want_y { crate::clobbers::preserves_xy(&buf) } else { (false, false) };
+        let (kb, kc) = (kb && want_x, kc && want_y);
+        let (xb, yc) = (state.x_b && kb, state.y_c && kc);
         invalidate_state(state);
+        state.x_b = xb;
+        state.y_c = yc;
+        stats.x_kept_across_barrier += xb as usize;
+        stats.y_kept_across_barrier += yc as usize;
     }
     state.carry = None;
-    out.append(lr35902::emit_ops_buf(ops));
+    out.append(buf);
     stats.barriers += 1;
 }
 
@@ -1540,6 +1722,37 @@ pub fn emit_cfg_with_interrupts(
         );
     }
 
+    // Stage 2 (docs/IR_REWRITE.md): X/Y register contracts across static
+    // block edges. Contracts are refined by re-emitting until the observed
+    // predecessor arrivals stop changing (monotone; every pass is correct on
+    // its own, the iteration only drops useless/dirty-free contracts).
+    let carry = if options.debug_trace { CarryCfg::default() } else { carry_cfg() };
+    let mut contracts: BTreeMap<u16, Contract> = BTreeMap::new();
+    if carry.x || carry.y {
+        for &addr in &plan.order {
+            let continuing_target = plan.next.values().any(|&t| t == addr);
+            let polled = poll_points.contains(&addr) && !nmi_exclusive.contains(&addr);
+            if continuing_target || polled {
+                continue;
+            }
+            contracts.insert(addr, Contract { x: carry.x.then_some(carry.dirty), y: carry.y.then_some(carry.dirty) });
+        }
+        // Debug bisection aid: NES2GBC_XY_RANGE=lo-hi (hex NES PCs) keeps
+        // only contracts inside the range.
+        if let Ok(r) = std::env::var("NES2GBC_XY_RANGE") {
+            if let Some((lo, hi)) = r.split_once('-') {
+                let lo = u16::from_str_radix(lo, 16).unwrap_or(0);
+                let hi = u16::from_str_radix(hi, 16).unwrap_or(0xFFFF);
+                contracts.retain(|&a, _| a >= lo && a <= hi);
+            }
+        }
+    }
+    let header = out;
+    let mut carry_iter = 0usize;
+    let (mut out, stats, carried) = loop {
+    let mut out = header.clone();
+    let mut arrivals: BTreeMap<u16, Arrivals> = BTreeMap::new();
+    let mut carried_edges = 0usize;
     writeln!(out, "SECTION \"Generated NES reset entry\", ROM0").unwrap();
     out.label("nes_reset");
     out.ins("ld", &["a", "[nes_reset_count]"], None);
@@ -1551,6 +1764,7 @@ pub fn emit_cfg_with_interrupts(
     let selected_list = &plan.order;
     let mut pending_continuation: Option<(u16, u16)> = None;
     let mut section_offs: BTreeMap<u16, usize> = BTreeMap::new();
+    let mut rc_offs: BTreeMap<u16, usize> = BTreeMap::new();
     let mut section_pc = 0usize;
     let mut state = TraceState::default();
     let mut stats = StateStats::default();
@@ -1582,6 +1796,7 @@ pub fn emit_cfg_with_interrupts(
             state = TraceState::default();
             writeln!(out, "SECTION \"NES block {addr:04X}\", ROMX, BANK[{bank}]").unwrap();
             section_offs.clear();
+            rc_offs.clear();
             section_pc = 0;
         }
 
@@ -1594,6 +1809,43 @@ pub fn emit_cfg_with_interrupts(
         } else {
             section_offs.insert(block.start, section_pc);
             out.nes_label(&format!("nes_{:04X}", block.start), crate::mir::BlockMeta { pc: block.start, bank: None, kind: crate::mir::EntryKind::Canonical, poll: poll_points.contains(&block.start) && !nmi_exclusive.contains(&block.start) });
+        }
+        let contract = if continuing { None } else { contracts.get(&addr).copied().filter(|c| !c.is_empty()) };
+
+        if let Some(c) = contract {
+            // HRAM-reload stub for every dynamic/canonical entry (dispatch,
+            // RTS/RTI returns, NMI resume, cross-bank and non-carrying
+            // predecessors), then the register-contract entry `nes_XXXX_trace`: the same
+            // label shape as a chained trace continuation, so every text
+            // post-pass already treats it as a resident-register mid-entry.
+            // The profile-trace hook moves after it so both entries log.
+            let before = out.len();
+            // Marker read by text post-passes: with a clean contract HRAM is
+            // authoritative on both entries, exactly like a plain block head.
+            if c.x != Some(true) && c.y != Some(true) {
+                writeln!(out, "    ; xy-carry stub: clean register contract (HRAM authoritative)").unwrap();
+            } else {
+                writeln!(out, "    ; xy-carry stub: dirty register contract").unwrap();
+            }
+            if c.y.is_some() {
+                out.ins("ldh", &["a", "[nes_y]"], None);
+                out.ins("ld", &["c", "a"], Some("carry stub: reload cached X/Y (Y in C)"));
+            }
+            if c.x.is_some() {
+                out.ins("ldh", &["a", "[nes_x]"], None);
+                out.ins("ld", &["b", "a"], Some("carry stub: reload cached X/Y (X in B)"));
+            }
+            section_pc += approx_code_bytes(&out[before..]);
+            out.nes_label(&format!("nes_{addr:04X}_trace"), crate::mir::BlockMeta { pc: addr, bank: None, kind: crate::mir::EntryKind::Carry, poll: false });
+            rc_offs.insert(addr, section_pc);
+            if c.x.is_some() {
+                state.x_b = true;
+                state.x_dirty = c.x == Some(true);
+            }
+            if c.y.is_some() {
+                state.y_c = true;
+                state.y_dirty = c.y == Some(true);
+            }
         }
 
         writeln!(out, "IF DEF(NES2GBC_PROFILE_TRACE)").unwrap();
@@ -1712,6 +1964,30 @@ pub fn emit_cfg_with_interrupts(
                             section_pc += approx_code_bytes(&out[before..]);
                             pending.clear();
                         }
+                        let carry_target = match ops.as_slice() {
+                            [IrOp::Jump(t)] | [IrOp::Branch { target: t, .. }] => Some(*t),
+                            _ => None,
+                        };
+                        if let Some(t) = carry_target {
+                            let before = out.len();
+                            let label = carry_exit(&mut out, &mut state, &mut stats, t, bank, &banks, &contracts, &mut arrivals);
+                            section_pc += approx_code_bytes(&out[before..]);
+                            if let Some(label) = label {
+                                carried_edges += 1;
+                                write_insn_comment(&mut out, instruction);
+                                let before = out.len();
+                                if let [IrOp::Branch { flag, when, .. }] = ops.as_slice() {
+                                    emit_branch_skip(&mut out, *flag, *when);
+                                    let pc_now = section_pc + approx_code_bytes(&out[before..]);
+                                    emit_local_jump(&mut out, &label, rc_offs.get(&t).copied(), pc_now);
+                                    out.label("");
+                                } else {
+                                    emit_local_jump(&mut out, &label, rc_offs.get(&t).copied(), section_pc);
+                                }
+                                section_pc += approx_code_bytes(&out[before..]);
+                                continue;
+                            }
+                        }
                         sync_state(&mut out, &mut state, &mut stats);
                         write_insn_comment(&mut out, instruction);
                         let before = out.len();
@@ -1788,17 +2064,26 @@ pub fn emit_cfg_with_interrupts(
                     .find(|edge| matches!(edge.kind, EdgeKind::Fallthrough))
                     .and_then(|edge| edge.target)
                 {
-                    sync_state(&mut out, &mut state, &mut stats);
                     let before = out.len();
-                    emit_known_target(
-                        &mut out,
-                        target,
-                        bank,
-                        &banks,
-                        Some(&section_offs),
-                        section_pc,
-                    );
-                    section_pc += approx_code_bytes(&out[before..]);
+                    if let Some(label) = carry_exit(&mut out, &mut state, &mut stats, target, bank, &banks, &contracts, &mut arrivals) {
+                        carried_edges += 1;
+                        let pc_now = section_pc + approx_code_bytes(&out[before..]);
+                        emit_local_jump(&mut out, &label, rc_offs.get(&target).copied(), pc_now);
+                        section_pc += approx_code_bytes(&out[before..]);
+                    } else {
+                        // Unchanged stage-1 accounting (sync bytes not counted).
+                        sync_state(&mut out, &mut state, &mut stats);
+                        let before = out.len();
+                        emit_known_target(
+                            &mut out,
+                            target,
+                            bank,
+                            &banks,
+                            Some(&section_offs),
+                            section_pc,
+                        );
+                        section_pc += approx_code_bytes(&out[before..]);
+                    }
                 }
             }
         }
@@ -1839,6 +2124,25 @@ pub fn emit_cfg_with_interrupts(
         out.ins("jp", &[format!("nes_{addr:04X}_trace").as_str()], None);
         writeln!(out).unwrap();
         stats.canonical_adapters += 1;
+    }
+
+    let next = refine_contracts(&contracts, &arrivals);
+    if !(carry.x || carry.y) || next == contracts || carry_iter >= 4 {
+        break (out, stats, carried_edges);
+    }
+    contracts = next;
+    carry_iter += 1;
+    };
+    if carry.x || carry.y {
+        let nx = contracts.values().filter(|c| c.x.is_some()).count();
+        let ny = contracts.values().filter(|c| c.y.is_some()).count();
+        println!(
+            "xy-carry: {} register-contract entries (X {nx}, Y {ny}), {carried} carried static edge(s), {} refinement pass(es); kept across barriers X {} Y {}",
+            contracts.len(),
+            carry_iter + 1,
+            stats.x_kept_across_barrier,
+            stats.y_kept_across_barrier
+        );
     }
 
     println!(

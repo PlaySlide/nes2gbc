@@ -134,3 +134,62 @@ Bomberman, Excitebike, DK Classics, opt-out combos (RMW_HL=0,
 COUNTED_LOOP_POLLS=0, NROM_CYCLIC_POLLS=0, POLL_ALL_BACK+BANKED_POLL_ALL,
 STATE_PARK_A=0+STATE_INDY=0) and the CI smoke ROMs (MAX_BLOCKS=16 NROM,
 UxROM, cross-bank, large UxROM, MMC1), all with the default APU=1.
+
+## Stage 2 status (branch `rewrite/ir-stage2`, from stage-1 tip 9b5e5df)
+
+Stage 2 lives on its own branch so stage 1 stays a pure refactor.
+
+**What it does (state_superblock path, i.e. mapper-0/NROM-style builds):**
+NES X (in B) and, optionally, Y (in C) stay in GB registers across static
+block edges. This covers taken/not-taken branches, JMP abs, and fallthrough
+into another section head within the same bank.
+
+- Each candidate block gets a register-contract entry `nes_T_trace`. It sits
+  right after the canonical `nes_T:` label and an HRAM-reload stub.
+- Every dynamic or indirect entry still lands on `nes_T`. That covers dispatch
+  tables, RTS/RTI targets, the NMI entry, pushed-return continuations and
+  bank thunks. Those entries go through the stub, which reloads B/C from
+  `nes_x`/`nes_y`.
+- Carried static predecessors jump straight to `nes_T_trace`.
+- Contracts are refined by re-emission until a fixed point (at most 5 passes,
+  monotone Dirty -> Clean -> None).
+- Contracts are *clean* by default: HRAM stays authoritative at every 6502
+  control transfer, because many text passes assume it. That is why
+  NMI/poll paths need no extra save/restore: poll and interrupt helpers are
+  known to clobber everything, and the handler reloads from HRAM.
+- `NES2GBC_XY_DIRTY=1` allows dirty contracts. It is experimental and unsafe
+  with native loop passes.
+- Clean residency is also *kept across barriers* whose lowered MIR provably
+  preserves B/nes_x (C/nes_y).
+  - `src/clobbers.rs` derives the per-helper clobber table from `runtime/*.asm`.
+  - It adds `TEXT_INLINED` for helpers that `hot_alu_generated.py` inlines
+    with extra scratch registers.
+  - A cargo test keeps that list in sync with the pass.
+
+**Env:**
+
+| Variable | Effect |
+| --- | --- |
+| `NES2GBC_XY_CARRY=0` | Byte-identical stage-1 output. Verified with `tools/check_byte_identical.sh` on 24 builds. |
+| `NES2GBC_XY_CARRY=x` | X only. This is the default. |
+| `NES2GBC_XY_CARRY=xy` | X and Y. |
+| `NES2GBC_XY_CARRY=y` | Y only. |
+| `NES2GBC_XY_KEEP=0` | No keep across barriers. |
+| `NES2GBC_XY_RANGE=lo-hi` | Debug bisection filter. |
+
+Y is off by default because it measured as a net loss: SMB wcost was +4%.
+Predecessors must materialise C for the contract more often than the
+contract saves reloads.
+
+**Not done:** banked.rs (MMC1/UxROM/... games) has no carry yet. Contracts are
+same-bank only. `NES2GBC_DEBUG_TRACE` builds disable it.
+
+**Stage 3 (A carry), proposed:**
+
+- Reuse the contract machinery with A in host A. Every exit path then has to
+  keep A out of scratch use: most lowering uses A as the accumulator for
+  addresses and flags.
+- So the contract should be "A in D" (or E), via the DE cache, or limited to
+  edges whose successor's first MIR use is A.
+- Text passes (cache_a_in_blocks, a-cache, de-cache) must learn the
+  `_trace` stub convention first.

@@ -217,6 +217,14 @@ def main(asm, rom_path):
             if not want.endswith("_trace") and code(lines[idx - 1]).startswith("SECTION"):
                 xs = xs or "hram"
                 ys = ys or "hram"
+            # Stage-2 register-contract entry right after its canonical
+            # reload stub: a clean contract keeps HRAM authoritative on both
+            # the canonical and the carried entry, like a plain block head.
+            if want.endswith("_trace") and any(
+                    "xy-carry stub: clean register contract" in lines[q]
+                    for q in range(max(0, idx - 8), idx)):
+                xs = xs or "hram"
+                ys = ys or "hram"
             if kind == "dec_nonzero" and ys is None and y_dead_at(prg, exit_pc):
                 ys = "dead"
             if kind == "delay":  # the counted register is overwritten

@@ -76,7 +76,7 @@ def main(asm: str, rom_path: str) -> None:
         want = {pc, pc + 1, pc + 4, pc + 6, pc + 7, pc + 9, pc + 10, pc + 11, pc + 12, pc + 13}
         if not want <= seen:
             continue
-        back = [k for k in range(first, e) if re.match(rf"^jp nz, {label}\b", code(lines[k]))]
+        back = [k for k in range(first, e) if re.match(rf"^jp nz, {label}$", code(lines[k]))]
         if len(back) != 1:
             continue
         k = back[0]

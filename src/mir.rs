@@ -98,6 +98,10 @@ pub enum EntryKind {
     Trace,
     /// Overlay entry that skips the PRG-RAM byte check (`nes_r_XXXX_nc`).
     Unchecked,
+    /// Stage-2 register-contract entry `nes_XXXX_trace`: X in B / Y in C as the
+    /// block's contract says; the canonical label before it is the
+    /// HRAM-reload stub.
+    Carry,
 }
 
 /// Emitter-supplied identity of a NES block label.
@@ -320,8 +324,25 @@ pub fn report_entry_reloads(tag: &str, m: &MirBuf) {
     }
     let slots = [Loc::NesA, Loc::NesX, Loc::NesY, Loc::NesSp];
     let (mut blocks, mut reloads, mut insts) = (0usize, [0usize; 4], 0usize);
+    // Stage 2: a canonical NES label directly followed by its
+    // register-contract entry (EntryKind::Carry) is the HRAM-reload stub
+    // that only runs on dynamic/canonical entries; its reloads are reported
+    // separately.
+    let (mut stubs, mut stub_reloads) = (0usize, [0usize; 4]);
+    let carry_at: Vec<usize> = m.block_metas().iter().filter(|(_, x)| x.kind == EntryKind::Carry).map(|(i, _)| *i).collect();
     for b in m.blocks() {
         if b.label.is_none() { continue; }
+        if carry_at.contains(&b.end) && b.meta.is_some_and(|x| x.kind == EntryKind::Canonical) {
+            stubs += 1;
+            for line in &m.lines()[b.start..b.end] {
+                let Item::Inst(i) = &line.item else { continue };
+                insts += 1;
+                for (k, s) in slots.iter().enumerate() {
+                    if i.uses.contains(*s) && i.uses != LocSet::ALL { stub_reloads[k] += 1; }
+                }
+            }
+            continue;
+        }
         blocks += 1;
         let mut written = LocSet::EMPTY;
         let mut seen = LocSet::EMPTY;
@@ -343,6 +364,12 @@ pub fn report_entry_reloads(tag: &str, m: &MirBuf) {
         m.built_count(), parsed.len().saturating_sub(m.built_count()),
         reloads[0], reloads[1], reloads[2], reloads[3]
     );
+    if stubs > 0 {
+        eprintln!(
+            "mir-stats[{tag}]: {stubs} register-contract stubs (dynamic entries only) reload X {} Y {}",
+            stub_reloads[1], stub_reloads[2]
+        );
+    }
 }
 
 impl fmt::Write for MirBuf {

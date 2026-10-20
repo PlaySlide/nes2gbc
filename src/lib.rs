@@ -2,6 +2,7 @@ pub mod banked;
 pub mod overlay;
 pub mod assets;
 pub mod cfg;
+pub mod clobbers;
 pub mod cpu6502;
 pub mod emit_common;
 pub mod ines;

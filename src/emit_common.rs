@@ -260,6 +260,33 @@ pub(crate) fn emit_known_target(
     }
 }
 
+/// Shadow-flag test of a 6502 conditional branch: jumps to the following
+/// anonymous label (`:+`) when the branch is NOT taken.
+pub(crate) fn emit_branch_skip(out: &mut MirBuf, flag: Flag, when: bool) {
+    match flag {
+        Flag::Carry => {
+            out.ins("ldh", &["a", "[nes_c_shadow]"], None);
+            out.ins("and", &["a"], None);
+            out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
+        }
+        Flag::Zero => {
+            out.ins("ldh", &["a", "[nes_z_shadow]"], None);
+            out.ins("and", &["a"], None);
+            out.ins("jr", &[format!("{}", if when { "nz" } else { "z" }).as_str(), ":+"], None);
+        }
+        Flag::Negative => {
+            out.ins("ldh", &["a", "[nes_n_shadow]"], None);
+            out.ins("bit", &["7", "a"], None);
+            out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
+        }
+        _ => {
+            out.ins("ldh", &["a", "[nes_p]"], None);
+            out.ins("and", &[format!("${:02X}", flag_mask(flag)).as_str()], None);
+            out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
+        }
+    }
+}
+
 pub(crate) fn emit_static_control(
     out: &mut MirBuf,
     ops: &[IrOp],
@@ -275,28 +302,7 @@ pub(crate) fn emit_static_control(
 
     match ops[0] {
         IrOp::Branch { flag, when, target } if banks.contains_key(&target) => {
-            match flag {
-                Flag::Carry => {
-                    out.ins("ldh", &["a", "[nes_c_shadow]"], None);
-                    out.ins("and", &["a"], None);
-                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
-                }
-                Flag::Zero => {
-                    out.ins("ldh", &["a", "[nes_z_shadow]"], None);
-                    out.ins("and", &["a"], None);
-                    out.ins("jr", &[format!("{}", if when { "nz" } else { "z" }).as_str(), ":+"], None);
-                }
-                Flag::Negative => {
-                    out.ins("ldh", &["a", "[nes_n_shadow]"], None);
-                    out.ins("bit", &["7", "a"], None);
-                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
-                }
-                _ => {
-                    out.ins("ldh", &["a", "[nes_p]"], None);
-                    out.ins("and", &[format!("${:02X}", flag_mask(flag)).as_str()], None);
-                    out.ins("jr", &[format!("{}", if when { "z" } else { "nz" }).as_str(), ":+"], None);
-                }
-            }
+            emit_branch_skip(out, flag, when);
             emit_static_target(out, target, current_bank, banks, section_offs, section_pc);
             out.label("");
             true
