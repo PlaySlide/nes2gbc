@@ -234,3 +234,26 @@ same-host-bank only. `NES2GBC_DEBUG_TRACE` builds disable it.
   edges whose successor's first MIR use is A.
 - Text passes (cache_a_in_blocks, a-cache, de-cache) must learn the
   `_trace` stub convention first.
+
+## Stage 3 (rewrite/flags-stage3): lazy flags — result: no default change
+
+Real work per NES frame (GB cycles, nwork.py frames 200-800) vs c436b6b:
+
+| pass | smb | dk | ic | bf | kf | ih | bm | eb | z | c | m | v |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 3a NROM NMI-poll edges (`NES2GBC_NMI_EDGES_NROM=1`) | -1.23% | -0.06 | -0.04 | -0.34 | 0 | +0.35* | -0.11 | +0.02 | 0 | 0 | 0 | 0 |
+| 3b host carry (`NES2GBC_HOST_C=1`) | +0.33 | ~0 | ~0 | ~0 | ~0 | ~0 | -0.12 | ~0 | ~0 | ~0 | -0.18 | ~0 |
+
+(*) path noise (~±0.5%). Removed flag stores in NROM wait loops are absorbed by
+extra spin iterations, so flag-share drops (ic 10.7->8.5%) do not become real work.
+3a FAILS the SMB bench heavy RAM gate (ram@400..1100 diverge), so it is opt-in
+and unproven; 3b is neutral so opt-in. The TSX taint refinement
+(`NES2GBC_TSX_TAINT=0` to disable) is on but proves no Contra/Castlevania TSX
+harmless, so it changes nothing. Defaults are byte-identical to c436b6b (24 builds).
+
+Step 2 (banked exits): an unsound bound (all exits treat Z/N/C as dead) is
+c -3.55%, v -4.83%, z -3.24%, m -1.10%. A sound interpreter-entry model (flags
+the first 6502 instruction at the entry PC defines in every PRG bank the stub's
+cp chain leaves to the interpreter) recovers 0 stores: the fallback banks hold
+non-flag-defining bytes at almost every stub PC. Recovering the bound needs a
+PRG-bank value analysis (prove the fallback unreachable) — not done.

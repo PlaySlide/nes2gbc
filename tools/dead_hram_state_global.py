@@ -265,8 +265,9 @@ def main(path: str) -> None:
     nmi_h = None
     env = __import__("os").environ
     # Stage 3: the same model holds for single-view (NROM-style) builds; the
-    # banked-only restriction is lifted unless NES2GBC_NMI_EDGES_NROM=0.
-    nmi_ok = banked_build or env.get("NES2GBC_NMI_EDGES_NROM", "1") != "0"
+    # banked-only restriction is lifted only with NES2GBC_NMI_EDGES_NROM=1 (opt-in:
+    # it diverges SMB RAM from the reference in the bench heavy gate; unproven).
+    nmi_ok = banked_build or env.get("NES2GBC_NMI_EDGES_NROM") == "1"
     tsx_pcs = sorted({x[0] for x in insn_of if x and x[1] == "Tsx"})
     if tsx_pcs and env.get("NES2GBC_TSX_TAINT", "1") != "0":
         # A TSX only matters if the stack pointer it copies can address the
