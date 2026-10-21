@@ -71,3 +71,15 @@ The GBC's 160x144 screen is currently a hardware viewport into the NES-style 256
 NMI is checked at translated basic-block boundaries rather than cycle-by-cycle. When a VBlank NMI fires, the runtime pushes a 6502-compatible interrupt frame onto the virtual NES stack and dispatches the translated NMI vector. RTI restores the virtual status/PC and re-enters the generated-PC dispatcher.
 
 This is intentionally approximate timing but preserves the program-level interrupt structure used by conventional NES games.
+
+## Idle spins (NES2GBC_HALT_IDLE)
+
+`src/idle.rs` proves single-block 6502 self-loops that only read NES RAM/PRG RAM
+(loads, compares, BIT, AND/ORA, branches, `JMP *`) and lists them in
+`runtime/generated.idle.txt`; `tools/halt_idle_loops.py` retargets their
+back-edges to a stub that HALTs until the next host interrupt, or, when the
+main thread has overrun (2+ NMIs since the spin last ran), starts the next NMI
+immediately and repays the borrowed host VBlank in the VBlank ISR
+(`nes_idle_debt`), so NMIs (and APU frames) never outpace host VBlanks by more
+than one. Opt out with `NES2GBC_HALT_IDLE=0` (byte-identical to the previous
+output).

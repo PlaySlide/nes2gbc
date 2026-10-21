@@ -43,6 +43,9 @@ MACRO BOOT_INIT_BODY
     ld [nes_controller_strobe], a
     ld [nes_controller_shift], a
     ldh [nes_host_vblank_pending], a
+IF DEF(NES2GBC_HALT_IDLE)
+    ld [nes_idle_debt], a
+ENDC
     ld [nes_vram_unlocked], a
     ld [nes_nmi_active], a
     ld [nes_oam_dirty], a
@@ -704,6 +707,22 @@ ENDC
 
     ; This host frame was presented from a completed NES state, so it may
     ; also become the next translated NES NMI event.
+IF DEF(NES2GBC_HALT_IDLE)
+    ; ...unless an idle spin already started that NMI early (repay it). A
+    ; snapshot-publishing ISR continues to .pace_credit, which repays there.
+    ld a, [nes_idle_debt]
+    and a
+    jr z, .idle_no_debt
+IF !DEF(NES2GBC_NO_PACING)
+    ld a, [nes_pace_isr_active]
+    and a
+    jr nz, .done
+ENDC
+    xor a
+    ld [nes_idle_debt], a
+    jr .done
+.idle_no_debt:
+ENDC
     ld a, $01
     ldh [nes_host_vblank_pending], a
 .done:
@@ -748,6 +767,17 @@ IF !DEF(NES2GBC_NO_PACING)
     ; Never more than one NMI start per host VBlank (60 NES fps cap).
     xor a
     ldh [nes_host_vblank_pending], a
+IF DEF(NES2GBC_HALT_IDLE)
+    ; An idle-spin early NMI start owes this VBlank: repay instead of credit.
+    ld a, [nes_idle_debt]
+    and a
+    jr z, .idle_credit
+    xor a
+    ld [nes_idle_debt], a
+    jr .pace_done
+.idle_credit:
+    xor a
+ENDC
 IF DEF(NES2GBC_CATCHUP)
     ; Bank this VBlank (bounded) for later short frames to catch up.
     ld a, [nes_pace_credit]

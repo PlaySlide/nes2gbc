@@ -1632,6 +1632,11 @@ ENDC
 
     ld a, $01
     ld [nes_nmi_active], a
+IF DEF(NES2GBC_HALT_IDLE)
+    ld a, [nes_idle_nmis]
+    inc a
+    ld [nes_idle_nmis], a
+ENDC
 IF DEF(NES2GBC_APU)
     ; One APU frame-sequencer frame per delivered NES NMI (= emulated NES
     ; frame), so APU timing follows emulation speed. Preserves BC/DE/HL.

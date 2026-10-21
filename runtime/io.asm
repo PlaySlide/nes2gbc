@@ -251,6 +251,14 @@ nes_dispatch_dm_hi:     ds $80
 ; idling for the next VBlank. The just-completed frame's publishable state is
 ; snapshotted at that handoff and the VBlank ISR publishes the snapshot while
 ; the next NMI keeps running. See nes_pace_* in cpu.asm and main.asm.
+IF DEF(NES2GBC_HALT_IDLE)
+; Idle-spin back-edge stubs (tools/halt_idle_loops.py).
+SECTION "NES idle spin state", WRAM0
+nes_idle_nmis:          ds 1 ; translated NMIs delivered (mod 256)
+nes_idle_last:          ds 1 ; nes_idle_nmis at the last spin back-edge
+nes_idle_debt:          ds 1 ; NMI started early at a spin, owes a host VBlank
+ENDC
+
 SECTION "NES pacing state", WRAM0[$CBA1]
 nes_pace_credit:        ds 1 ; a host VBlank elapsed while an NMI was active
 nes_pace_unpublished:   ds 1 ; last completed NMI frame not yet published

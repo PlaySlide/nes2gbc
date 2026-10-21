@@ -55,6 +55,7 @@ generate:
 	@test -n "$(ROM)" || (echo "ROM is required, e.g. make gbc ROM=game.nes" >&2; exit 2)
 	@if [ "$(APU)" = "1" ]; then echo 'DEF NES2GBC_APU EQU 1 ; make generate APU=1' > runtime/generated_config.inc; \
 	else echo '; make generate APU=0: NES APU emulation disabled' > runtime/generated_config.inc; fi
+	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
@@ -173,6 +174,7 @@ generate:
 		# Normalize short/long NES-label jumps after the final selected pass so \
 		# debug/pass-isolation builds cannot leave an out-of-range JR behind. \
 		if [ "$(POSTPASS_THROUGH)" = "all" ]; then python3 tools/outline_nmi_polls.py runtime/generated.asm; fi; \
+		if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then python3 tools/halt_idle_loops.py runtime/generated.asm; fi; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 	fi
 

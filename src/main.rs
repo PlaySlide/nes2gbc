@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::{collections::BTreeMap, env, fs, path::PathBuf, process::ExitCode};
 
-use nes2gbc::{assets, banked, cfg, cpu6502, ines, overlay, recompile, superblock};
+use nes2gbc::{assets, banked, cfg, cpu6502, idle, ines, overlay, recompile, superblock};
 
 fn print_hot_profile(graph: &cfg::ControlFlowGraph) {
     let mut mnemonics: BTreeMap<String, usize> = BTreeMap::new();
@@ -495,6 +495,26 @@ fn main() -> ExitCode {
                 eprintln!("error writing {}: {err}", views_path.display());
                 return ExitCode::FAILURE;
             }
+        }
+        // Provable idle spins (src/idle.rs) as asm labels for the opt-out
+        // NES2GBC_HALT_IDLE post-pass (tools/halt_idle_loops.py).
+        let mut idle_labels: BTreeSet<String> = BTreeSet::new();
+        if switch_lo_views.is_empty() {
+            for pc in idle::idle_spin_heads(&graph) {
+                idle_labels.insert(format!("nes_{pc:04X}"));
+            }
+        } else {
+            for (bank, g) in &switch_lo_views {
+                for pc in idle::idle_spin_heads(g) {
+                    idle_labels.insert(if pc >= 0xC000 { format!("nes_{pc:04X}") } else { format!("nes_m2_b{bank:02X}_{pc:04X}") });
+                }
+            }
+        }
+        let idle_txt: String = idle_labels.iter().map(|l| format!("{l}\n")).collect();
+        let idle_path = parent.join(format!("{stem}.idle.txt"));
+        if let Err(err) = fs::write(&idle_path, idle_txt) {
+            eprintln!("error writing {}: {err}", idle_path.display());
+            return ExitCode::FAILURE;
         }
         let cfg_path = parent.join(format!("{stem}.cfg.txt"));
         if let Err(err) = fs::write(&cfg_path, cfg_txt) {

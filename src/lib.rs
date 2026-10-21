@@ -3,6 +3,7 @@ pub mod overlay;
 pub mod assets;
 pub mod cfg;
 pub mod cpu6502;
+pub mod idle;
 pub mod ines;
 pub mod ir;
 pub mod lr35902;
