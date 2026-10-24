@@ -709,9 +709,19 @@ ENDC
     ; address ladder; same result as nes_cpu_read.prg_ram (BC preserved).
     ld a, h
     cp $60
+IF DEF(NES2GBC_KEEP_BC_READS)
+    ; tools/keep_bc_reads.py removed the callers' push bc/pop bc: B and C
+    ; survive every path of this helper (nes_cpu_read's PPU/APU/controller
+    ; paths clobber them, so that fallback saves BC itself).
+    jp c, nes_cpu_read_keep_bc
+IF DEF(NES2GBC_DEBUG_TRACE)
+    jp nes_cpu_read_keep_bc
+ENDC
+ELSE
     jp c, nes_cpu_read
 IF DEF(NES2GBC_DEBUG_TRACE)
     jp nes_cpu_read
+ENDC
 ENDC
     ldh a, [rSVBK]
     push af
@@ -732,6 +742,20 @@ ENDC
 ELSE
     jp nz, nes_cpu_read.prg
     jp nes_cpu_read
+ENDC
+
+IF DEF(NES2GBC_KEEP_BC_READS)
+; nes_cpu_read with BC preserved (fallback of nes_cpu_read_hi[_view]); same
+; A/flags/side effects as nes_cpu_read (pop bc keeps AF).
+nes_cpu_read_keep_bc:
+    ; A = H on entry. RAM mirrors ($0000-$1FFF) keep BC in nes_cpu_read's .ram
+    ; path already: skip the save/restore (Zelda's (zp),Y into RAM).
+    cp $20
+    jp c, nes_cpu_read.ram
+    push bc
+    call nes_cpu_read
+    pop bc
+    ret
 ENDC
 
 IF DEF(NES2GBC_RAM_INTERP)

@@ -177,6 +177,7 @@ generate:
 		if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then python3 tools/halt_idle_loops.py runtime/generated.asm; fi; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 		if [ "$(POSTPASS_THROUGH)" = "all" ]; then python3 tools/selfloop_promote.py runtime/generated.asm; fi; \
+		if [ "$(POSTPASS_THROUGH)" = "all" ] && [ "$${NES2GBC_KEEP_BC_READS:-1}" != "0" ]; then python3 tools/keep_bc_reads.py runtime/generated.asm; fi; \
 	fi
 
 gbc: generate
