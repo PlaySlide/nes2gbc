@@ -15,7 +15,9 @@ jobs:
       - name: Check
         run: cargo check --all-targets
       - name: Post-pass regression tests
-        run: python3 tools/test_dead_terminal_zn.py
+        run: |
+          python3 tools/test_dead_terminal_zn.py
+          python3 tools/test_selfloop_promote.py
 
   end-to-end:
     runs-on: ubuntu-latest
