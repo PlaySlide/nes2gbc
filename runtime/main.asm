@@ -1,5 +1,9 @@
 ; Build configuration written by `make generate` (APU=1 defines NES2GBC_APU).
 INCLUDE "generated_config.inc"
+IF !DEF(NES2GBC_DISPATCH_ADD)
+    ; Dispatch-table bank = high nibble of the NES PC + this (tables at banks 32-39).
+    DEF NES2GBC_DISPATCH_ADD EQU 24
+ENDC
 
 ; nes2gbc Game Boy Color runtime skeleton.
 INCLUDE "hardware.inc"

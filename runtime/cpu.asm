@@ -230,7 +230,7 @@ ENDC
     ld a, h
     swap a
     and $0F
-    add $18
+    add NES2GBC_DISPATCH_ADD
     ld [$2000], a
 .tbl_win_start::
     xor a

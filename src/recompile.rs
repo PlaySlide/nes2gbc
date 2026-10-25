@@ -55,12 +55,31 @@ fn select_reachable(graph: &ControlFlowGraph, reset: u16, limit: usize) -> BTree
     selected
 }
 
-const DISPATCH_BANK_START: u16 = 32;
-const CODE_BANK_START: u16 = 40;
 const ESTIMATED_BANK_BUDGET: usize = 0x3000;
 
 fn estimated_block_size(block: &crate::cfg::BasicBlock) -> usize {
     64 + block.instructions.len() * 96
+}
+
+/// First ROM bank of the 8 dispatch-table banks (code banks follow). 32 unless the
+/// cartridge's raw PRG + CHR + converted CHR banks need more room
+/// (NES2GBC_FIXED_LAYOUT=1 keeps 32 and the old overflow assert).
+static DISPATCH_BASE: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(32);
+pub fn dispatch_bank_start() -> u16 {
+    DISPATCH_BASE.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub fn code_bank_start() -> u16 {
+    dispatch_bank_start() + 8
+}
+/// Choose the dispatch base for a cartridge (see emit_runtime_config's layout).
+pub fn set_layout(mapper: u16, prg_len: usize, chr_len: usize) {
+    let prg_banks = ((prg_len + 0x3FFF) / 0x4000).max(1);
+    let chr_banks = ((chr_len + 0x1FFF) / 0x2000).max(1);
+    let base = if matches!(mapper, 1 | 2) { 1 + prg_banks } else { 3 };
+    let need = (base + 2 * chr_banks) as u16;
+    let start = if std::env::var_os("NES2GBC_FIXED_LAYOUT").is_some() { 32 } else { need.max(32) };
+    let start = std::env::var("NES2GBC_FORCE_DISPATCH_BASE").ok().and_then(|v| v.parse().ok()).filter(|&b| b >= need).unwrap_or(start);
+    DISPATCH_BASE.store(start, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn assign_code_banks(
@@ -68,7 +87,7 @@ fn assign_code_banks(
     selected: &BTreeSet<u16>,
 ) -> BTreeMap<u16, u16> {
     let mut assigned = BTreeMap::new();
-    let mut bank = CODE_BANK_START;
+    let mut bank = code_bank_start();
     let mut used = 0usize;
 
     for addr in selected {
@@ -94,7 +113,7 @@ fn assign_code_banks(
 
 fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
     for segment in 0u16..8 {
-        let bank = DISPATCH_BANK_START + segment;
+        let bank = dispatch_bank_start() + segment;
         let base = 0x8000u16 + segment * 0x1000;
 
         writeln!(
@@ -963,7 +982,7 @@ pub fn emit_runtime_config(config: &RuntimeConfig<'_>) -> String {
     };
     let chr_gbc_bank_base = chr_bank_base + chr_banks_8k;
     assert!(
-        chr_gbc_bank_base + chr_banks_8k <= 32,
+        chr_gbc_bank_base + chr_banks_8k <= dispatch_bank_start() as usize,
         "cartridge PRG/CHR data overlaps translated dispatch banks"
     );
 

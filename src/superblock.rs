@@ -1,3 +1,4 @@
+use crate::recompile::{code_bank_start, dispatch_bank_start};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
@@ -8,8 +9,6 @@ use crate::{
     recompile::EmitOptions,
 };
 
-const DISPATCH_BANK_START: u16 = 32;
-const CODE_BANK_START: u16 = 40;
 const ESTIMATED_BANK_BUDGET: usize = 0x3000;
 
 fn is_branch(m: crate::cpu6502::Mnemonic) -> bool {
@@ -54,7 +53,7 @@ fn assign_code_banks(
     selected: &BTreeSet<u16>,
 ) -> BTreeMap<u16, u16> {
     let mut assigned = BTreeMap::new();
-    let mut bank = CODE_BANK_START;
+    let mut bank = code_bank_start();
     let mut used = 0usize;
 
     for addr in selected {
@@ -77,7 +76,7 @@ fn assign_code_banks(
 
 fn emit_dispatch_tables(out: &mut String, selected: &BTreeSet<u16>) {
     for segment in 0u16..8 {
-        let bank = DISPATCH_BANK_START + segment;
+        let bank = dispatch_bank_start() + segment;
         let base = 0x8000u16 + segment * 0x1000;
         writeln!(
             out,

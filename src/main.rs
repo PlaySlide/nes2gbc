@@ -463,6 +463,7 @@ fn main() -> ExitCode {
             max_blocks,
             debug_trace,
         };
+        recompile::set_layout(cart.mapper as u16, cart.prg_rom.len(), cart.chr_rom.len());
         let ram_overlay = if (cart.mapper == 1 || cart.mapper == 2)
             && env::var_os("NES2GBC_NO_RAM_OVERLAY").is_none()
         {
@@ -637,13 +638,24 @@ fn main() -> ExitCode {
             let existing = fs::read_to_string(&config_path).unwrap_or_default();
             let mut text: String = existing
                 .lines()
-                .filter(|l| !l.starts_with("DEF NES2GBC_RAM_OVERLAY "))
+                .filter(|l| {
+                    !l.starts_with("DEF NES2GBC_RAM_OVERLAY ")
+                        && !l.starts_with("DEF NES2GBC_DISPATCH_ADD ")
+                })
                 .map(|l| format!("{l}\n"))
                 .collect();
             let mut changed = text != existing;
             if !text.lines().any(|l| l.starts_with("DEF NES2GBC_RAM_INTERP ")) {
                 text.push_str(line);
                 text.push('\n');
+                changed = true;
+            }
+            if recompile::dispatch_bank_start() != 32 {
+                // Dispatch tables moved above a large cartridge's PRG/CHR banks.
+                text.push_str(&format!(
+                    "DEF NES2GBC_DISPATCH_ADD EQU {} ; dispatch-table bank = high nibble + this\n",
+                    recompile::dispatch_bank_start() - 8
+                ));
                 changed = true;
             }
             if ram_overlay.is_some() {

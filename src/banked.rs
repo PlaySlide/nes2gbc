@@ -1,3 +1,4 @@
+use crate::recompile::{code_bank_start, dispatch_bank_start};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
@@ -6,8 +7,6 @@ use crate::{
     recompile::EmitOptions,
 };
 
-const DISPATCH_BANK_START: u16 = 32;
-const CODE_BANK_START: u16 = 40;
 const ESTIMATED_BANK_BUDGET: usize = 0x3000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -299,7 +298,7 @@ fn label(id: BlockId) -> String {
 
 fn emit_dispatch_tables(out: &mut String, addresses: &BTreeSet<u16>) {
     for segment in 0u16..8 {
-        let bank = DISPATCH_BANK_START + segment;
+        let bank = dispatch_bank_start() + segment;
         let base = 0x8000u16 + segment * 0x1000;
         writeln!(
             out,
@@ -946,7 +945,7 @@ pub fn emit_mapper2_cfgs(
     }
 
     let mut assigned = BTreeMap::new();
-    let mut host_bank = CODE_BANK_START;
+    let mut host_bank = code_bank_start();
     let mut used = 0usize;
     {
         let mut i = 0;

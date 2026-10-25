@@ -868,7 +868,7 @@ nes_isr_fix_bank_romx:
     ld a, [nes_dispatch_cache_pc_hi]
     swap a
     and $0F
-    add $18
+    add NES2GBC_DISPATCH_ADD
     jp .set
 .rom0:
 IF DEF(NES2GBC_RAM_OVERLAY)
