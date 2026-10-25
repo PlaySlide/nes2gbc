@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,6 +119,22 @@ def leaf_body(lines: list[str], block: Block) -> tuple[list[str], int] | None:
 
     rts_comment_i = block.insns[-1][0]
     body = strip_profile_trace(lines[block.label_i + 1:rts_comment_i])
+    # The superblock epilogue after the RTS comment materializes resident
+    # X/Y (and A) into nes_x/nes_y/nes_a; the caller reads them from HRAM, so
+    # the private copy must keep those stores (only the stack pop is dropped).
+    # NES2GBC_NATIVE_LEAF_EPILOGUE=0 restores the old (buggy) behaviour.
+    if os.environ.get('NES2GBC_NATIVE_LEAF_EPILOGUE', '1') != '0':
+        tail: list[str] = []
+        for line in lines[rts_comment_i + 1:block.end_i]:
+            c = code(line)
+            if c.startswith('PROFILE_INC nes_profile_rts_pop') or 'RTS return pop' in line:
+                break
+            tail.append(line)
+        else:
+            return None
+        if any(code(l).startswith(('jp ', 'jr ', 'call ', 'ret', 'ld hl')) or 'nes_sp' in l for l in tail):
+            return None
+        body = body + strip_profile_trace(tail)
     if any(TRACE_LABEL_RE.fullmatch(code(line)) for line in body):
         return None
     joined = ''.join(body)
