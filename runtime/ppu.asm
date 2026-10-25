@@ -458,6 +458,72 @@ ENDC
     ; A complete X/Y pair is ready. During translated NMI, capture the first
     ; pair as the top/HUD scroll and later pairs as the playfield scroll. This
     ; recognizes the common NES raster-split pattern used by Balloon Fight B.
+IF DEF(NES2GBC_HUD_BOTTOM)
+    ; Bottom-HUD games (data/hud_bottom.txt): the last $2005 pair of an NMI is
+    ; the HUD (top region of the host screen, fixed at NES line
+    ; NES2GBC_HUD_BOTTOM) and the pair before it the playfield (bottom region).
+    ; nes_split_pending_* holds the previous pair, raw.
+    ld a, [nes_nmi_active]
+    and a
+    jp z, .scroll_normal
+    ; Only a pair that differs from the previous one in this NMI is a split
+    ; (menus/titles write one pair, or the same pair twice: ordinary path).
+    ldh a, [nes_scroll_pair_count]
+    and a
+    jr nz, .hb_notfirst
+    ld a, $01
+    ld [nes_hb_n], a
+    jr .hb_orig
+.hb_notfirst:
+    ld a, [nes_hb_n]
+    inc a
+    ld [nes_hb_n], a
+    ldh a, [nes_split_pending_x]
+    ld b, a
+    ld a, [nes_ppu_scroll_x]
+    cp b
+    jr nz, .hb_split
+    ldh a, [nes_split_pending_y]
+    ld b, a
+    ld a, [nes_ppu_scroll_y]
+    cp b
+    jr nz, .hb_split
+    ldh a, [nes_split_pending_ctrl]
+    ld b, a
+    ld a, [nes_ppuctrl]
+    cp b
+    jr nz, .hb_split
+    ; Identical pairs: a third or later write in one NMI still means the
+    ; HUD/playfield writes of a bottom-HUD game (no scroll change yet).
+    ld a, [nes_hb_n]
+    cp $03
+    jr c, .hb_orig
+.hb_split:
+    ldh a, [nes_split_pending_x]
+    ldh [nes_split_bottom_x], a
+    ldh a, [nes_split_pending_y]
+    ldh [nes_split_bottom_y], a
+    ldh a, [nes_split_pending_ctrl]
+    ldh [nes_split_bottom_ctrl], a
+    ld a, [nes_ppu_scroll_x]
+    ldh [nes_split_top_x], a
+    ldh [nes_split_pending_x], a
+    ld a, [nes_ppu_scroll_y]
+    ldh [nes_split_pending_y], a
+    ld a, [nes_ppuctrl]
+    ldh [nes_split_top_ctrl], a
+    ldh [nes_split_pending_ctrl], a
+    ld a, NES2GBC_HUD_BOTTOM
+    ldh [nes_split_top_y], a
+    ld a, $02
+    ldh [nes_scroll_pair_count], a
+    ld a, $01
+    ldh [nes_split_active], a
+    ldh [nes_scroll_dirty], a
+    ret
+.hb_orig:
+ENDC
+
     ld a, [nes_nmi_active]
     and a
     jp z, .scroll_normal

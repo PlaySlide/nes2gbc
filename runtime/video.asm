@@ -47,6 +47,12 @@ nes_addr_lock:      ds 1   ; PPUADDR scroll decoded this NMI (later PPUCTRL writ
 nes_addr_chain:     ds 1   ; seam LYC armed by the bottom-split ISR
 ENDC
 
+IF DEF(NES2GBC_HUD_BOTTOM)
+SECTION "NES hud-bottom state", WRAM0
+nes_hb_n:     ds 1   ; $2005 pairs seen in this NMI
+nes_hb_stale: ds 1   ; nametable queue overflowed during a hidden build
+ENDC
+
 SECTION "NES video bridge", ROM0
 
 nes_video_init:
@@ -200,6 +206,59 @@ nes_video_copy:
 ; point of view: the LCD is disabled during VBlank before the first live-map
 ; write and is not re-enabled until the whole transaction is copied.
 nes_video_flush_nametable_queue_atomic:
+IF DEF(NES2GBC_HUD_BOTTOM)
+    ; The staging queue overflowed (a hidden whole-screen build): the lost
+    ; entries can never be replayed, and a permanently active raster split
+    ; suppresses the usual BG-on reconcile, leaving the physical maps stale.
+    ; Reproject the authoritative virtual nametables now, resync the published
+    ; shadow and let the stitch rebuild itself.
+    ld a, [nes_nametable_queue_overflow]
+    and a
+    jr z, .hb_chk
+    ; Remember the loss (a hidden build can overflow for many frames) and let
+    ; the ordinary flush run; reconcile once BG rendering is visible again.
+    ld a, $01
+    ld [nes_hb_stale], a
+    xor a
+    ld [nes_nametable_queue_overflow], a
+.hb_chk:
+    ld a, [nes_hb_stale]
+    and a
+    jr z, .hb_no_ovf
+    ld a, [nes_ppumask]
+    bit 3, a
+    jr z, .hb_no_ovf
+    xor a
+    ld [nes_hb_stale], a
+    call nes_video_rebuild_generic_maps_atomic
+    xor a
+    ld [nes_hstitch_valid], a
+    ld hl, nes_nametable_ram
+    ld de, nes_nametable_published_shadow
+.hb_copy:
+    ld a, $01
+    ldh [rSVBK], a
+    ld c, [hl]
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, c
+    ld [de], a
+    inc hl
+    inc de
+    ld a, h
+    cp HIGH(nes_nametable_ram) + 8
+    jr nz, .hb_copy
+    ld a, $01
+    ldh [rSVBK], a
+    xor a
+    ld [nes_nametable_queue_ptr_lo], a
+    ld [nes_nametable_queue_overflow], a
+    ld a, $D8
+    ld [nes_nametable_queue_ptr_hi], a
+    ret
+.hb_no_ovf:
+ENDC
+
     ; Empty queue?
     ld a, [nes_nametable_queue_ptr_hi]
     cp $D8

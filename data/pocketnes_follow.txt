@@ -866,3 +866,4 @@ da05d696 S 0003
 57daa34c S 0003
 2364a2b4 S 0003
 e657e187 S 0003
+49aeb3a6 C 0031 # Excitebike: fixed crop x=0, view_y=49 (NES line 81 at host line 32)

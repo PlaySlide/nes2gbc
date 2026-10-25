@@ -147,6 +147,27 @@ fn addr_scroll_hint(crc: u32) -> Option<u8> {
     None
 }
 
+const HUD_BOTTOM_DB: &str = include_str!("../data/hud_bottom.txt");
+
+/// Games whose HUD is the *bottom* band of the screen (playfield first, HUD
+/// after a sprite-0 split), e.g. Excitebike. The last scroll pair written in an
+/// NMI is the HUD, the pair before it the playfield. Data-driven:
+/// `<payload crc32> <HUD top NES line (hex)>` in data/hud_bottom.txt.
+fn hud_bottom_hint(crc: u32) -> Option<u8> {
+    if env::var_os("NES2GBC_NO_HUD_BOTTOM").is_some() {
+        return None;
+    }
+    for l in HUD_BOTTOM_DB.lines() {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let mut f = l.split_whitespace();
+        let (Some(c), Some(h)) = (f.next(), f.next()) else { continue };
+        if u32::from_str_radix(c, 16).ok() == Some(crc) {
+            return u8::from_str_radix(h, 16).ok();
+        }
+    }
+    None
+}
+
 fn emit_follow_hint_init(asm: &mut String, hint: Option<FollowHint>) {
     asm.push_str("\n; PocketNES-derived follow-camera hint\n");
     asm.push_str("SECTION \"Generated follow-camera metadata\", ROM0\n");
@@ -456,6 +477,9 @@ fn main() -> ExitCode {
         if let Some(n) = addr_scroll_hint(payload_crc) {
             asm.push_str(&format!("\n; NES2GBC_ADDR_SCROLL {n}\n"));
         }
+        if let Some(n) = hud_bottom_hint(payload_crc) {
+            asm.push_str(&format!("\n; NES2GBC_HUD_BOTTOM {n}\n"));
+        }
 
         // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the
         // interprocedural asm passes (tools/rts_return_sets.py).
@@ -633,6 +657,8 @@ mod follow_hint_tests {
     fn known_pocketnes_follow_hints_are_seeded() {
         assert_eq!(addr_scroll_hint(0xEAF7_ED72), Some(0x40));
         assert_eq!(addr_scroll_hint(0xD5C6_4257), None);
+        assert_eq!(hud_bottom_hint(0x49AE_B3A6), Some(0xC7));
+        assert_eq!(hud_bottom_hint(0xEAF7_ED72), None);
         assert_eq!(pocketnes_follow_hint(0x4013_49A8), Some(FollowHint::Sprite(8)));
         assert_eq!(pocketnes_follow_hint(0x703E_1948), Some(FollowHint::Sprite(0)));
         assert_eq!(pocketnes_follow_hint(0x4864_C304), Some(FollowHint::Sprite(8)));

@@ -1,0 +1,4 @@
+# <payload CRC32 hex> <HUD top NES line, hex>: games whose HUD is the bottom band (last $2005 pair per NMI = HUD,
+# the pair before it = playfield); the GB shows the HUD strip on top (like SMB), the playfield below.
+# Opt-out: NES2GBC_NO_HUD_BOTTOM=1
+49aeb3a6 c7 # Excitebike (HUD text from NES line 199)
