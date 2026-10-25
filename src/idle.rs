@@ -45,6 +45,17 @@ pub fn is_idle_spin(block: &BasicBlock) -> bool {
         })
 }
 
+/// A block that is a lone `JMP self`: it can only be left by an interrupt. When
+/// such a spin is reachable from the NMI handler, the handler "ends" by waiting
+/// for the next NMI to interrupt it (Slalom $A697) - there is never an RTI.
+pub fn is_forever_spin(block: &BasicBlock) -> bool {
+    matches!(block.instructions.as_slice(), [i] if i.def.mnemonic == N::Jmp && i.def.mode == M::Absolute && i.operand == block.start)
+}
+
+pub fn forever_spin_heads(graph: &ControlFlowGraph) -> Vec<u16> {
+    graph.blocks.values().filter(|b| is_forever_spin(b)).map(|b| b.start).collect()
+}
+
 pub fn idle_spin_heads(graph: &ControlFlowGraph) -> Vec<u16> {
     graph.blocks.values().filter(|b| is_idle_spin(b)).map(|b| b.start).collect()
 }

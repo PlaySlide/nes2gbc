@@ -1815,12 +1815,19 @@ pub fn emit_cfg_with_interrupts(
     // LDX #$FF / TXS / JMP $DA58). The runtime then has to retire the abandoned
     // NMI (NES2GBC_NMI_ABANDON, runtime/cpu.asm) and every block must keep its
     // NMI safe-point. Opt out: NES2GBC_NMI_ABANDON=0.
+    let nmi_reach = reachable_from_roots(graph, &selected, &[nmi]);
+    // A lone `JMP self` reachable from the NMI handler is how it "ends" when it
+    // waits for the next NMI to interrupt it (Slalom $A697): same retirement.
+    // Opt out: NES2GBC_NMI_SPIN=0.
+    let nmi_spin = std::env::var("NES2GBC_NMI_SPIN").map(|v| v != "0").unwrap_or(true)
+        && nmi_reach.iter().any(|a| graph.blocks.get(a).is_some_and(crate::idle::is_forever_spin));
     let nmi_abandon = std::env::var("NES2GBC_NMI_ABANDON").map(|v| v != "0").unwrap_or(true)
-        && reachable_from_roots(graph, &selected, &[nmi]).iter().any(|a| {
-            graph.blocks.get(a).is_some_and(|b| {
-                b.instructions.iter().any(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Txs)
-            })
-        });
+        && (nmi_spin
+            || nmi_reach.iter().any(|a| {
+                graph.blocks.get(a).is_some_and(|b| {
+                    b.instructions.iter().any(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Txs)
+                })
+            }));
     let nmi_nest = crate::recompile::nmi_reentrancy_guard(graph, &selected, nmi);
     let nmi_exclusive = if nmi_abandon || nmi_nest { BTreeSet::new() } else { nmi_exclusive };
     if nmi_abandon {

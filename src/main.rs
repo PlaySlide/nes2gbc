@@ -648,6 +648,26 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // Lone `JMP self` spins (src/idle.rs::is_forever_spin): the halt pass also
+        // retires an active NMI there (NES2GBC_NMI_SPIN).
+        let mut forever_labels: BTreeSet<String> = BTreeSet::new();
+        if switch_lo_views.is_empty() {
+            for pc in idle::forever_spin_heads(&graph) {
+                forever_labels.insert(format!("nes_{pc:04X}"));
+            }
+        } else {
+            for (bank, g) in &switch_lo_views {
+                for pc in idle::forever_spin_heads(g) {
+                    forever_labels.insert(if pc >= 0xC000 { format!("nes_{pc:04X}") } else { format!("nes_m2_b{bank:02X}_{pc:04X}") });
+                }
+            }
+        }
+        let forever_txt: String = forever_labels.iter().map(|l| format!("{l}\n")).collect();
+        let forever_path = parent.join(format!("{stem}.idle_forever.txt"));
+        if let Err(err) = fs::write(&forever_path, forever_txt) {
+            eprintln!("error writing {}: {err}", forever_path.display());
+            return ExitCode::FAILURE;
+        }
         let idle_txt: String = idle_labels.iter().map(|l| format!("{l}\n")).collect();
         let idle_path = parent.join(format!("{stem}.idle.txt"));
         if let Err(err) = fs::write(&idle_path, idle_txt) {

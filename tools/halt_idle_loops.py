@@ -36,10 +36,30 @@ def code(line: str) -> str:
     return line.split(";", 1)[0].strip()
 
 
-def stub(label: str) -> list[str]:
+def stub(label: str, forever: bool = False) -> list[str]:
     s = label
     return [
         f"{s}_hidle: ; tools/halt_idle_loops.py: spin back-edge",
+    ] + ([
+        # A lone JMP-self reachable from the NMI handler: the handler "ends" by
+        # waiting for the next NMI to interrupt it (no RTI). Hardware just keeps
+        # nesting frames; here retire it like RTI would: pop the NMI frame
+        # (SP = entry SP + 3) and clear nes_nmi_active so the next vblank is
+        # delivered. Only while an NMI is actually active.
+        "    ld a, [nes_nmi_active] ; NES2GBC_NMI_SPIN: retire the NMI that ended in JMP self",
+        "    and a",
+        f"    jr z, {s}_hidle_ns",
+        "    ld a, [nes_nmi_entry_sp]",
+        "    add 3",
+        "    ldh [nes_sp], a",
+        "    xor a",
+        "    ld [nes_nmi_active], a",
+        "IF !DEF(NES2GBC_NO_PACING)",
+        "    inc a",
+        "    ld [nes_pace_unpublished], a",
+        "ENDC",
+        f"{s}_hidle_ns:",
+    ] if forever else []) + [
         # lagging = 2+ NMIs since the previous back-edge (main thread overran)
         "    push hl",
         "    ld hl, nes_idle_last",
@@ -84,7 +104,11 @@ def main() -> int:
         print("halt_idle_loops: no idle list, skipped")
         return 0
     wanted = {l.strip() for l in idle_path.read_text().split() if l.strip()}
+    forever_path = asm_path.with_suffix(".idle_forever.txt")
+    forever = set(forever_path.read_text().split()) if forever_path.exists() else set()
     lines = asm_path.read_text().split("\n")
+    if not any(l.strip() == "; NES2GBC_NMI_ABANDON 1" for l in lines[:40]):
+        forever = set()
     heads = {}
     for i, l in enumerate(lines):
         m = GLOBAL_LABEL.match(l)
@@ -126,7 +150,7 @@ def main() -> int:
             p -= 1
         prev = code(lines[p]) if p >= 0 else ""
         guard = [] if (prev.startswith("SECTION") or UNCOND.match(prev)) else [f"    jr {label} ; halt_idle_loops fall-through guard"]
-        lines[i:i] = guard + stub(label)
+        lines[i:i] = guard + stub(label, label in forever)
         done.append(label)
     asm_path.write_text("\n".join(lines))
     print(f"halt_idle_loops: {len(done)} spin(s) {' '.join(sorted(done))}"

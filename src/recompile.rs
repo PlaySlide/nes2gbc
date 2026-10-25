@@ -654,11 +654,16 @@ fn emit_cfg_impl(
     // LDX #$FF / TXS / JMP $DA58). The runtime then has to notice the abandoned
     // NMI (see NES2GBC_NMI_ABANDON in runtime/cpu.asm) and every block must keep
     // its NMI safe-point. Opt out: NES2GBC_NMI_ABANDON=0.
+    // A lone `JMP self` reachable from the NMI handler is how it "ends" when it
+    // waits for the next NMI to interrupt it (Slalom $A697): same retirement.
+    // Opt out: NES2GBC_NMI_SPIN=0.
+    let nmi_spin_on = std::env::var("NES2GBC_NMI_SPIN").map(|v| v != "0").unwrap_or(true);
     let nmi_abandon = std::env::var("NES2GBC_NMI_ABANDON").map(|v| v != "0").unwrap_or(true)
         && interrupt_entries.is_some_and(|(nmi, _)| {
             reachable_from_roots(graph, &selected, &[nmi]).iter().any(|a| {
                 graph.blocks.get(a).is_some_and(|b| {
-                    b.instructions.iter().any(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Txs)
+                    (nmi_spin_on && crate::idle::is_forever_spin(b))
+                        || b.instructions.iter().any(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Txs)
                 })
             })
         });
