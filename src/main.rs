@@ -227,6 +227,9 @@ fn code_entries(crc: u32, prg: &[u8]) -> Vec<u16> {
         if f.len() < 2 || hex(f[0]) != Some(crc) {
             continue;
         }
+        if f[1] == "bank" {
+            continue; // per-bank seeds: see code_bank_entries
+        }
         if f[1] == "table" && f.len() >= 5 {
             let (Some(b), Some(n), Some(add)) = (hex(f[2]), f[3].parse::<u32>().ok(), hex(f[4])) else { continue };
             for i in 0..n {
@@ -243,6 +246,27 @@ fn code_entries(crc: u32, prg: &[u8]) -> Vec<u16> {
         } else {
             out.extend(f[1..].iter().filter_map(|t| hex(t)).map(|v| v as u16));
         }
+    }
+    out
+}
+
+/// Per-bank extra entries for banked (mapper 1/2) ROMs: lines `<crc> bank <n> <addr>...`
+/// (n decimal PRG bank, addr hex in $8000-$BFFF). Same opt-out as code_entries.
+fn code_bank_entries(crc: u32, bank: usize) -> Vec<u16> {
+    let mut out = Vec::new();
+    if env::var_os("NES2GBC_NO_CODE_ENTRIES").is_some() {
+        return out;
+    }
+    for l in CODE_ENTRIES_DB.lines() {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() < 4 || f[1] != "bank" || u32::from_str_radix(f[0], 16).ok() != Some(crc) {
+            continue;
+        }
+        if f[2].parse::<usize>().ok() != Some(bank) {
+            continue;
+        }
+        out.extend(f[3..].iter().filter_map(|t| u16::from_str_radix(t, 16).ok()).filter(|&v| (0x8000..0xC000).contains(&v)));
     }
     out
 }
@@ -503,6 +527,9 @@ fn main() -> ExitCode {
             if e >= 0xC000 {
                 shared_fixed_entries.insert(e);
             }
+        }
+        for (bank, seeds) in bank_seeds.iter_mut().enumerate() {
+            seeds.extend(code_bank_entries(payload_crc, bank));
         }
         let mut converged_views = Vec::new();
         let mut rounds = 0usize;
