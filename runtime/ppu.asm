@@ -374,12 +374,14 @@ ENDC
     ld a, [nes_mapper]
     and a
     jr nz, .mask_do_rebuild
+IF DEF(NES2GBC_TINY_SKIP_SMB_ONLY)
     ld a, [nes_mirroring]
     cp $01
     jr nz, .mask_do_rebuild
     ld a, [nes_prg_16k_mirror]
     and a
     jr nz, .mask_do_rebuild
+ENDC
     ld a, [nes_generic_hidden_change_count]
     cp $08
     jr nc, .mask_do_rebuild

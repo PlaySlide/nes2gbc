@@ -24,6 +24,9 @@ endif
 ifeq ($(PACING),0)
 RGBASM_FLAGS += -D NES2GBC_NO_PACING=1
 endif
+ifeq ($(TINY_SKIP_ALL),0)
+RGBASM_FLAGS += -D NES2GBC_TINY_SKIP_SMB_ONLY=1
+endif
 
 .PHONY: all clean
 all: $(OUTPUT)
