@@ -641,6 +641,7 @@ fn main() -> ExitCode {
                 .filter(|l| {
                     !l.starts_with("DEF NES2GBC_RAM_OVERLAY ")
                         && !l.starts_with("DEF NES2GBC_DISPATCH_ADD ")
+                        && !l.starts_with("DEF NES2GBC_CHR4K ")
                 })
                 .map(|l| format!("{l}\n"))
                 .collect();
@@ -656,6 +657,14 @@ fn main() -> ExitCode {
                     "DEF NES2GBC_DISPATCH_ADD EQU {} ; dispatch-table bank = high nibble + this\n",
                     recompile::dispatch_bank_start() - 8
                 ));
+                changed = true;
+            }
+            if cart.mapper == 1
+                && !cart.chr_rom.is_empty()
+                && !std::env::var("NES2GBC_NO_CHR4K").map(|v| v == "1").unwrap_or(false)
+            {
+                // MMC1 split 4 KiB CHR-ROM banking (opt out: NES2GBC_NO_CHR4K=1).
+                text.push_str("DEF NES2GBC_CHR4K EQU 1 ; MMC1 split 4 KiB CHR-ROM banking\n");
                 changed = true;
             }
             if ram_overlay.is_some() {

@@ -38,6 +38,10 @@ nes_mmc1_control:      ds 1
 nes_mmc1_chr0:         ds 1
 nes_mmc1_chr1:         ds 1
 nes_mmc1_prg:          ds 1
+IF DEF(NES2GBC_CHR4K)
+nes_chr4_cur0:         ds 1 ; 4 KiB CHR bank resident in pattern table 0 (VRAM bank 0)
+nes_chr4_cur1:         ds 1 ; 4 KiB CHR bank resident in pattern table 1 (VRAM bank 1)
+ENDC
 
 ; Mapper 1/2 CHR RAM uses two otherwise-free 4 KiB WRAMX banks. Mapper-0
 ; 16 KiB PRG caching also uses these banks, but CHR-RAM cartridges never take

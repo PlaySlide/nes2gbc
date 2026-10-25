@@ -1401,7 +1401,11 @@ nes_mmc1_apply:
     jr nz, .done
     ld a, [nes_mmc1_control]
     bit 4, a
+IF DEF(NES2GBC_CHR4K)
+    jr nz, .chr4k
+ELSE
     jr nz, .done
+ENDC
 
     ld a, [nes_mmc1_chr0]
     srl a
@@ -1415,6 +1419,26 @@ nes_mmc1_apply:
     ld a, b
     ld [nes_chr_bank], a
     call nes_upload_chr_bank
+IF DEF(NES2GBC_CHR4K)
+    jr .done
+.chr4k:
+    ; Split 4 KiB mode: CHR reg 0 maps pattern table 0, reg 1 pattern table 1.
+    ; Only halves that changed are re-uploaded. nes_chr_bank is invalidated so a
+    ; later switch back to 8 KiB mode always re-uploads.
+    ld a, [nes_chr_bank_mask]
+    add a
+    inc a
+    ld d, a
+    ld a, [nes_mmc1_chr0]
+    and d
+    ld b, a
+    ld a, [nes_mmc1_chr1]
+    and d
+    ld c, a
+    call nes_upload_chr_4k
+    ld a, $FF
+    ld [nes_chr_bank], a
+ENDC
 .done:
     ld a, $FF
     ld [$2000], a

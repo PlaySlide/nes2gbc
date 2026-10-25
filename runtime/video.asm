@@ -185,10 +185,89 @@ nes_upload_chr_bank:
     xor a
     ldh [rVBK], a
 
+IF DEF(NES2GBC_CHR4K)
+    ld a, [nes_chr_bank]
+    add a
+    ld [nes_chr4_cur0], a
+    inc a
+    ld [nes_chr4_cur1], a
+ENDC
+
     call nes_restore_code_bank
     ld a, [nes_saved_lcdc]
     ldh [rLCDC], a
     ret
+
+IF DEF(NES2GBC_CHR4K)
+; MMC1 split 4 KiB CHR mode: B = 4 KiB bank for pattern table 0, C = for table 1.
+; Re-uploads only a half that differs from the resident one (nes_chr4_cur0/1).
+nes_upload_chr_4k:
+    ld a, [nes_chr4_cur0]
+    cp b
+    jr nz, .go
+    ld a, [nes_chr4_cur1]
+    cp c
+    ret z
+.go:
+    push bc
+    ldh a, [rLCDC]
+    ld [nes_saved_lcdc], a
+    bit 7, a
+    jr z, .lcd_off
+.wait_vblank:
+    ldh a, [rLY]
+    cp 144
+    jr c, .wait_vblank
+    ldh a, [rLCDC]
+    and $7F
+    ldh [rLCDC], a
+.lcd_off:
+    pop bc
+    ld a, [nes_chr4_cur0]
+    cp b
+    jr z, .half1
+    ld a, b
+    ld [nes_chr4_cur0], a
+    push bc
+    ld d, 0
+    call nes_chr4_copy_half
+    pop bc
+.half1:
+    ld a, [nes_chr4_cur1]
+    cp c
+    jr z, .done
+    ld a, c
+    ld [nes_chr4_cur1], a
+    ld d, 1
+    call nes_chr4_copy_half
+.done:
+    xor a
+    ldh [rVBK], a
+    call nes_restore_code_bank
+    ld a, [nes_saved_lcdc]
+    ldh [rLCDC], a
+    ret
+
+; A = 4 KiB CHR bank, D = VRAM bank (0/1): copy it to $8000.
+nes_chr4_copy_half:
+    ld e, a
+    srl a
+    ld b, a
+    ld a, [nes_chr_gbc_bank_base]
+    add b
+    ld [$2000], a
+    ld a, d
+    ldh [rVBK], a
+    ld a, e
+    and 1
+    swap a
+    add $40
+    ld h, a
+    ld l, 0
+    ld de, $8000
+    ld bc, $1000
+    jp nes_video_copy
+ENDC
 
 nes_video_copy:
 .loop:
