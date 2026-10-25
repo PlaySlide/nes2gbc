@@ -321,40 +321,11 @@ nes_restore_code_bank:
     ret
 
 nes_unimplemented:
-    ; Snapshot the computed-control-flow state before stopping. This has zero
-    ; cost in normal execution and is especially useful for SMB's JumpEngine,
-    ; which leaves its caller pointer in $04/$05 and computed target in $06/$07.
-    ld a, [nes_dispatch_cache_pc_lo]
-    ldh [nes_fault_target_lo], a
-    ld a, [nes_dispatch_cache_pc_hi]
-    ldh [nes_fault_target_hi], a
-    ldh a, [nes_sp]
-    ldh [nes_fault_sp_snapshot], a
-    ldh a, [nes_a]
-    ldh [nes_fault_a_snapshot], a
-    ldh a, [nes_x]
-    ldh [nes_fault_x_snapshot], a
-    ldh a, [nes_y]
-    ldh [nes_fault_y_snapshot], a
-
-    ld a, [$C004]
-    ldh [nes_fault_zp04_snapshot], a
-    ld a, [$C005]
-    ldh [nes_fault_zp05_snapshot], a
-    ld a, [$C006]
-    ldh [nes_fault_zp06_snapshot], a
-    ld a, [$C007]
-    ld [nes_fault_zp07_snapshot], a
-
-    ld a, $01
-    ldh [nes_fault_kind], a
+    ; Cold fault path: the snapshot + halt body lives in helper bank $FF
+    ; (ROM0 headroom). Nothing here depends on the live CPU registers.
     ld a, $FF
-    ldh [nes_fault_hram], a
-    ld [nes_debug_fault], a
-    di
-.hang:
-    halt
-    jr .hang
+    ld [$2000], a
+    jp nes_unimplemented_romx
 
 ; Cache a mirrored 16 KiB NES PRG into CGB WRAMX banks 2-5.
 ; This is a one-time startup cost for NROM-style 16 KiB cartridges and avoids
