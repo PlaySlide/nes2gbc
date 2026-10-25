@@ -532,8 +532,12 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                 if update_nz {
                     if update_nz_here { emit_update_nz(&mut out); }
                 }
-                // A still holds the transferred value for TAX/TAY/TXA/TYA.
-                a_live = true;
+                // A holds the transferred value. That is the NES A only when A was an
+                // endpoint (TAX/TAY/TXA/TYA); TSX/TXS clobber A with X/SP (Galaga's
+                // TSX; PHA coroutine switch pushed SP instead of A).
+                a_live = src == Register::A
+                    || dst == Register::A
+                    || std::env::var("NES2GBC_TRANSFER_A_FIX").map(|v| v == "0").unwrap_or(false);
             }
 
             IrOp::Inc(reg) => {
