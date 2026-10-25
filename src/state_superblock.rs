@@ -1822,9 +1822,13 @@ pub fn emit_cfg_with_interrupts(
                 b.instructions.iter().any(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Txs)
             })
         });
-    let nmi_exclusive = if nmi_abandon { BTreeSet::new() } else { nmi_exclusive };
+    let nmi_nest = crate::recompile::nmi_reentrancy_guard(graph, &selected, nmi);
+    let nmi_exclusive = if nmi_abandon || nmi_nest { BTreeSet::new() } else { nmi_exclusive };
     if nmi_abandon {
         writeln!(out, "; NES2GBC_NMI_ABANDON 1").unwrap();
+    }
+    if nmi_nest {
+        writeln!(out, "; NES2GBC_NMI_NEST 1").unwrap();
     }
     let plan = plan_superblocks(graph, &selected, &banks, &poll_points, &nmi_exclusive);
     let v_dead = if regalloc_level() >= 2 {

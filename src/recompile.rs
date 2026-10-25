@@ -389,6 +389,65 @@ fn nmi_exclusive_blocks(
     nmi_reach.difference(&other_reach).copied().collect()
 }
 
+/// True when the NMI handler guards itself against re-entry with a RAM
+/// test-and-set flag: `LDA abs / BNE skip` whose fall-through block begins
+/// `LDA #nonzero / STA abs` on the same address, inside NMI-reachable code
+/// (Spelunker $84D2: `LDA $0220 / BNE / LDA #$FF / STA $0220 / JSR game...`).
+/// Such a handler runs the game logic under the flag and relies on hardware
+/// delivering further NMIs while it is still running (the logic spins on a
+/// counter only the nested NMI advances). Opt out: NES2GBC_NMI_NEST=0.
+pub(crate) fn nmi_reentrancy_guard(graph: &ControlFlowGraph, selected: &BTreeSet<u16>, nmi: u16) -> bool {
+    use crate::cpu6502::{AddressingMode as M, Mnemonic as N};
+    if std::env::var("NES2GBC_NMI_NEST").map(|v| v == "0").unwrap_or(false) {
+        return false;
+    }
+    // Only the handler's own body counts (calls are not followed): a flag test
+    // inside a called subroutine is an ordinary debounce/timer idiom (SMB $8280).
+    let mut reach = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    if selected.contains(&nmi) {
+        queue.push_back(nmi);
+    }
+    while let Some(addr) = queue.pop_front() {
+        if !reach.insert(addr) {
+            continue;
+        }
+        let Some(block) = graph.blocks.get(&addr) else { continue };
+        for e in block.edges.iter().filter(|e| e.kind != crate::cfg::EdgeKind::Call) {
+            if let Some(t) = e.target {
+                if selected.contains(&t) && !reach.contains(&t) {
+                    queue.push_back(t);
+                }
+            }
+        }
+    }
+    for a in &reach {
+        let Some(b) = graph.blocks.get(a) else { continue };
+        let ins = &b.instructions;
+        let n = ins.len();
+        if n < 2 {
+            continue;
+        }
+        let (ld, br) = (&ins[n - 2], &ins[n - 1]);
+        if !(ld.def.mnemonic == N::Lda && ld.def.mode == M::Absolute && ld.operand < 0x2000 && br.def.mnemonic == N::Bne) {
+            continue;
+        }
+        let Some(ft) = graph.blocks.get(&br.pc.wrapping_add(2)) else { continue };
+        if let [l2, s2, ..] = ft.instructions.as_slice() {
+            if l2.def.mnemonic == N::Lda
+                && l2.def.mode == M::Immediate
+                && (l2.operand & 0xFF) != 0
+                && s2.def.mnemonic == N::Sta
+                && s2.def.mode == M::Absolute
+                && s2.operand == ld.operand
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn is_static_control_ir(ops: &[IrOp], banks: &BTreeMap<u16, u16>) -> bool {
     if ops.len() != 1 {
         return false;
@@ -584,9 +643,13 @@ fn emit_cfg_impl(
                 })
             })
         });
-    let nmi_exclusive = if nmi_abandon { BTreeSet::new() } else { nmi_exclusive };
+    let nmi_nest = interrupt_entries.is_some_and(|(nmi, _)| nmi_reentrancy_guard(graph, &selected, nmi));
+    let nmi_exclusive = if nmi_abandon || nmi_nest { BTreeSet::new() } else { nmi_exclusive };
     if nmi_abandon {
         writeln!(out, "; NES2GBC_NMI_ABANDON 1").unwrap();
+    }
+    if nmi_nest {
+        writeln!(out, "; NES2GBC_NMI_NEST 1").unwrap();
     }
     let selected_list: Vec<u16> = selected.iter().copied().collect();
 

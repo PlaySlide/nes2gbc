@@ -1551,6 +1551,18 @@ nes_brk_hl:
 
 ; RTI pops P then PC low/high. Output HL = exact restored PC.
 nes_rti_pop_hl:
+IF DEF(NES2GBC_NMI_NEST)
+    ld a, [nes_nmi_nested]
+    and a
+    jr z, .rti_not_nested
+    ; RTI of a nested NMI: the outer handler is still running (nmi_active stays set).
+    xor a
+    ld [nes_nmi_nested], a
+    jr .rti_pop
+.rti_not_nested:
+    xor a
+    ld [nes_nmi_drops], a
+ENDC
     xor a
     ld [nes_nmi_active], a
 IF !DEF(NES2GBC_NO_PACING)
@@ -1586,6 +1598,7 @@ ENDC
     ; $6F) never starve; without this they run zero iterations per frame.
     ldh a, [nes_host_vblank_pending]
     ld [nes_rti_grace], a
+.rti_pop:
     call nes_stack_pop_a
     call nes_set_p_from_a
 
@@ -1670,7 +1683,24 @@ ENDC
 
     ld a, [nes_nmi_active]
     and a
-IF !DEF(NES2GBC_NO_PACING)
+IF DEF(NES2GBC_NMI_NEST)
+    jr z, .nmi_idle
+    ; NMI handler still running after NMI_NEST_FRAMES host VBlanks: deliver one
+    ; nested NMI (hardware semantics), never recursively, without restarting the
+    ; outer handler's nametable transaction.
+    ld a, [nes_nmi_drops]
+    cp NMI_NEST_FRAMES
+    jp c, .no_nmi
+    ld a, [nes_nmi_nested]
+    and a
+    jp nz, .no_nmi
+    inc a
+    ld [nes_nmi_nested], a
+    xor a
+    ld [nes_nmi_drops], a
+    jp .stage_seen_clear_done
+.nmi_idle:
+ELIF !DEF(NES2GBC_NO_PACING)
     jp nz, .no_nmi
 ELSE
     jr nz, .no_nmi
@@ -1689,6 +1719,10 @@ ENDC
 ENDC
     ld a, $01
     ld [nes_nmi_active], a
+IF DEF(NES2GBC_NMI_NEST)
+    xor a
+    ld [nes_nmi_drops], a
+ENDC
 IF DEF(NES2GBC_HALT_IDLE)
     ld a, [nes_idle_nmis]
     inc a
@@ -1788,8 +1822,14 @@ ENDC
     or $20
     ldh [nes_p], a
 IF DEF(NES2GBC_NMI_ABANDON)
+IF DEF(NES2GBC_NMI_NEST)
+    ld a, [nes_nmi_nested]
+    and a
+    jr nz, .keep_entry_sp
+ENDC
     ldh a, [nes_sp]
     ld [nes_nmi_entry_sp], a
+.keep_entry_sp:
 ENDC
 
     ld a, $01

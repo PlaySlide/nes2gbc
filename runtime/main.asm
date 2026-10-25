@@ -781,6 +781,29 @@ ENDC
     ld a, [nes_nmi_active]
     and a
     jr z, .pace_done
+IF DEF(NES2GBC_NMI_NEST)
+    ; The translated NMI has been running across several host VBlanks. Some
+    ; games (Spelunker: handler runs the game under a $0220 re-entrancy flag
+    ; and spins on a counter only a nested NMI advances) rely on hardware
+    ; delivering NMI again while the handler is still running. After
+    ; NMI_NEST_FRAMES such VBlanks keep the event pending so nes_poll_nmi_hl
+    ; delivers one (non-recursive) nested NMI instead of dropping it.
+    ld a, [nes_nmi_drops]
+    cp NMI_NEST_FRAMES
+    jr nc, .nest_armed
+    inc a
+    ld [nes_nmi_drops], a
+    jr .pace_credit
+.nest_armed:
+    ld a, [nes_nmi_nested]
+    and a
+    jr nz, .pace_credit
+    ; While the NMI is active the ISR takes the .done shortcut without raising
+    ; the event, so raise it here for the poll to deliver.
+    inc a
+    ldh [nes_host_vblank_pending], a
+    jr .pace_done
+ENDC
 .pace_credit:
     ; Never more than one NMI start per host VBlank (60 NES fps cap).
     xor a

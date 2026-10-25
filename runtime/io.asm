@@ -89,6 +89,13 @@ SECTION "NES nmi abandon", WRAM0
 nes_nmi_entry_sp:      ds 1 ; NES SP right after the hardware NMI frame push
 ENDC
 
+IF DEF(NES2GBC_NMI_NEST)
+DEF NMI_NEST_FRAMES EQU 4
+SECTION "NES nmi nest", WRAM0
+nes_nmi_drops:         ds 1 ; host VBlanks seen while the translated NMI was active
+nes_nmi_nested:        ds 1 ; nonzero while a nested NMI runs
+ENDC
+
 SECTION "NES dispatch cache", WRAM0[$C850]
 nes_dispatch_cache_valid:   ds 1
 nes_dispatch_cache_pc_hi:   ds 1

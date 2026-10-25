@@ -64,6 +64,7 @@ generate:
 		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 	@if [ "$${NES2GBC_ENTRY_SP_EARLY:-1}" = "0" ]; then echo 'DEF NES2GBC_ENTRY_SP_EARLY_OFF EQU 1 ; restore the old NMI delivery order (opt-out for NES2GBC_ENTRY_SP_EARLY=0)' >> runtime/generated_config.inc; fi
+	@if grep -q '^; NES2GBC_NMI_NEST 1' runtime/generated.asm; then echo 'DEF NES2GBC_NMI_NEST EQU 1 ; handler guarded by a re-entrancy flag: deliver a nested NMI when it spans several host VBlanks (opt out: NES2GBC_NMI_NEST=0)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_NMI_ABANDON 1' runtime/generated.asm; then echo 'DEF NES2GBC_NMI_ABANDON EQU 1 ; NMI handler may reset SP and never RTI (opt out: NES2GBC_NMI_ABANDON=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \
@@ -109,7 +110,7 @@ generate:
 		if [ "$(POSTPASS_THROUGH)" = "all" ]; then \
 			if [ "$(TRACE)" != "1" ]; then python3 tools/mirror_indexed_prg_tables.py runtime/generated.asm "$(ROM)"; fi; \
 			python3 tools/fuse_index_branch_value.py runtime/generated.asm; \
-			python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; \
+			if ! grep -q '^; NES2GBC_NMI_NEST 1' runtime/generated.asm; then python3 tools/elide_nmi_internal_polls.py runtime/generated.asm; fi; \
 			python3 tools/direct_nmi_dispatch.py runtime/generated.asm; \
 			python3 tools/fast_rti_dispatch.py runtime/generated.asm; \
 			python3 tools/guard_indirect_dispatch.py runtime/generated.asm "$(ROM)"; \
