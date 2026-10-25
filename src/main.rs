@@ -87,6 +87,10 @@ enum FollowHint {
     Sprite(u8),
     /// Follow the screen-Y byte at NES RAM $aaaa (PocketNES FOLLOWMEM).
     Mem(u16),
+    /// Fixed crop (view_x, view_y) while the HUD/playfield split is active.
+    /// For games whose player is background-drawn or whose OAM slots rotate,
+    /// where no sprite is a valid follow target (data: mode `C xxyy`).
+    Fixed(u8, u8),
 }
 
 const POCKETNES_FOLLOW_DB: &str = include_str!("../data/pocketnes_follow.txt");
@@ -110,7 +114,11 @@ fn pocketnes_follow_hint(crc: u32) -> Option<FollowHint> {
             continue;
         }
         let v = u16::from_str_radix(v, 16).ok()?;
+        if m == "C" && env::var_os("NES2GBC_NO_FIXED_CAMERA").is_some() {
+            continue;
+        }
         return match m {
+            "C" => Some(FollowHint::Fixed((v >> 8) as u8, v as u8)),
             "S" => Some(FollowHint::Sprite(v as u8)),
             "M" => Some(FollowHint::Mem(v)),
             _ => None,
@@ -122,18 +130,23 @@ fn pocketnes_follow_hint(crc: u32) -> Option<FollowHint> {
 fn emit_follow_hint_init(asm: &mut String, hint: Option<FollowHint>) {
     asm.push_str("\n; PocketNES-derived follow-camera hint\n");
     asm.push_str("SECTION \"Generated follow-camera metadata\", ROM0\n");
+    if matches!(hint, Some(FollowHint::Fixed(..))) {
+        asm.push_str("; NES2GBC_FIXED_CAMERA 1\n");
+    }
     asm.push_str("nes_generated_follow_init:\n");
     // nes_view_follow_hint_mode: 0 = heuristic, 1 = sprite number, 2 = RAM Y.
     let (mode, value) = match hint {
         None => (0u8, 0u16),
         Some(FollowHint::Sprite(n)) => (1, n as u16),
         Some(FollowHint::Mem(a)) => (2, a & 0x07FF),
+        Some(FollowHint::Fixed(x, y)) => (3, ((y as u16) << 8) | x as u16),
     };
     asm.push_str(&format!("    ld a, ${mode:02X}\n"));
     asm.push_str("    ld [nes_view_follow_hint_mode], a\n");
     asm.push_str(&format!("    ld a, ${:02X}\n", value & 0xFF));
     asm.push_str("    ld [nes_view_follow_hint_lo], a\n");
-    asm.push_str(&format!("    ld a, ${:02X}\n", (value >> 8) | 0xC0));
+    let hi = if mode == 3 { value >> 8 } else { (value >> 8) | 0xC0 };
+    asm.push_str(&format!("    ld a, ${hi:02X}\n"));
     asm.push_str("    ld [nes_view_follow_hint_hi], a\n");
     if let Some(FollowHint::Sprite(slot)) = hint {
         asm.push_str(&format!("    ld a, ${slot:02X}\n"));
@@ -227,6 +240,7 @@ fn main() -> ExitCode {
     match follow_hint {
         Some(FollowHint::Sprite(slot)) => println!("PocketNES follow hint: OAM sprite {slot}"),
         Some(FollowHint::Mem(a)) => println!("PocketNES follow hint: RAM ${a:04X} (screen Y)"),
+        Some(FollowHint::Fixed(x, y)) => println!("Fixed camera hint: view ({x}, {y}) during HUD split"),
         None => println!("PocketNES follow hint: none; using generic acquisition"),
     }
 
@@ -599,6 +613,7 @@ mod follow_hint_tests {
         assert_eq!(pocketnes_follow_hint(0x4864_C304), Some(FollowHint::Sprite(8)));
         assert_eq!(pocketnes_follow_hint(0xFB98_D46E), Some(FollowHint::Sprite(0)));
         assert_eq!(pocketnes_follow_hint(0xD445_F698), Some(FollowHint::Sprite(8)));
+        assert_eq!(pocketnes_follow_hint(0xD5C6_4257), Some(FollowHint::Fixed(0x30, 0x47)));
         assert_eq!(pocketnes_follow_hint(0x6EE4_BB0A), Some(FollowHint::Mem(0x0600)));
         assert_eq!(pocketnes_follow_hint(0xF603_5030), Some(FollowHint::Mem(0x031A)));
         assert_eq!(pocketnes_follow_hint(0xB668_C7FC), Some(FollowHint::Mem(0x01F5)));

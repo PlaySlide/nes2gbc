@@ -483,6 +483,10 @@ nes_view_follow_camera::
 ; anchored on the hinted sprite (mode 1) or on the visible sprite nearest the
 ; previous anchor X among those within 24 lines of the RAM Y (mode 2).
 nes_view_follow_hinted:
+IF DEF(NES2GBC_FIXED_CAMERA)
+    cp $03
+    jr z, .fixed
+ENDC
     cp $01
     jr nz, .mem
     ld a, [nes_view_follow_slot]
@@ -501,6 +505,29 @@ nes_view_follow_hinted:
     ; Sprite mode: the hinted slot is the player, so the X dead-zone tracks it.
     call .proportional_y
     jp nes_view_follow_camera
+
+IF DEF(NES2GBC_FIXED_CAMERA)
+; Mode 3: fixed crop (hint_lo = view_x, hint_hi = view_y) while the HUD
+; split is active; the default centred crop otherwise (title/intro screens).
+.fixed:
+    ldh a, [nes_split_active]
+    and a
+    ld a, $30
+    ld c, a
+    jr z, .fixed_set
+    ld a, [nes_view_follow_hint_lo]
+    ld c, a
+    ld a, [nes_view_follow_hint_hi]
+    jr .fixed_store
+.fixed_set:
+    ld a, c
+.fixed_store:
+    ldh [nes_view_y], a
+    ld a, c
+    ldh [nes_view_x], a
+    jp nes_view_mark_dirty
+
+ENDC
 
 .mem:
     ld a, [nes_view_follow_hint_lo]

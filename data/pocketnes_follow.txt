@@ -3,6 +3,8 @@
 # Titney & Mr Unown, 2003; https://github.com/GamingFanboy365/pnesmmw).
 # Format: <crc32> <mode> <hex value>
 #   S nn   = follow NES OAM sprite number nn (PocketNES flags bit 4, legacy)
+#   C xxyy = fixed crop (view_x, view_y) while the HUD split is active; the
+#            first matching line wins (skipped with NES2GBC_NO_FIXED_CAMERA)
 #   M aaaa = follow the NES RAM byte at $aaaa, a screen Y (flags bit 5, FOLLOWMEM)
 # PocketNES itself only follows vertically: windowtop = Y*5/16 from that byte.
 171251e3 S 000C
@@ -380,6 +382,7 @@ baf69470 S 0000
 08eb0aa6 S 0000
 5d6f4137 S 0000
 46652449 S 0019
+d5c64257 C 3047
 d5c64257 S 0019
 464a67ab S 0019
 b2818256 S 0019
