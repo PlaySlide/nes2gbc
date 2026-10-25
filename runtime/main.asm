@@ -644,7 +644,30 @@ ENDC
     ld b, a
     ld a, [nes_bg_pattern_committed]
     cp b
+IF !DEF(NES2GBC_QUIRK_DEBOUNCE) || DEF(NES2GBC_NO_BANK_DEBOUNCE)
     jr z, .ctrl_bank_done
+ELSE
+    jr nz, .ctrl_bank_differs
+    xor a
+    ld [nes_bg_pattern_pending], a
+    jr .ctrl_bank_done
+.ctrl_bank_differs:
+    ; The host runs the game several times slower than the NES, so a main-thread
+    ; sequence like $2000=0 ... $2000=$90 leaves PPUCTRL.4 transiently different
+    ; for a few host frames (the LCD was rewritten off/on every NES frame, R.C.
+    ; Pro-Am title). Only publish a bank change that persists 3 host frames.
+    ld a, [nes_bg_pattern_pending]
+    inc a
+    ld [nes_bg_pattern_pending], a
+    cp 3
+    jr nc, .ctrl_bank_publish
+    ld a, $01
+    ldh [nes_ctrl_dirty], a ; re-evaluate next host frame
+    jr .ctrl_bank_done
+.ctrl_bank_publish:
+    xor a
+    ld [nes_bg_pattern_pending], a
+ENDC
     ld a, b
     ld [nes_bg_pattern_committed], a
     call nes_video_toggle_bg_pattern_bank

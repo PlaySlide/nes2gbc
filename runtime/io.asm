@@ -93,6 +93,11 @@ SECTION "NES nmi hold", WRAM0
 nes_hold_seen: ds 1 ; host VBlanks since the last NMI start (NMI_HOLD)
 ENDC
 
+SECTION "NES bg bank debounce", WRAM0
+IF DEF(NES2GBC_QUIRK_DEBOUNCE) && !DEF(NES2GBC_NO_BANK_DEBOUNCE)
+nes_bg_pattern_pending:      ds 1 ; consecutive host frames PPUCTRL.4 differed from committed
+ENDC
+
 IF DEF(NES2GBC_NMI_ABANDON)
 SECTION "NES nmi abandon", WRAM0
 nes_nmi_entry_sp:      ds 1 ; NES SP right after the hardware NMI frame push
