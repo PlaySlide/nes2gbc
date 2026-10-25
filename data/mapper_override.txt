@@ -1,0 +1,4 @@
+# <payload CRC32 hex> <mapper> [submapper]  # name
+# Header mapper override for dumps whose iNES/NES2.0 mapper field is wrong. Applied right after parsing.
+# Opt-out: NES2GBC_NO_MAPPER_OVERRIDE=1. Force: NES2GBC_MAPPER=<n> (debug).
+# 4a601a2c 2 0 # TMNT (Japan): header says mapper 25 sub 2 (VRC2c, 256K CHR ROM: NOT UxROM; forcing 2 gives a green screen in cynes and overflows the 8-bit bank allocator here), so left disabled

@@ -168,6 +168,28 @@ fn hud_bottom_hint(crc: u32) -> Option<u8> {
     None
 }
 
+const MAPPER_OVERRIDE_DB: &str = include_str!("../data/mapper_override.txt");
+
+/// Data-driven header mapper override: `<payload crc32> <mapper> [submapper]`
+/// per line in data/mapper_override.txt. NES2GBC_NO_MAPPER_OVERRIDE=1 disables
+/// it; NES2GBC_MAPPER=<n> forces a mapper (debug).
+fn mapper_override(crc: u32) -> Option<(u16, u8)> {
+    if let Some(m) = env::var("NES2GBC_MAPPER").ok().and_then(|v| v.parse::<u16>().ok()) {
+        return Some((m, 0));
+    }
+    if env::var_os("NES2GBC_NO_MAPPER_OVERRIDE").is_some() {
+        return None;
+    }
+    MAPPER_OVERRIDE_DB.lines().find_map(|l| {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let mut it = l.split_whitespace();
+        let c = u32::from_str_radix(it.next()?, 16).ok()?;
+        let m = it.next()?.parse::<u16>().ok()?;
+        let sub = it.next().and_then(|v| v.parse::<u8>().ok()).unwrap_or(0);
+        (c == crc).then_some((m, sub))
+    })
+}
+
 const ZAPPER_DB: &str = include_str!("../data/zapper.txt");
 
 /// Zapper (light gun) games: A button = trigger on port 2 ($4017 bit4) and the
@@ -273,7 +295,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let cart = match ines::parse(&bytes) {
+    let mut cart = match ines::parse(&bytes) {
         Ok(cart) => cart,
         Err(err) => {
             eprintln!("error parsing {}: {err}", path.display());
@@ -282,6 +304,13 @@ fn main() -> ExitCode {
     };
 
     let payload_crc = crc32_ieee(&bytes[16..]);
+    if let Some((m, sub)) = mapper_override(payload_crc) {
+        if m != cart.mapper || sub != cart.submapper {
+            println!("Mapper override: header {} sub {} -> {} sub {}", cart.mapper, cart.submapper, m, sub);
+            cart.mapper = m;
+            cart.submapper = sub;
+        }
+    }
     let follow_hint = pocketnes_follow_hint(payload_crc);
     let zapper = zapper_hint(payload_crc);
     nes2gbc::lr35902::ZAPPER.store(zapper, std::sync::atomic::Ordering::Relaxed);
