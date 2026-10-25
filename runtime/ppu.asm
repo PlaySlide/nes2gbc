@@ -383,7 +383,11 @@ IF DEF(NES2GBC_TINY_SKIP_SMB_ONLY)
     jr nz, .mask_do_rebuild
 ENDC
     ld a, [nes_generic_hidden_change_count]
+IF DEF(NES2GBC_TINY_SKIP_MAX8)
     cp $08
+ELSE
+    cp $20
+ENDC
     jr nc, .mask_do_rebuild
 
     ; Tiny hidden updates have already been published by .nametable_sync_now.
