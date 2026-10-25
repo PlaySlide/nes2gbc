@@ -1325,6 +1325,37 @@ nes_ppu_read_raw:
     ld a, [nes_chr_rom_bank_base]
     ld b, a
     ld a, [nes_chr_bank]
+IF DEF(NES2GBC_CHR4K) && !DEF(NES2GBC_NO_CHR4K_READ)
+    ; MMC1 split 4 KiB CHR mode keeps nes_chr_bank = $FF. Read the 4 KiB bank
+    ; resident in the addressed pattern table (nes_chr4_cur0/1): GBC bank =
+    ; base + idx/2, $1000 offset = idx&1.
+    cp $FF
+    jr nz, .pat_bank_ready
+    ld a, [nes_mmc1_control]
+    bit 4, a
+    ld a, $FF
+    jr z, .pat_bank_ready
+    ld a, h
+    cp $10
+    ld a, [nes_chr4_cur0]
+    jr c, .pat4_sel
+    ld a, [nes_chr4_cur1]
+.pat4_sel:
+    ld b, a
+    ld a, h
+    and $0F
+    ld h, a
+    ld a, b
+    and $01
+    swap a
+    or h
+    ld h, a
+    ld a, b
+    srl a
+    ld b, a
+    ld a, [nes_chr_rom_bank_base]
+.pat_bank_ready:
+ENDC
     add b
     ld [$2000], a
 IF DEF(NES2GBC_ISR_BANK_FIX)
