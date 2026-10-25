@@ -1634,6 +1634,28 @@ IF !DEF(NES2GBC_NO_PACING)
 .pace_any_pc:
 ENDC
 
+IF DEF(NES2GBC_NMI_ABANDON)
+    ; A translated NMI whose handler reset the stack (TXS above its own
+    ; interrupt frame) and never executed RTI is over: on hardware the next
+    ; vblank simply raises a fresh NMI. Retire it so delivery is not blocked.
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .abandon_done
+    push hl
+    ld hl, nes_nmi_entry_sp
+    ldh a, [nes_sp]
+    cp [hl]
+    pop hl
+    jr c, .abandon_done
+    jr z, .abandon_done
+    xor a
+    ld [nes_nmi_active], a
+IF !DEF(NES2GBC_NO_PACING)
+    inc a
+    ld [nes_pace_unpublished], a
+ENDC
+.abandon_done:
+ENDC
     ; Consume the host event. If NES NMI is disabled or already active, this
     ; frame is intentionally dropped instead of creating back-to-back NMIs.
     xor a
@@ -1754,6 +1776,10 @@ ENDC
     and $EF
     or $20
     ldh [nes_p], a
+IF DEF(NES2GBC_NMI_ABANDON)
+    ldh a, [nes_sp]
+    ld [nes_nmi_entry_sp], a
+ENDC
 
     ld a, $01
     ret

@@ -84,6 +84,11 @@ nes_debug_fault:       ds 1 ; $C82D - $FF if nes_unimplemented was reached
 nes_nmi_active:        ds 1 ; $C82E - nonzero while translated NMI handler is active
 nes_oam_dirty:         ds 1 ; $C82F - virtual OAM changed; flush on host VBlank
 
+IF DEF(NES2GBC_NMI_ABANDON)
+SECTION "NES nmi abandon", WRAM0
+nes_nmi_entry_sp:      ds 1 ; NES SP right after the hardware NMI frame push
+ENDC
+
 SECTION "NES dispatch cache", WRAM0[$C850]
 nes_dispatch_cache_valid:   ds 1
 nes_dispatch_cache_pc_hi:   ds 1

@@ -1811,6 +1811,21 @@ pub fn emit_cfg_with_interrupts(
     let banks = assign_code_banks(graph, &selected);
     let poll_points = nmi_poll_points(graph, &selected);
     let nmi_exclusive = nmi_exclusive_blocks(graph, &selected, options.reset, nmi, irq);
+    // An NMI handler that executes TXS may discard its own interrupt frame and
+    // continue as the main thread without ever executing RTI (Golf $DAEE:
+    // LDX #$FF / TXS / JMP $DA58). The runtime then has to retire the abandoned
+    // NMI (NES2GBC_NMI_ABANDON, runtime/cpu.asm) and every block must keep its
+    // NMI safe-point. Opt out: NES2GBC_NMI_ABANDON=0.
+    let nmi_abandon = std::env::var("NES2GBC_NMI_ABANDON").map(|v| v != "0").unwrap_or(true)
+        && reachable_from_roots(graph, &selected, &[nmi]).iter().any(|a| {
+            graph.blocks.get(a).is_some_and(|b| {
+                b.instructions.iter().any(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Txs)
+            })
+        });
+    let nmi_exclusive = if nmi_abandon { BTreeSet::new() } else { nmi_exclusive };
+    if nmi_abandon {
+        writeln!(out, "; NES2GBC_NMI_ABANDON 1").unwrap();
+    }
     let plan = plan_superblocks(graph, &selected, &banks, &poll_points, &nmi_exclusive);
     let v_dead = if regalloc_level() >= 2 {
         overflow_dead_after(graph, &selected, &poll_points, &nmi_exclusive)

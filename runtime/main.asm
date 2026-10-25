@@ -760,6 +760,24 @@ IF !DEF(NES2GBC_NO_PACING)
     ld [rIE], a
     jr .pace_credit
 .pace_not_paced:
+IF DEF(NES2GBC_NMI_ABANDON)
+    ; Retire an abandoned NMI (handler reset SP above its own interrupt frame
+    ; and never RTI'd) so this VBlank's pending event is not credited away.
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .abandon_chk_done
+    push bc
+    ld a, [nes_nmi_entry_sp]
+    ld b, a
+    ldh a, [nes_sp]
+    cp b
+    pop bc
+    jr z, .abandon_chk_done
+    jr c, .abandon_chk_done
+    xor a
+    ld [nes_nmi_active], a
+.abandon_chk_done:
+ENDC
     ld a, [nes_nmi_active]
     and a
     jr z, .pace_done
