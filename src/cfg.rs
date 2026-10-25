@@ -17,6 +17,9 @@ fn dec(mapper:u16,prg:&[u8],pc:u16)->Result<DecodedInstruction,AnalysisError>{le
 fn branch(m:Mnemonic)->bool{matches!(m,Mnemonic::Bcc|Mnemonic::Bcs|Mnemonic::Beq|Mnemonic::Bmi|Mnemonic::Bne|Mnemonic::Bpl|Mnemonic::Bvc|Mnemonic::Bvs)}
 fn rel(i:DecodedInstruction)->u16{let n=i.pc.wrapping_add(i.def.len()as u16);n.wrapping_add((i.operand as u8 as i8)as i16 as u16)}
 fn q(q:&mut VecDeque<u16>,seen:&mut BTreeSet<u16>,t:u16){if t>=0x8000&&seen.insert(t){q.push_back(t)}}
+/// Set by main for bank-switched mappers (views are 32K windows of a larger PRG);
+/// disables the speculative fallback pointer forms there.
+pub static BANKED_VIEWS:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
 fn looks_like_code(mapper:u16,prg:&[u8],start:u16)->bool{
  let mut pc=start;let mut n=0usize;
  while n<8{
@@ -282,6 +285,26 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   let _=jmp_off;
  }
 
+ // Form 2b: Form 2 with a few harmless instructions (LDX zp, PLA/TAX, ...)
+ // between the pointer stores and the JSR/JMP into the trampoline. Spelunker
+ // $9B33 (LDX $17 before JSR $99C9) and Spy vs Spy (PLA/TAX before JSR $8F59).
+ if !BANKED_VIEWS.load(std::sync::atomic::Ordering::Relaxed)&&std::env::var("NES2GBC_PTR_FALLBACK").map(|v|v!="0").unwrap_or(true){
+  if let Ok(jmp_off)=off(mapper,prg.len(),jmp_pc){
+   let mut o=0usize;
+   while o+10<=prg.len(){
+    if matches!(prg[o],0xB9|0xBD)&&prg[o+3]==0x85&&prg[o+4]==pointer as u8
+     &&prg[o+5]==prg[o]&&prg[o+8]==0x85&&prg[o+9]==pointer.wrapping_add(1)as u8
+    {
+     let base=u16::from_le_bytes([prg[o+1],prg[o+2]]);
+     let high_base=u16::from_le_bytes([prg[o+6],prg[o+7]]);
+     if high_base==base.wrapping_add(1)&&!tables.contains(&base)
+      &&reaches_dispatcher(mapper,prg,o+10,pointer as u8,jmp_off,jmp_off){tables.push(base)}
+    }
+    o+=1;
+   }
+  }
+ }
+
  // Form 3: a non-returning JSR dispatcher indexes a word table placed
  // immediately after each JSR, using the stacked return address as its base.
  // Ice Climber uses this extensively.
@@ -393,7 +416,113 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
   }
  }
  for t in split_targets{if !out.contains(&t){out.push(t)}}
+ // Fallback forms (opt out: NES2GBC_PTR_FALLBACK=0): only consulted when none
+ // of the pattern forms above produced a target for this JMP (ptr). Limited to
+ // unbanked PRG: with banks the same zero-page pointer is reused across
+ // unrelated banks and the whole-PRG scan yields data-as-code seeds (Mega Man).
+ if out.is_empty()&&!BANKED_VIEWS.load(std::sync::atomic::Ordering::Relaxed)&&std::env::var("NES2GBC_PTR_FALLBACK").map(|v|v!="0").unwrap_or(true){
+  for t in fallback_pointer_targets(mapper,prg,pointer as u8){if !out.contains(&t){out.push(t)}}
+ }
  out
+}
+// Fallback pointer-construction forms for JMP (ptr) sites that no dedicated
+// form resolved. Every store pair that builds ptr/ptr+1 anywhere in PRG
+// contributes targets (unlike Form 6 this does not require the pairs to be the
+// only stores):
+//  7a. LDA tbl,R / STA ptr / LDA tbl+1,R / STA ptr+1 (adjacent, any index
+//      register); tbl is expanded as a word table.
+//  7b. LDA #lo / STA ptr / LDA #hi / STA ptr+1 (either store order).
+//  7c. a setter subroutine "STY ptr / STX ptr+1 ... RTS" (or the swapped
+//      register pairing) called as LDY #lo / LDX #hi / JSR setter.
+// All candidate targets must be in PRG and look like code.
+fn fallback_pointer_targets(mapper:u16,prg:&[u8],p:u8)->Vec<u16>{
+ let n=prg.len();let p1=p.wrapping_add(1);
+ let mut out:Vec<u16>=Vec::new();
+ let push=|t:u16,out:&mut Vec<u16>|{if t>=0x8000&&strict_code(mapper,prg,t)&&!out.contains(&t){out.push(t)}};
+ let mut tables:Vec<u16>=Vec::new();
+ let mut o=0usize;
+ while o+10<=n{
+  // 7a
+  if matches!(prg[o],0xB9|0xBD)&&prg[o+3]==0x85&&prg[o+4]==p&&prg[o+5]==prg[o]&&prg[o+8]==0x85&&prg[o+9]==p1{
+   let lo=u16::from_le_bytes([prg[o+1],prg[o+2]]);let hi=u16::from_le_bytes([prg[o+6],prg[o+7]]);
+   if hi==lo.wrapping_add(1)&&!tables.contains(&lo){tables.push(lo)}
+  }
+  // 7b
+  if prg[o]==0xA9&&prg[o+2]==0x85&&prg[o+4]==0xA9&&prg[o+6]==0x85{
+   if prg[o+3]==p&&prg[o+7]==p1{push(u16::from_le_bytes([prg[o+1],prg[o+5]]),&mut out)}
+   else if prg[o+3]==p1&&prg[o+7]==p{push(u16::from_le_bytes([prg[o+5],prg[o+1]]),&mut out)}
+  }
+  o+=1;
+ }
+ // 7c: setter subroutines, resolved through their JSR callers.
+ let mut c=0usize;
+ while c+7<=n{
+  let (a,b,jsr)=(prg[c],prg[c+2],prg[c+4]);
+  if jsr==0x20&&((a==0xA0&&b==0xA2)||(a==0xA2&&b==0xA0)){
+   let tgt=u16::from_le_bytes([prg[c+5],prg[c+6]]);
+   if let Ok(t_off)=off(mapper,n,tgt){
+    for &(so,y_low) in &setter_list(prg,p){
+     if t_off<=so&&so-t_off<=24&&straight_to(prg,t_off,so,p)&&(0..6).any(|k|so+4+k<n&&prg[so+4+k]==0x60){
+      let (ly,lx)=if a==0xA0{(prg[c+1],prg[c+3])}else{(prg[c+3],prg[c+1])};
+      let v=if y_low{u16::from_le_bytes([ly,lx])}else{u16::from_le_bytes([lx,ly])};
+      push(v,&mut out);
+     }
+    }
+   }
+  }
+  c+=1;
+ }
+ for base in tables{
+  let mut found_any=false;
+  for i in 0..MAX_WORD_TABLE_ENTRIES{
+   let a=base.wrapping_add(i*2);
+   let Ok(o)=off(mapper,n,a)else{break};
+   if o+1>=n{break}
+   let target=u16::from_le_bytes([prg[o],prg[o+1]]);
+   let valid=target>=0x8000&&strict_code(mapper,prg,target);
+   if !valid{if found_any{break}continue}
+   found_any=true;
+   if !out.contains(&target){out.push(target)}
+  }
+ }
+ out
+}
+// Stricter than looks_like_code: for speculative seeds. Rejects BRK and
+// undecodable bytes anywhere in the first 8 instructions (stopping at the first
+// unconditional terminator).
+fn strict_code(mapper:u16,prg:&[u8],start:u16)->bool{
+ let mut pc=start;
+ for _ in 0..8{
+  let i=match dec(mapper,prg,pc){Ok(i)=>i,Err(_)=>return false};
+  if matches!(i.def.mnemonic,Mnemonic::Brk){return false}
+  if matches!(i.def.mnemonic,Mnemonic::Jmp|Mnemonic::Rts|Mnemonic::Rti){return true}
+  pc=pc.wrapping_add(i.def.len()as u16);
+ }
+ true
+}
+fn setter_list(prg:&[u8],p:u8)->Vec<(usize,bool)>{
+ let p1=p.wrapping_add(1);let n=prg.len();let mut v=Vec::new();
+ for o in 0..n.saturating_sub(4){
+  if prg[o]==0x84&&prg[o+1]==p&&prg[o+2]==0x86&&prg[o+3]==p1{v.push((o,true))}
+  else if prg[o]==0x86&&prg[o+1]==p&&prg[o+2]==0x84&&prg[o+3]==p1{v.push((o,false))}
+ }
+ v
+}
+// True when straight-line, branch-free code from `from` reaches `to` (the
+// setter stores) without a control transfer or a write to the pointer.
+fn straight_to(prg:&[u8],from:usize,to:usize,_p:u8)->bool{
+ let mut o=from;
+ while o<to{
+  let op=prg[o];
+  let len=match op{
+   0xA5|0x85|0x29|0x09|0x49|0xA9|0xA0|0xA2|0x84|0x86|0x69|0xE9|0xC9=>2,
+   0xAD|0x8D|0xBD|0xB9|0xAE|0xAC|0x99|0x9D|0xCE|0xEE=>3,
+   0xAA|0xA8|0x8A|0x98|0x18|0x38|0xEA|0x0A|0x4A|0xE8|0xC8|0xCA|0x88=>1,
+   _=>return false,
+  };
+  o+=len;
+ }
+ o==to
 }
 // Helper for indirect_table_targets Form 5: from PRG offset `o` (just after
 // the B/B+1 pointer setup), straight-line code must JSR/JMP into the

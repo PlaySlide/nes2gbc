@@ -272,6 +272,7 @@ fn main() -> ExitCode {
         // * A low-window target is seeded into a *specific* other bank only
         //   when the transferring block selects that bank with a constant
         //   UxROM write immediately before the JMP/JSR.
+        cfg::BANKED_VIEWS.store(true, std::sync::atomic::Ordering::Relaxed);
         let prg_bank_mask = (bank_count.next_power_of_two() - 1) as u8;
         let mut shared_fixed_entries = BTreeSet::<u16>::new();
         let mut bank_seeds: Vec<BTreeSet<u16>> = vec![BTreeSet::new(); bank_count];
