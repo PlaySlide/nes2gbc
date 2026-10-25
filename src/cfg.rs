@@ -188,8 +188,39 @@ fn inline_word_table_targets(mapper:u16,prg:&[u8],base:u16)->Vec<u16>{
 // The index is often byte-sized and scaled to an even offset. Walk up to the
 // architectural 128-word maximum, stopping at the first non-code destination
 // once a table has begun.
+// JMP ($0200-$07FF): a RAM function pointer whose two bytes are filled by
+// immediate stores (LDA #lo / STA ptr ... LDA #hi / STA ptr+1, also via
+// LDX/LDY/STX/STY). Targets are the (lo,hi) combinations that land on code in
+// PRG. Unbanked PRG only. Opt out: NES2GBC_NO_RAM_PTR_IMM=1.
+fn ram_pointer_immediate_targets(mapper:u16,prg:&[u8],pointer:u16)->Vec<u16>{
+ if !(0x0100..0x0800).contains(&pointer)||std::env::var("NES2GBC_NO_RAM_PTR_IMM").is_ok(){return Vec::new()}
+ if BANKED_VIEWS.load(std::sync::atomic::Ordering::Relaxed){return Vec::new()}
+ let (mut lo,mut hi)=(Vec::<u8>::new(),Vec::<u8>::new());
+ let pl=pointer.to_le_bytes();let ph=(pointer+1).to_le_bytes();
+ let mut i=0usize;
+ while i+4<prg.len(){
+  let st=match prg[i]{0xA9=>0x8D,0xA2=>0x8E,0xA0=>0x8C,_=>{i+=1;continue}};
+  // The immediate may be stored to several addresses back to back.
+  let mut j=i+2;
+  while j+2<prg.len()&&prg[j]==st{
+   let a=[prg[j+1],prg[j+2]];
+   if a==pl&&!lo.contains(&prg[i+1]){lo.push(prg[i+1])}
+   if a==ph&&!hi.contains(&prg[i+1]){hi.push(prg[i+1])}
+   j+=3;
+  }
+  i+=1;
+ }
+ let mut out=Vec::new();
+ if lo.len()>8||hi.len()>8{return out}
+ for &h in &hi{for &l in &lo{
+  let t=u16::from_le_bytes([l,h]);
+  if t>=0x8000&&looks_like_code(mapper,prg,t)&&!out.contains(&t){out.push(t)}
+ }}
+ out
+}
+
 fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>{
- if pointer>0x00FE{return Vec::new()}
+ if pointer>0x00FE{return ram_pointer_immediate_targets(mapper,prg,pointer)}
 
  // Form 1: pointer construction immediately precedes JMP (ptr):
  //   LDA table,Y / STA ptr / INY / LDA table,Y / STA ptr+1 / JMP (ptr)
