@@ -137,7 +137,11 @@ nes_ppu_cpu_read:
 .visible_scan:
     ld b, a
     ld a, [nes_ppu_status]
+IF !DEF(NES2GBC_QUIRK_LATCH) || DEF(NES2GBC_NO_VBL_LATCH)
     and $3F
+ELSE
+    and $BF
+ENDC
     ld e, a
 
     ; Semantic sprite-0 hit fallback. SMB (and many other early NES games)

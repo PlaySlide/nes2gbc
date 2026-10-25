@@ -1,0 +1,6 @@
+# <payload CRC32 hex> <flags>  # comment.  flags: latch
+#  latch    = vblank-flag latch (runtime/cpu.asm nes_poll_nmi_hl + inline $2002 mask): games that busy-wait on PPUSTATUS bit 7 with NMI off.
+#  debounce = 3-frame BG-pattern-bank debounce (runtime/main.asm): games that toggle PPUCTRL.4 every frame.
+# Sub opt-outs (make vars): NES2GBC_VBL_LATCH=0, BANK_DEBOUNCE=0. Global opt-out: NES2GBC_NO_PPU_QUIRKS=1; force: NES2GBC_PPU_QUIRKS=latch
+aaed295c latch # R.C. Pro-Am (mapper 1)
+92197173 latch # Magic of Scheherazade (mapper 1): 10.9x -> 1.3x host frames per NES frame

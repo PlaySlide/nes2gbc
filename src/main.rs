@@ -278,6 +278,33 @@ fn apply_rom_patches(crc: u32, bytes: &mut [u8]) {
     }
 }
 
+const PPU_QUIRKS_DB: &str = include_str!("../data/ppu_quirks.txt");
+
+/// Per-ROM PPU quirk flags from data/ppu_quirks.txt (`<crc32> latch,debounce`):
+/// `latch` = vblank-flag latch (games that busy-wait on PPUSTATUS bit 7 with
+/// NMI off), `debounce` = 3-frame BG-pattern-bank debounce (games that toggle
+/// PPUCTRL.4 every frame). NES2GBC_NO_PPU_QUIRKS=1 disables both;
+/// NES2GBC_PPU_QUIRKS=latch,debounce forces.
+fn ppu_quirks(crc: u32) -> (bool, bool) {
+    if env::var_os("NES2GBC_NO_PPU_QUIRKS").is_some() {
+        return (false, false);
+    }
+    let parse = |t: &str| (t.contains("latch"), t.contains("debounce"));
+    if let Ok(v) = env::var("NES2GBC_PPU_QUIRKS") {
+        return parse(&v);
+    }
+    for l in PPU_QUIRKS_DB.lines() {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let mut it = l.splitn(2, char::is_whitespace);
+        if let (Some(h), Some(rest)) = (it.next(), it.next()) {
+            if u32::from_str_radix(h, 16).ok() == Some(crc) {
+                return parse(rest);
+            }
+        }
+    }
+    (false, false)
+}
+
 const NMI_HOLD_DB: &str = include_str!("../data/nmi_hold.txt");
 
 /// Games whose main thread must not be preempted by a vblank NMI mid-work
@@ -631,6 +658,13 @@ fn main() -> ExitCode {
         }
         if nmi_hold_hint(payload_crc) {
             asm.push_str("\n; NES2GBC_NMI_HOLD 1\n");
+        }
+        let (q_latch, q_debounce) = ppu_quirks(payload_crc);
+        if q_latch {
+            asm.push_str("\n; NES2GBC_QUIRK_LATCH 1\n");
+        }
+        if q_debounce {
+            asm.push_str("\n; NES2GBC_QUIRK_DEBOUNCE 1\n");
         }
 
         // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the

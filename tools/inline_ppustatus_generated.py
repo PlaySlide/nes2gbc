@@ -22,6 +22,10 @@ def indent_of(line: str) -> str:
     return line[: len(line) - len(line.lstrip())]
 
 
+import os
+VIS_MASK = "$3F"  # set to $BF in main() when the ROM carries the NES2GBC_QUIRK_LATCH hint (VBL latch)
+
+
 def inline_status_reads(lines: list[str]) -> int:
     count = 0
     for i, line in enumerate(lines):
@@ -46,7 +50,7 @@ def inline_status_reads(lines: list[str]) -> int:
             f"{visible}:\n"
             f"{ind}ld b, a\n"
             f"{ind}ld a, [nes_ppu_status]\n"
-            f"{ind}and $3F\n"
+            f"{ind}and {VIS_MASK}\n"
             f"{ind}ld e, a\n"
             f"{ind}ldh a, [nes_split_line]\n"
             f"{ind}ld c, a\n"
@@ -84,6 +88,9 @@ def main() -> int:
     args = p.parse_args()
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
+    global VIS_MASK
+    if os.environ.get("NES2GBC_VBL_LATCH") != "0" and any(l.startswith("; NES2GBC_QUIRK_LATCH 1") for l in lines):
+        VIS_MASK = "$BF"
     count = inline_status_reads(lines)
     args.asm.write_text("".join(lines), encoding="utf-8")
     print(f"ppustatus-inline: inlined {count} fixed $2002 read sites")

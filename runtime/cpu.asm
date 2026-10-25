@@ -1956,6 +1956,15 @@ ENDC
 .keep_entry_sp:
 ENDC
 
+IF DEF(NES2GBC_QUIRK_LATCH) && !DEF(NES2GBC_NO_VBL_LATCH)
+    ; NMI delivered: the PPUSTATUS vblank flag is set until the game reads it.
+    ; The host runs slower than the NES, so a handler can outlive the host
+    ; VBlank; latch the flag so a main-thread vblank wait that resumes after the
+    ; handler (LY < 144) still sees it once (R.C. Pro-Am boot livelock).
+    ld a, [nes_ppu_status]
+    or $80
+    ld [nes_ppu_status], a
+ENDC
     ld a, $01
     ret
 

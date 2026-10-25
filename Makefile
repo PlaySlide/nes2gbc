@@ -71,6 +71,8 @@ generate:
 	@if grep -q '^; NES2GBC_FIXED_CAMERA 1' runtime/generated.asm; then echo 'DEF NES2GBC_FIXED_CAMERA EQU 1 ; data-driven fixed follow crop (hint mode C; opt out: NES2GBC_NO_FIXED_CAMERA=1)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_NMI_NEST 1' runtime/generated.asm; then echo 'DEF NES2GBC_NMI_NEST EQU 1 ; handler guarded by a re-entrancy flag: deliver a nested NMI when it spans several host VBlanks (opt out: NES2GBC_NMI_NEST=0)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_NMI_ABANDON 1' runtime/generated.asm; then echo 'DEF NES2GBC_NMI_ABANDON EQU 1 ; NMI handler may reset SP and never RTI (opt out: NES2GBC_NMI_ABANDON=0)' >> runtime/generated_config.inc; fi
+	@if grep -q '^; NES2GBC_QUIRK_LATCH 1' runtime/generated.asm; then echo 'DEF NES2GBC_QUIRK_LATCH EQU 1 ; vblank-flag latch (data/ppu_quirks.txt; opt out: NES2GBC_NO_PPU_QUIRKS=1)' >> runtime/generated_config.inc; fi
+	@if grep -q '^; NES2GBC_QUIRK_DEBOUNCE 1' runtime/generated.asm; then echo 'DEF NES2GBC_QUIRK_DEBOUNCE EQU 1 ; 3-frame BG-pattern-bank debounce (data/ppu_quirks.txt; opt out: NES2GBC_NO_PPU_QUIRKS=1)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_NMI_HOLD 1' runtime/generated.asm; then printf '%s\n' 'DEF NES2GBC_NMI_HOLD EQU 1 ; hold a vblank NMI while the main thread is mid-work (data/nmi_hold.txt; opt out: NES2GBC_NO_NMI_HOLD=1)' 'DEF NES2GBC_NMI_HOLD_FRAMES EQU 4' >> runtime/generated_config.inc; fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \
