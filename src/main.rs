@@ -209,6 +209,44 @@ fn zapper_hint(crc: u32) -> bool {
     })
 }
 
+const CODE_ENTRIES_DB: &str = include_str!("../data/code_entries.txt");
+
+/// Extra CFG entry points for a ROM (data/code_entries.txt). `prg` is the flat
+/// PRG image mapped at $8000 (or $C000 for 16 KiB). NES2GBC_NO_CODE_ENTRIES=1
+/// disables it.
+fn code_entries(crc: u32, prg: &[u8]) -> Vec<u16> {
+    let mut out = Vec::new();
+    if env::var_os("NES2GBC_NO_CODE_ENTRIES").is_some() {
+        return out;
+    }
+    let base_addr: u32 = if prg.len() == 0x4000 { 0xC000 } else { 0x8000 };
+    let hex = |t: &str| u32::from_str_radix(t, 16).ok();
+    for l in CODE_ENTRIES_DB.lines() {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() < 2 || hex(f[0]) != Some(crc) {
+            continue;
+        }
+        if f[1] == "table" && f.len() >= 5 {
+            let (Some(b), Some(n), Some(add)) = (hex(f[2]), f[3].parse::<u32>().ok(), hex(f[4])) else { continue };
+            for i in 0..n {
+                let a = b + 2 * i;
+                if a < base_addr || (a - base_addr) as usize + 1 >= prg.len() {
+                    continue;
+                }
+                let o = (a - base_addr) as usize;
+                let w = u16::from_le_bytes([prg[o], prg[o + 1]]) as u32;
+                if w >= 0x8000 {
+                    out.push(((w + add) & 0xFFFF) as u16);
+                }
+            }
+        } else {
+            out.extend(f[1..].iter().filter_map(|t| hex(t)).map(|v| v as u16));
+        }
+    }
+    out
+}
+
 const NMI_HOLD_DB: &str = include_str!("../data/nmi_hold.txt");
 
 /// Games whose main thread must not be preempted by a vblank NMI mid-work
@@ -314,6 +352,7 @@ fn main() -> ExitCode {
         }
     };
 
+    let payload_crc = crc32_ieee(&bytes[16..]);
     let mut cart = match ines::parse(&bytes) {
         Ok(cart) => cart,
         Err(err) => {
@@ -322,7 +361,6 @@ fn main() -> ExitCode {
         }
     };
 
-    let payload_crc = crc32_ieee(&bytes[16..]);
     if let Some((m, sub)) = mapper_override(payload_crc) {
         if m != cart.mapper || sub != cart.submapper {
             println!("Mapper override: header {} sub {} -> {} sub {}", cart.mapper, cart.submapper, m, sub);
@@ -470,7 +508,13 @@ fn main() -> ExitCode {
         );
         switch_lo_views[0].1.clone()
     } else {
-        match cfg::discover_from_vectors(cart.mapper, cart.prg_rom, vectors) {
+        let extra_entries = code_entries(payload_crc, cart.prg_rom);
+        if !extra_entries.is_empty() {
+            println!("code_entries hint: {} extra CFG entrie(s)", extra_entries.len());
+        }
+        let mut disc_entries = vec![vectors.reset, vectors.nmi, vectors.irq_brk];
+        disc_entries.extend(extra_entries);
+        match cfg::discover(cart.mapper, cart.prg_rom, &disc_entries) {
             Ok(graph) => graph,
             Err(err) => {
                 eprintln!("CFG discovery stopped: {err}");
