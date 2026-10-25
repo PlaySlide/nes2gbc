@@ -1676,6 +1676,17 @@ ELSE
     jr nz, .no_nmi
 ENDC
 
+IF DEF(NES2GBC_NMI_ABANDON)
+IF !DEF(NES2GBC_ENTRY_SP_EARLY_OFF)
+    ; The VBlank ISR may fire between setting nes_nmi_active and the interrupt
+    ; frame push; its abandon check compares nes_sp with nes_nmi_entry_sp and
+    ; would retire this brand-new NMI against the previous NMI's stale entry SP
+    ; (Spelunker: handler then ran with nmi_active=0, polls elided, deadlock).
+    ; Seed entry SP with the current SP first (nmi_entry stores the final value).
+    ldh a, [nes_sp]
+    ld [nes_nmi_entry_sp], a
+ENDC
+ENDC
     ld a, $01
     ld [nes_nmi_active], a
 IF DEF(NES2GBC_HALT_IDLE)

@@ -63,6 +63,7 @@ generate:
 	else \
 		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
+	@if [ "$${NES2GBC_ENTRY_SP_EARLY:-1}" = "0" ]; then echo 'DEF NES2GBC_ENTRY_SP_EARLY_OFF EQU 1 ; restore the old NMI delivery order (opt-out for NES2GBC_ENTRY_SP_EARLY=0)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_NMI_ABANDON 1' runtime/generated.asm; then echo 'DEF NES2GBC_NMI_ABANDON EQU 1 ; NMI handler may reset SP and never RTI (opt out: NES2GBC_NMI_ABANDON=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \
