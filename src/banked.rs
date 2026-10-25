@@ -1267,6 +1267,7 @@ fn identical_bank_aliases(
     prg: &[u8],
 ) -> (BTreeMap<(u8, u16), u8>, BTreeSet<(u8, u16)>) {
     const MAX_CLOSURE: usize = 64;
+    let guard_off = std::env::var_os("NES2GBC_NO_ALIAS_RANGE_GUARD").is_some();
     let bank_count = prg.len() / 0x4000;
     let mut aliases: BTreeMap<(u8, u16), u8> = BTreeMap::new();
     let mut shared = BTreeSet::new();
@@ -1327,6 +1328,9 @@ fn identical_bank_aliases(
                 let identical = closure.iter().all(|t| {
                     let blk = &banked[&(bank, *t)];
                     let (lo, hi) = range(blk);
+                    if hi < lo && !guard_off {
+                        return false;
+                    }
                     prg[bank as usize * 0x4000 + lo..bank as usize * 0x4000 + hi]
                         == prg[other as usize * 0x4000 + lo..other as usize * 0x4000 + hi]
                 });
