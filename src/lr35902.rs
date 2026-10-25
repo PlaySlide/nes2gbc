@@ -25,6 +25,14 @@ fn set_apu_for_test(v: bool) {
     APU_OVERRIDE.with(|c| c.set(Some(v)));
 }
 
+/// Emulated NES Zapper on controller port 2 ($4017 bit3 light, bit4 trigger,
+/// runtime/zapper.asm). Set from main (data/zapper.txt or NES2GBC_ZAPPER=1).
+pub static ZAPPER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn zapper_on() -> bool {
+    ZAPPER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn state_label(reg: Register) -> &'static str {
     match reg {
         Register::A => "nes_a",
@@ -204,7 +212,11 @@ fn emit_load_operand_to_a(out: &mut String, src: Operand) {
                     Operand::Absolute(0x4017) => {
                         // No controller 2: nes_cpu_read returns `xor a` here.
                         writeln!(out, "    ld hl, $4017").unwrap();
-                        writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                        if zapper_on() {
+                            writeln!(out, "    call nes_zapper_read ; $4017 Zapper").unwrap();
+                        } else {
+                            writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                        }
                     }
                     Operand::Absolute(addr) => {
                         writeln!(out, "    ld hl, ${addr:04X}").unwrap();
@@ -858,7 +870,11 @@ pub fn emit_ops(ops: &[IrOp]) -> String {
                         // No controller 2: must match nes_cpu_read's `xor a`.
                         // A constant $01 makes games that OR both ports
                         // (Contra) see every button held.
-                        writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                        if zapper_on() {
+                            writeln!(out, "    call nes_zapper_read ; $4017 Zapper").unwrap();
+                        } else {
+                            writeln!(out, "    xor a ; $4017 controller 2 not connected").unwrap();
+                        }
                     }
                     _ => {
                         writeln!(out, "    xor a").unwrap();

@@ -1,0 +1,3 @@
+# <payload CRC32 hex>: Zapper (light gun) games. A button = trigger on port 2 ($4017 bit4); every shot sees light (bit3=0)
+# for a few frames after the trigger is released as long as the screen is lit by a bright BG/sprite palette entry (dark/black test frames read dark), i.e. hits whatever target the game flashes. Opt-out: NES2GBC_NO_ZAPPER=1; force-on: NES2GBC_ZAPPER=1
+24598791 # Duck Hunt

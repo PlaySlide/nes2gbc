@@ -168,6 +168,25 @@ fn hud_bottom_hint(crc: u32) -> Option<u8> {
     None
 }
 
+const ZAPPER_DB: &str = include_str!("../data/zapper.txt");
+
+/// Zapper (light gun) games: A button = trigger on port 2 ($4017 bit4) and the
+/// light sensor (bit3) reports "light" for a few frames after a shot, so a
+/// shot hits whatever the game flashes. Data-driven: payload CRC32 per line in
+/// data/zapper.txt. NES2GBC_ZAPPER=1 forces it on, NES2GBC_NO_ZAPPER=1 off.
+fn zapper_hint(crc: u32) -> bool {
+    if env::var_os("NES2GBC_NO_ZAPPER").is_some() {
+        return false;
+    }
+    if env::var("NES2GBC_ZAPPER").map(|v| v == "1").unwrap_or(false) {
+        return true;
+    }
+    ZAPPER_DB.lines().any(|l| {
+        let l = l.split('#').next().unwrap_or("").trim();
+        u32::from_str_radix(l, 16).ok() == Some(crc)
+    })
+}
+
 fn emit_follow_hint_init(asm: &mut String, hint: Option<FollowHint>) {
     asm.push_str("\n; PocketNES-derived follow-camera hint\n");
     asm.push_str("SECTION \"Generated follow-camera metadata\", ROM0\n");
@@ -264,6 +283,8 @@ fn main() -> ExitCode {
 
     let payload_crc = crc32_ieee(&bytes[16..]);
     let follow_hint = pocketnes_follow_hint(payload_crc);
+    let zapper = zapper_hint(payload_crc);
+    nes2gbc::lr35902::ZAPPER.store(zapper, std::sync::atomic::Ordering::Relaxed);
 
     println!("ROM: {}", path.display());
     println!("Header: {:?}", cart.format);
@@ -479,6 +500,9 @@ fn main() -> ExitCode {
         }
         if let Some(n) = hud_bottom_hint(payload_crc) {
             asm.push_str(&format!("\n; NES2GBC_HUD_BOTTOM {n}\n"));
+        }
+        if zapper {
+            asm.push_str("\n; NES2GBC_ZAPPER 1\n");
         }
 
         // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the

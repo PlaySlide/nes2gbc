@@ -1010,3 +1010,98 @@ ENDC
 .set:
     ret                     ; the caller writes A to the MBC from ROM0
 ENDC
+
+
+IF DEF(NES2GBC_ZAPPER)
+; Emulated NES Zapper (controller port 2): the GB A button is the trigger
+; ($4017 bit4 = 1 while held; sampled once per NES frame) and the light sensor
+; (bit3, 0 = light) reports light for ZAP_LIGHT_FRAMES frames after the last
+; trigger sample, so a shot hits whatever the game flashes.
+DEF ZAP_LIGHT_FRAMES EQU 8
+
+SECTION "NES zapper state", WRAM0
+nes_zap_trig: ds 1
+nes_zap_cnt:  ds 1
+
+SECTION "NES zapper", ROM0
+; Called once per delivered NES NMI. Clobbers A/F only.
+nes_zapper_frame::
+    ld a, $10
+    ldh [rP1], a
+    ldh a, [rP1]
+    ldh a, [rP1]
+    bit 0, a
+    jr nz, .released
+    ld a, $10
+    ld [nes_zap_trig], a
+    ld a, ZAP_LIGHT_FRAMES
+    ld [nes_zap_cnt], a
+    ret
+.released:
+    xor a
+    ld [nes_zap_trig], a
+    ld a, [nes_zap_cnt]
+    and a
+    ret z
+    dec a
+    ld [nes_zap_cnt], a
+    ret
+
+; $4017 read: A = trigger (bit4) | light sense (bit3, 0 = light). Clobbers F.
+; The sensor only sees light while the PPU is drawing (BG or sprites on) and a
+; background palette entry is bright; Duck Hunt's first, all-black frame
+; (rendering off / palette black) must read "dark" or the shot is rejected.
+nes_zapper_read::
+    ld a, [nes_zap_cnt]
+    and a
+    jr z, .dark
+    ld a, [nes_ppumask]
+    and $18
+    jr z, .dark
+    push bc
+    push hl
+    ld b, a
+    bit 3, b
+    jr z, .no_bg
+    ld hl, nes_palette_ram
+    call .scan
+    jr c, .lit
+.no_bg:
+    bit 4, b
+    jr z, .none
+    ld hl, nes_palette_ram + 16
+    call .scan
+    jr c, .lit
+.none:
+    pop hl
+    pop bc
+.dark:
+    ld a, [nes_zap_trig]
+    or $08
+    ret
+.lit:
+    pop hl
+    pop bc
+    ld a, [nes_zap_trig]
+    ret
+; HL = 16 palette entries. Carry set if any is a bright colour (row >= $20,
+; not $2D-$2F/$3D-$3F). Clobbers A, C, HL.
+.scan:
+    ld c, 16
+.scan_loop:
+    ld a, [hl+]
+    and $3F
+    cp $20
+    jr c, .scan_next
+    and $0F
+    cp $0D
+    jr c, .scan_hit
+.scan_next:
+    dec c
+    jr nz, .scan_loop
+    and a
+    ret
+.scan_hit:
+    scf
+    ret
+ENDC

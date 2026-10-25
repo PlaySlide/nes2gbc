@@ -692,6 +692,9 @@ ENDC
 
 .read_4017:
     PROFILE_INC nes_profile_read_io
+IF DEF(NES2GBC_ZAPPER)
+    jp nes_zapper_read
+ENDC
     ; No second controller is connected yet. During the first eight serial
     ; joypad reads an unpressed controller must contribute zero button bits.
     ; Returning $01 here made games such as SMB see controller 2 as $FF
@@ -717,6 +720,9 @@ nes_cpu_read_joy_hl::
     jp z, nes_controller_read
     cp $17
     jp nz, nes_cpu_read
+IF DEF(NES2GBC_ZAPPER)
+    jp nes_zapper_read
+ENDC
     xor a
     ret
 
@@ -1785,6 +1791,9 @@ IF DEF(NES2GBC_HALT_IDLE)
     ld a, [nes_idle_nmis]
     inc a
     ld [nes_idle_nmis], a
+ENDC
+IF DEF(NES2GBC_ZAPPER)
+    call nes_zapper_frame
 ENDC
 IF DEF(NES2GBC_APU)
     ; One APU frame-sequencer frame per delivered NES NMI (= emulated NES
