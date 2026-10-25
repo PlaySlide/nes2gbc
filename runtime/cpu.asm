@@ -1713,6 +1713,32 @@ nes_poll_nmi_hl:
     ld [nes_rti_grace], a
     ret
 .no_rti_grace:
+IF DEF(NES2GBC_NMI_HOLD) && !DEF(NES2GBC_NO_PACING)
+    ; Hold a fresh vblank NMI while the main thread is mid-work (it is not at
+    ; the learned idle PC): on hardware that work finishes within the frame,
+    ; but a slower host would let the NMI handler clobber its zero-page
+    ; scratch (Tetris memset vs jump-table dispatch). Bounded by host VBlanks.
+    ld a, [nes_nmi_active]
+    and a
+    jr nz, .hold_done
+    ld a, [nes_pace_idle_hi]
+    and a
+    jr z, .hold_done
+    cp h
+    jr nz, .hold_check_age
+    ld a, [nes_pace_idle_lo]
+    cp l
+    jr z, .hold_done
+.hold_check_age:
+    ld a, [nes_hold_seen]
+    cp NES2GBC_NMI_HOLD_FRAMES
+    jr nc, .hold_done
+    xor a
+    ret
+.hold_done:
+    xor a
+    ld [nes_hold_seen], a
+ENDC
 IF !DEF(NES2GBC_NO_PACING)
     ; An early (paced) NMI start must not preempt main-thread work that on
     ; hardware would finish before the next NMI: only start it once the game

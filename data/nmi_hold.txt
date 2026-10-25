@@ -1,0 +1,4 @@
+# <payload CRC32 hex>: games whose NMI handler shares zero-page scratch with long-running main-thread routines
+# (e.g. a memset using $00/$01 vs a jump-table dispatch). The host NMI is held while the main thread is not at its idle PC (max 4 host VBlanks).
+# Opt-out: NES2GBC_NO_NMI_HOLD=1; force-on: NES2GBC_NMI_HOLD=1
+1394f57e # Tetris (Nintendo/Elorg, mapper 1)

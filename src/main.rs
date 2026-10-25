@@ -209,6 +209,25 @@ fn zapper_hint(crc: u32) -> bool {
     })
 }
 
+const NMI_HOLD_DB: &str = include_str!("../data/nmi_hold.txt");
+
+/// Games whose main thread must not be preempted by a vblank NMI mid-work
+/// when the host runs it slower than hardware (the NMI handler shares
+/// zero-page scratch with the interrupted routine). Data-driven by payload
+/// CRC32 in data/nmi_hold.txt. NES2GBC_NMI_HOLD=1 forces on, NES2GBC_NO_NMI_HOLD=1 off.
+fn nmi_hold_hint(crc: u32) -> bool {
+    if env::var_os("NES2GBC_NO_NMI_HOLD").is_some() {
+        return false;
+    }
+    if env::var("NES2GBC_NMI_HOLD").map(|v| v == "1").unwrap_or(false) {
+        return true;
+    }
+    NMI_HOLD_DB.lines().any(|l| {
+        let l = l.split('#').next().unwrap_or("").trim();
+        u32::from_str_radix(l, 16).ok() == Some(crc)
+    })
+}
+
 fn emit_follow_hint_init(asm: &mut String, hint: Option<FollowHint>) {
     asm.push_str("\n; PocketNES-derived follow-camera hint\n");
     asm.push_str("SECTION \"Generated follow-camera metadata\", ROM0\n");
@@ -533,6 +552,9 @@ fn main() -> ExitCode {
         }
         if zapper {
             asm.push_str("\n; NES2GBC_ZAPPER 1\n");
+        }
+        if nmi_hold_hint(payload_crc) {
+            asm.push_str("\n; NES2GBC_NMI_HOLD 1\n");
         }
 
         // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the

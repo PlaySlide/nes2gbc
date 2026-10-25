@@ -168,6 +168,9 @@ ENDC
     ld [nes_pace_early], a
     ld [nes_pace_mask_deferred], a
     ld [nes_pace_armed], a
+IF DEF(NES2GBC_NMI_HOLD)
+    ld [nes_hold_seen], a
+ENDC
     ld [nes_pace_idle_lo], a
     ld [nes_pace_idle_hi], a
     ld [nes_pace_cand_lo], a
@@ -343,6 +346,14 @@ IF !DEF(NES2GBC_NO_PACING)
     xor a
     ld [nes_pace_committed], a
     ld [nes_pace_armed], a
+IF DEF(NES2GBC_NMI_HOLD)
+    ld a, [nes_hold_seen]
+    inc a
+    jr nz, .hold_seen_ok
+    dec a
+.hold_seen_ok:
+    ld [nes_hold_seen], a
+ENDC
     ld a, [nes_pace_snap_valid]
     and a
     jr z, .pace_setup_done
