@@ -510,6 +510,7 @@ fn setter_list(prg:&[u8],p:u8)->Vec<(usize,bool)>{
 }
 // True when straight-line, branch-free code from `from` reaches `to` (the
 // setter stores) without a control transfer or a write to the pointer.
+fn setter_calls()->bool{std::env::var("NES2GBC_SETTER_CALLS").map(|v|v!="0").unwrap_or(true)}
 fn straight_to(prg:&[u8],from:usize,to:usize,_p:u8)->bool{
  let mut o=from;
  while o<to{
@@ -518,6 +519,10 @@ fn straight_to(prg:&[u8],from:usize,to:usize,_p:u8)->bool{
    0xA5|0x85|0x29|0x09|0x49|0xA9|0xA0|0xA2|0x84|0x86|0x69|0xE9|0xC9=>2,
    0xAD|0x8D|0xBD|0xB9|0xAE|0xAC|0x99|0x9D|0xCE|0xEE=>3,
    0xAA|0xA8|0x8A|0x98|0x18|0x38|0xEA|0x0A|0x4A|0xE8|0xC8|0xCA|0x88=>1,
+   // A setter may save/restore Y around a helper JSR (Golf $C87E: TYA PHA JSR
+   // $C8F0 PLA TAY ... STY $02 STX $03 RTS). Opt out: NES2GBC_SETTER_CALLS=0.
+   0x48|0x68 if setter_calls()=>1,
+   0x20 if setter_calls()=>3,
    _=>return false,
   };
   o+=len;
