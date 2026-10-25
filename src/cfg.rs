@@ -701,6 +701,30 @@ fn pushed_return_continuation(mapper:u16,prg:&[u8],ins:&[DecodedInstruction])->O
  Some(target)
 }
 
+// Recognize a word copied from PRG into the stack page, for a later RTS (a coroutine /
+// task stack seeded with its start address-1):
+//
+//   LDA $P ; STA $01xx ; LDA $P+1 ; STA $01xx+1     (Galaga $C108: word $C115 -> $01FE)
+//
+// The RTS that consumes it resumes at word+1, which no edge reaches.
+fn stack_seeded_return(mapper:u16,prg:&[u8],ins:&[DecodedInstruction])->Option<u16>{
+ if std::env::var("NES2GBC_STACK_SEED").map(|v|v=="0").unwrap_or(false){return None}
+ let n=ins.len();
+ if n<4{return None}
+ let w=&ins[n-4..];
+ let ab=|i:&DecodedInstruction,m:Mnemonic|i.def.mnemonic==m&&i.def.mode==AddressingMode::Absolute;
+ if !(ab(&w[0],Mnemonic::Lda)&&ab(&w[1],Mnemonic::Sta)&&ab(&w[2],Mnemonic::Lda)&&ab(&w[3],Mnemonic::Sta)){return None}
+ let p=w[0].operand;
+ if w[2].operand!=p.wrapping_add(1)||p<0x8000{return None}
+ let s1=w[1].operand;
+ if !(0x0100..0x01FF).contains(&s1)||w[3].operand!=s1+1{return None}
+ let o=off(mapper,prg.len(),p).ok()?;
+ if o+1>=prg.len(){return None}
+ let target=u16::from_le_bytes([prg[o],prg[o+1]]).wrapping_add(1);
+ if target<0x8000||!looks_like_code(mapper,prg,target){return None}
+ Some(target)
+}
+
 // Truncate an existing block that contains `t` as an interior instruction
 // boundary, ending it with a fallthrough to `t`. Returns true if split.
 fn split_block_at(blocks:&mut BTreeMap<u16,BasicBlock>,t:u16)->bool{
@@ -827,6 +851,10 @@ pub fn discover(mapper:u16,prg:&[u8],entries:&[u16])->Result<ControlFlowGraph,An
      break
     }
     Mnemonic::Rti|Mnemonic::Brk=>break,
+    Mnemonic::Sta=>{
+     if let Some(t)=stack_seeded_return(mapper,prg,&ins){q(&mut work,&mut seen,t);if !continuations.contains(&t){continuations.push(t)}}
+     pc=next
+    }
     Mnemonic::Pha=>{
      // No edge reaches the continuation (a later RTS does, dynamically), so
      // register it as an entry point: code selection and dispatch tables are
@@ -971,6 +999,24 @@ mod tests {
         put(&mut prg, 0x9210, &[0x60]);
         let graph = discover(0, &prg, &[0x9000]).unwrap();
         assert!(graph.blocks.contains_key(&0x9200));
+    }
+
+    #[test]
+    fn discovers_word_copied_into_stack_page_for_rts() {
+        let mut prg = vec![0xEA; 0x8000];
+        put(
+            &mut prg,
+            0x9000,
+            &[
+                0xAD, 0x20, 0x90, 0x8D, 0xFE, 0x01, // LDA $9020 / STA $01FE
+                0xAD, 0x21, 0x90, 0x8D, 0xFF, 0x01, // LDA $9021 / STA $01FF
+                0x60,
+            ],
+        );
+        put(&mut prg, 0x9020, &[0x0F, 0x90]); // word $900F -> RTS resumes at $9010
+        put(&mut prg, 0x9010, &[0x60]);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&0x9010));
     }
 
     #[test]
