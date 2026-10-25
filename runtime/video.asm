@@ -36,6 +36,17 @@ nes_flush_bank_bit:  ds 1
 nes_hs_attr_lo: ds 1
 nes_hs_pal_bot: ds 1
 
+IF DEF(NES2GBC_ADDR_SCROLL)
+SECTION "NES addr-scroll split state", WRAM0
+nes_addr_bot_scy:   ds 1   ; SCY for the playfield region (row shown at host line 0)
+nes_addr_bot_ctrl:  ds 1   ; PPUCTRL (nametable select) for the playfield region
+nes_addr_seam_line: ds 1   ; host line of the Y=240 nametable wrap inside the playfield (0 = none)
+nes_addr_seam_ctrl: ds 1
+nes_addr_seam_y:    ds 1
+nes_addr_lock:      ds 1   ; PPUADDR scroll decoded this NMI (later PPUCTRL writes keep it)
+nes_addr_chain:     ds 1   ; seam LYC armed by the bottom-split ISR
+ENDC
+
 SECTION "NES video bridge", ROM0
 
 nes_video_init:
@@ -2454,3 +2465,99 @@ nes_video_update_ctrl:
 .write:
     ldh [rLCDC], a
     ret
+
+
+IF DEF(NES2GBC_ADDR_SCROLL)
+; Mid-frame PPUADDR scroll (data/addr_scroll.txt): the HUD is the top region,
+; the playfield (scrolled by the decoded PPUADDR pair) the bottom region.
+; NES line N = HUD height maps to host line S = N - view_y; the playfield row
+; shown at host line L >= S is armed_y + (L - S).  Computes nes_split_line (S),
+; the playfield SCY/nametable and, if the 240-line nametable wrap falls inside
+; the screen, the second (seam) region.  Called once per host frame.
+nes_addr_scroll_prepare:
+    xor a
+    ld [nes_addr_chain], a
+    ld [nes_addr_seam_line], a
+    ld a, [nes_view_armed_y]
+    ld d, a
+    ld a, NES2GBC_ADDR_SCROLL
+    sub d
+    jr c, .s_one
+    jr nz, .s_set
+.s_one:
+    ld a, $01
+.s_set:
+    ldh [nes_split_line], a
+    ; y_total = armed_y + view_y - N as 9-bit signed (e = 0, 1 or $FF)
+    ldh a, [nes_split_armed_y]
+    ld b, a
+    ld a, [nes_view_armed_y]
+    add b
+    ld d, a
+    ld e, $00
+    jr nc, .h1
+    inc e
+.h1:
+    ld a, d
+    sub NES2GBC_ADDR_SCROLL
+    ld d, a
+    jr nc, .h2
+    dec e
+.h2:
+    ldh a, [nes_split_armed_ctrl]
+    ld c, a
+    ld a, e
+    inc a
+    jr z, .neg
+    dec a
+    jr nz, .wrapped
+    ld a, d
+    cp $F0
+    jr nc, .wrapped
+    jr .row_ready
+.neg:
+    ld a, d
+    add $F0
+    jr .flip
+.wrapped:
+    ld a, d
+    add $10
+.flip:
+    ld b, a
+    ld a, c
+    xor $02
+    ld c, a
+    ld a, b
+.row_ready:
+    ld b, a                      ; b = row shown at host line 0
+    cp $61
+    jr c, .store                 ; 144-line crop cannot reach Y=240
+    ld a, $F0
+    sub b
+    ld d, a                      ; d = seam host line
+    ldh a, [nes_split_line]
+    cp d
+    jr c, .seam_after            ; seam below the playfield start
+    ld a, b                      ; playfield already starts past the seam
+    add $10
+    ld b, a
+    ld a, c
+    xor $02
+    ld c, a
+    jr .store
+.seam_after:
+    ld a, d
+    ld [nes_addr_seam_line], a
+    ld a, c
+    xor $02
+    ld [nes_addr_seam_ctrl], a
+    ld a, b
+    add $10
+    ld [nes_addr_seam_y], a
+.store:
+    ld a, b
+    ld [nes_addr_bot_scy], a
+    ld a, c
+    ld [nes_addr_bot_ctrl], a
+    ret
+ENDC

@@ -236,6 +236,13 @@ nes_ppu_cpu_write:
     jr .ctrl_capture_done
 
 .ctrl_capture_bottom:
+IF DEF(NES2GBC_ADDR_SCROLL)
+    ; A PPUCTRL write after the PPUADDR scroll copy only changes t, not the
+    ; rendering v: keep the decoded playfield nametable.
+    ld a, [nes_addr_lock]
+    and a
+    jr nz, .ctrl_capture_done
+ENDC
     ; Two or more pairs captured: this PPUCTRL belongs to the lower/playfield
     ; state unless a later scroll pair proves otherwise.
     ld a, e
@@ -582,7 +589,76 @@ ENDC
     ld [nes_ppu_addr_lo], a
     xor a
     ld [nes_ppu_latch], a
+IF DEF(NES2GBC_ADDR_SCROLL)
+    ; Mid-frame PPUADDR pair after the sprite-0 hit is the loopy t->v copy:
+    ; it sets the scroll (and nametable) for the rest of the frame.
+    ld a, [nes_ppu_status]
+    bit 6, a
+    ret z
+    ; $3Fxx (palette) and $0000 pairs are the usual PPUADDR housekeeping
+    ; idioms, not a scroll copy.
+    ld a, [nes_ppu_addr_hi]
+    and $3F
+    cp $3F
+    ret z
+    or e
+    ret z
+    ld a, [nes_nmi_active]
+    and a
+    ret z
+    ld a, [nes_ppumask]
+    and $18
+    ret z
+    ; x = coarseX*8 | fineX (kept from the last $2005 X write)
+    ld a, [nes_ppu_scroll_x]
+    and $07
+    ld b, a
+    ld a, e
+    and $1F
+    add a
+    add a
+    add a
+    or b
+    ld [nes_ppu_scroll_x], a
+    ; y = coarseY*8 | fineY ; coarseY = (B1&3)<<3 | B2>>5 ; fineY = (B1>>4)&3
+    ld a, [nes_ppu_addr_hi]
+    ld d, a
+    ld a, e
+    rlca
+    rlca
+    rlca
+    and $07
+    add a
+    add a
+    add a
+    ld b, a
+    ld a, d
+    and $03
+    rrca
+    rrca
+    or b
+    ld b, a
+    ld a, d
+    swap a
+    and $03
+    or b
+    ld e, a
+    ; nametable bits (B1>>2)&3 into the PPUCTRL image
+    ld a, d
+    rrca
+    rrca
+    and $03
+    ld b, a
+    ld a, [nes_ppuctrl]
+    and $FC
+    or b
+    ld [nes_ppuctrl], a
+    ld a, $01
+    ld [nes_addr_lock], a
+    jp .scroll_y
+ELSE
     ret
+ENDC
 
 ; Read $2007 with the NES delayed-read buffer for non-palette space.
 nes_ppu_read_data:

@@ -478,11 +478,27 @@ ENDC
     ld [nes_view_armed_y], a
 
 .early_split_apply:
+IF DEF(NES2GBC_ADDR_SCROLL)
+    call nes_addr_scroll_prepare
+ENDC
     call nes_video_apply_split_top_map
+IF DEF(NES2GBC_ADDR_SCROLL)
+    ldh a, [nes_split_armed_top_x]
+    ld b, a
+    ld a, [nes_view_armed_x]
+    add b
+    ldh [rSCX], a
+    ldh a, [nes_split_armed_top_y]
+    ld b, a
+    ld a, [nes_view_armed_y]
+    add b
+    ldh [rSCY], a
+ELSE
     ldh a, [nes_split_armed_top_x]
     ldh [rSCX], a
     ldh a, [nes_split_armed_top_y]
     ldh [rSCY], a
+ENDC
 
     ldh a, [nes_split_line]
     ldh [rLYC], a
@@ -1026,9 +1042,42 @@ nes_gbc_stat_isr:
     push af
     push bc
 
+IF DEF(NES2GBC_ADDR_SCROLL)
+    ld a, [nes_addr_chain]
+    and a
+    jr z, .no_chain
+    xor a
+    ld [nes_addr_chain], a
+    ld a, [nes_addr_seam_ctrl]
+    call nes_video_apply_map_select_a
+    ld a, [nes_addr_seam_y]
+    ldh [rSCY], a
+    jr .disable_stat
+.no_chain:
     ldh a, [nes_split_active]
     and a
     jr z, .check_vertical_seam
+    ld a, [nes_addr_bot_ctrl]
+    call nes_video_apply_map_select_a
+    ldh a, [nes_split_armed_x]
+    ld b, a
+    ld a, [nes_view_armed_x]
+    add b
+    ldh [rSCX], a
+    ld a, [nes_addr_bot_scy]
+    ldh [rSCY], a
+    ld a, [nes_addr_seam_line]
+    and a
+    jr z, .disable_stat
+    ldh [rLYC], a
+    ld a, $01
+    ld [nes_addr_chain], a
+    jr .isr_exit
+ELSE
+    ldh a, [nes_split_active]
+    and a
+    jr z, .check_vertical_seam
+ENDC
 
     ; One-shot lower/playfield scroll for a captured two-state NES raster split.
     ld a, [nes_diag_event_flags]
@@ -1067,6 +1116,7 @@ nes_gbc_stat_isr:
     and $BF
     ldh [rSTAT], a
 
+.isr_exit:
     pop bc
     pop af
     reti

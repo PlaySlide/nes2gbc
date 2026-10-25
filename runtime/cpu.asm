@@ -1849,6 +1849,13 @@ ENDC
 .stage_seen_clear_done:
     xor a
     ldh [nes_scroll_pair_count], a
+IF DEF(NES2GBC_ADDR_SCROLL)
+    ld [nes_addr_lock], a
+    ; the sprite-0 flag is cleared by the PPU before each frame
+    ld a, [nes_ppu_status]
+    and $BF
+    ld [nes_ppu_status], a
+ENDC
     ; Once a two-state raster split has been proven, keep it latched. Some
     ; games do not rewrite both scroll states on every NMI.
     PROFILE_INC nes_profile_nmi

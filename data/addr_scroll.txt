@@ -1,0 +1,3 @@
+# <payload CRC32 hex> <HUD height in NES lines, hex>: games whose mid-frame scroll is a PPUADDR pair after the sprite-0 hit
+# Opt-out: NES2GBC_NO_ADDR_SCROLL=1
+eaf7ed72 40 # The Legend of Zelda (room transitions; HUD = 64 lines)

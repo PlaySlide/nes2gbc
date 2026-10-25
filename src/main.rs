@@ -127,6 +127,26 @@ fn pocketnes_follow_hint(crc: u32) -> Option<FollowHint> {
     None
 }
 
+const ADDR_SCROLL_DB: &str = include_str!("../data/addr_scroll.txt");
+
+/// Games that set the playfield scroll mid-frame with a PPUADDR ($2006) pair
+/// after the sprite-0 hit (loopy t->v copy), e.g. Zelda room transitions.
+/// Data-driven: `<payload crc32> <hud height in NES lines (hex)>` in data/addr_scroll.txt.
+fn addr_scroll_hint(crc: u32) -> Option<u8> {
+    if env::var_os("NES2GBC_NO_ADDR_SCROLL").is_some() {
+        return None;
+    }
+    for l in ADDR_SCROLL_DB.lines() {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let mut f = l.split_whitespace();
+        let (Some(c), Some(h)) = (f.next(), f.next()) else { continue };
+        if u32::from_str_radix(c, 16).ok() == Some(crc) {
+            return u8::from_str_radix(h, 16).ok();
+        }
+    }
+    None
+}
+
 fn emit_follow_hint_init(asm: &mut String, hint: Option<FollowHint>) {
     asm.push_str("\n; PocketNES-derived follow-camera hint\n");
     asm.push_str("SECTION \"Generated follow-camera metadata\", ROM0\n");
@@ -433,6 +453,9 @@ fn main() -> ExitCode {
         }));
 
         emit_follow_hint_init(&mut asm, follow_hint);
+        if let Some(n) = addr_scroll_hint(payload_crc) {
+            asm.push_str(&format!("\n; NES2GBC_ADDR_SCROLL {n}\n"));
+        }
 
         // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the
         // interprocedural asm passes (tools/rts_return_sets.py).
@@ -608,6 +631,8 @@ mod follow_hint_tests {
 
     #[test]
     fn known_pocketnes_follow_hints_are_seeded() {
+        assert_eq!(addr_scroll_hint(0xEAF7_ED72), Some(0x40));
+        assert_eq!(addr_scroll_hint(0xD5C6_4257), None);
         assert_eq!(pocketnes_follow_hint(0x4013_49A8), Some(FollowHint::Sprite(8)));
         assert_eq!(pocketnes_follow_hint(0x703E_1948), Some(FollowHint::Sprite(0)));
         assert_eq!(pocketnes_follow_hint(0x4864_C304), Some(FollowHint::Sprite(8)));
