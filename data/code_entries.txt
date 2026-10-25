@@ -4,3 +4,4 @@
 #   <crc> table <base> <count> <add>     <count> (decimal) little-endian words at <base> (PRG address, hex), each + <add> (hex)
 # Opt-out: NES2GBC_NO_CODE_ENTRIES=1
 86670c93 table B717 16 7   # Slalom: sound-effect records ($B6B4) are 7 data bytes followed by code; $B707 JMP ($0091) lands on pointer+7
+0fec90d2 C400 C825  # Section Z: JMP $C825 at $C400 is only reachable from outside the CFG; the CHR-RAM upload loop at $C86E ran in the interpreter (357 host frames per boot/reset)

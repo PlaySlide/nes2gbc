@@ -497,6 +497,13 @@ fn main() -> ExitCode {
         let prg_bank_mask = (bank_count.next_power_of_two() - 1) as u8;
         let mut shared_fixed_entries = BTreeSet::<u16>::new();
         let mut bank_seeds: Vec<BTreeSet<u16>> = vec![BTreeSet::new(); bank_count];
+        // data/code_entries.txt: extra entries inside the fixed bank ($C000-$FFFF) that the
+        // per-bank discovery cannot reach (opt-out NES2GBC_NO_CODE_ENTRIES=1).
+        for e in code_entries(payload_crc, &prg_views[bank_count - 1]) {
+            if e >= 0xC000 {
+                shared_fixed_entries.insert(e);
+            }
+        }
         let mut converged_views = Vec::new();
         let mut rounds = 0usize;
         let mut overlay_seeded = false;
