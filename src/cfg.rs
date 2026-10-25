@@ -401,6 +401,8 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
  let mut out=Vec::new();
  for base in tables{
   let mut found_any=false;
+  let mut nvalid=0usize;
+  let mut hole=false;
   for i in 0..MAX_WORD_TABLE_ENTRIES{
    let a=base.wrapping_add(i*2);
    let Ok(o)=off(mapper,prg.len(),a)else{break};
@@ -408,10 +410,25 @@ fn indirect_table_targets(mapper:u16,prg:&[u8],jmp_pc:u16,pointer:u16)->Vec<u16>
    let target=u16::from_le_bytes([prg[o],prg[o+1]]);
    let valid=target>=0x8000&&looks_like_code(mapper,prg,target);
    if !valid{
+    // A long, well-formed table may contain one placeholder slot (Excitebike
+    // $E6B7 entry 17 points at the table itself): tolerate a single isolated
+    // hole once at least 8 targets were found. Opt out: NES2GBC_NO_TABLE_HOLE=1.
+    if found_any&&nvalid>=8&&!hole&&target>=base&&target<base.wrapping_add((i+3)*2)&&std::env::var("NES2GBC_NO_TABLE_HOLE").is_err(){
+     // The slot must point back into the table itself (a deliberate "no
+     // handler" placeholder, not the end of the table running into other
+     // data) and the table must resume with two more code pointers.
+     let cont=(1..=2u16).all(|k|{
+      let Ok(o2)=off(mapper,prg.len(),base.wrapping_add((i+k)*2))else{return false};
+      if o2+1>=prg.len(){return false}
+      let t2=u16::from_le_bytes([prg[o2],prg[o2+1]]);
+      t2>=0x8000&&looks_like_code(mapper,prg,t2)
+     });
+     if cont{hole=true;continue}
+    }
     if found_any{break}
     continue
    }
-   found_any=true;
+   found_any=true;nvalid+=1;
    if !out.contains(&target){out.push(target)}
   }
  }
@@ -938,6 +955,24 @@ mod tests {
         let graph = discover(0, &prg, &[0x9000]).unwrap();
         assert!(graph.blocks.contains_key(&0x9200));
         assert!(graph.blocks.contains_key(&0x9210));
+    }
+
+    #[test]
+    fn indirect_table_tolerates_one_placeholder_slot() {
+        // Excitebike $E6B7: a long jump table with one dummy entry that points back at the table.
+        let mut prg = vec![0x00; 0x8000];
+        put(&mut prg, 0x9000, &[0xB9, 0x00, 0xA0, 0x85, 0x00, 0xC8, 0xB9, 0x00, 0xA0, 0x4C, 0x20, 0x90]);
+        put(&mut prg, 0x9020, &[0x85, 0x01, 0x6C, 0x00, 0x00]);
+        let mut table = Vec::new();
+        for i in 0..12u16 {
+            let t = if i == 9 { 0xA000 } else { 0x9200 + i * 0x10 };
+            table.extend_from_slice(&t.to_le_bytes());
+            if i != 9 { put(&mut prg, t, &[0x60]); }
+        }
+        put(&mut prg, 0xA000, &table);
+        let graph = discover(0, &prg, &[0x9000]).unwrap();
+        assert!(graph.blocks.contains_key(&(0x9200 + 8 * 0x10)));
+        assert!(graph.blocks.contains_key(&(0x9200 + 11 * 0x10)));
     }
 
     #[test]
