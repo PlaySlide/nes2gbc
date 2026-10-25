@@ -770,8 +770,15 @@ fn nmi_reaches_txs(graph: &ControlFlowGraph, nmi: u16) -> bool {
                 && w[0].def.mnemonic == crate::cpu6502::Mnemonic::Ldx
                 && w[0].def.mode == crate::cpu6502::AddressingMode::Immediate
         });
+        // PLA/PLA/PLA/RTS pops the interrupt frame (P, PCL, PCH) and returns
+        // into the interrupted routine's caller (Rad Racer $FF4E: the NMI
+        // "yields" the main thread's wait routine).
+        let pops_frame = b.instructions.windows(4).any(|w| {
+            w[..3].iter().all(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Pla)
+                && w[3].def.mnemonic == crate::cpu6502::Mnemonic::Rts
+        });
         let saves_sp = b.instructions.iter().any(|i| i.def.mnemonic == crate::cpu6502::Mnemonic::Tsx);
-        if resets_sp && !saves_sp {
+        if (resets_sp || pops_frame) && !saves_sp {
             if std::env::var("NES2GBC_CFG_DEBUG").is_ok() {
                 eprintln!("nmi-abandon: TXS in block ${a:04X} reachable from NMI ${nmi:04X}");
             }
