@@ -1,0 +1,4 @@
+# crc32(payload) cpu_addr hex_bytes   -- PRG byte patches (see apply_rom_patches in src/main.rs)
+# Slalom: gameplay scanline-scroll effect is JMP $00AE into a routine copied to zero page
+# that rewrites its own operands (self-modifying, raster timed); replace with RTS.
+86670c93 FE7E 60 EA EA

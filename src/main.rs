@@ -247,6 +247,37 @@ fn code_entries(crc: u32, prg: &[u8]) -> Vec<u16> {
     out
 }
 
+const ROM_PATCH_DB: &str = include_str!("../data/rom_patch.txt");
+
+/// Byte patches for PRG ROM (data/rom_patch.txt: `<payload crc> <cpu addr> <hex bytes>`),
+/// for single-PRG-window mappers. Used to neutralise code the recompiler
+/// cannot represent (e.g. a jump into a self-modifying RAM routine).
+/// NES2GBC_NO_ROM_PATCH=1 disables.
+fn apply_rom_patches(crc: u32, bytes: &mut [u8]) {
+    if env::var_os("NES2GBC_NO_ROM_PATCH").is_some() || bytes.len() < 16 {
+        return;
+    }
+    let prg_len = bytes[4] as usize * 0x4000;
+    let base = 16 + if bytes[6] & 4 != 0 { 512 } else { 0 };
+    for l in ROM_PATCH_DB.lines() {
+        let l = l.split('#').next().unwrap_or("").trim();
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() < 3 || u32::from_str_radix(f[0], 16).ok() != Some(crc) {
+            continue;
+        }
+        let Ok(addr) = usize::from_str_radix(f[1], 16) else { continue };
+        let data: Vec<u8> = f[2..].iter().filter_map(|t| u8::from_str_radix(t, 16).ok()).collect();
+        if prg_len == 0 {
+            continue;
+        }
+        let off = base + (addr.wrapping_sub(0x8000) & 0x7FFF) % prg_len;
+        if off + data.len() <= bytes.len() {
+            bytes[off..off + data.len()].copy_from_slice(&data);
+            println!("rom_patch hint: ${addr:04X} <- {} byte(s)", data.len());
+        }
+    }
+}
+
 const NMI_HOLD_DB: &str = include_str!("../data/nmi_hold.txt");
 
 /// Games whose main thread must not be preempted by a vblank NMI mid-work
@@ -344,7 +375,7 @@ fn main() -> ExitCode {
     }
 
     let path = PathBuf::from(path);
-    let bytes = match fs::read(&path) {
+    let mut bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(err) => {
             eprintln!("error reading {}: {err}", path.display());
@@ -353,6 +384,7 @@ fn main() -> ExitCode {
     };
 
     let payload_crc = crc32_ieee(&bytes[16..]);
+    apply_rom_patches(payload_crc, &mut bytes);
     let mut cart = match ines::parse(&bytes) {
         Ok(cart) => cart,
         Err(err) => {
