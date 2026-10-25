@@ -311,6 +311,9 @@ nes_gbc_vblank_isr:
     push bc
     push de
     push hl
+IF DEF(NES2GBC_ISR_BANK_FIX)
+    call nes_isr_save_pc
+ENDC
     ; Translated code may be interrupted between selecting a WRAMX bank and
     ; using it (mirrored-PRG reads select banks 2-5). This ISR assumes bank 1
     ; and ends in bank 1, so save and restore the interrupted selection.
@@ -841,6 +844,13 @@ ENDC
     ld [nes_pace_mask_deferred], a
     call nes_video_update_mask
 .pace_mask_done:
+ENDC
+IF DEF(NES2GBC_ISR_BANK_FIX)
+    ; The ISR's helpers (follow camera, CHR upload) switch the ROM bank and
+    ; restore nes_current_code_bank. If the ISR landed inside a runtime
+    ; sequence that had temporarily selected another bank (dispatch table
+    ; lookup, PRG data read), put that bank back before returning.
+    call nes_isr_fix_bank
 ENDC
     pop af
     ldh [rSVBK], a

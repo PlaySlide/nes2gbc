@@ -547,6 +547,9 @@ fn emit_overlay_dispatch(out: &mut String, addresses: &BTreeSet<u16>) {
     writeln!(out, "    ld a, BANK(nes_overlay_table_7)").unwrap();
     writeln!(out, ":").unwrap();
     writeln!(out, "    ld [$2000], a").unwrap();
+    // ROM bank = overlay table bank (bit 4 of B picks it) until the jump out:
+    // the VBlank ISR's bank fix (input.asm nes_isr_fix_bank_romx) needs this.
+    writeln!(out, ".win_start::").unwrap();
     writeln!(out, "    xor a").unwrap();
     writeln!(out, "    ld a, h").unwrap();
     writeln!(out, "    and $0F").unwrap();
@@ -568,6 +571,7 @@ fn emit_overlay_dispatch(out: &mut String, addresses: &BTreeSet<u16>) {
     writeln!(out, "    ld h, b").unwrap();
     writeln!(out, "    ld l, e").unwrap();
     writeln!(out, "    jp nes_interp_enter").unwrap();
+    writeln!(out, ".win_end::").unwrap();
     writeln!(out).unwrap();
     for page in [6u16, 7] {
         let base = page << 12;

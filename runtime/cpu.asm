@@ -232,6 +232,7 @@ ENDC
     and $0F
     add $18
     ld [$2000], a
+.tbl_win_start::
     xor a
     ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
 
@@ -260,6 +261,7 @@ ENDC
     ld d, a
 
     ; Cache the resolved translation before switching back to its code bank.
+.tbl_win_end::
     ld a, $01
     ld [nes_dispatch_cache_valid], a
     ld a, b
@@ -320,6 +322,63 @@ nes_restore_code_bank:
     ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
     ret
 
+IF DEF(NES2GBC_ISR_BANK_FIX)
+; Called at the very start of the VBlank ISR (main.asm), while the interrupted
+; code's ROM bank is still mapped: if the interrupted PC is in ROMX, remember
+; the code bytes there so the bank guess made at the end of the ISR (a stack
+; walk, which saved data that looks like a stub return address can fool) can
+; be verified against them.
+nes_isr_save_pc:
+    ld hl, sp + 10          ; interrupted PC (ISR pushed AF,BC,DE,HL; +ret)
+    ld a, [hli]
+    ld h, [hl]
+    ld l, a
+    ld de, nes_isr_pcb      ; copied unconditionally; only used if PC is ROMX
+    ld b, 8
+.save:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .save
+    ret
+
+; Called at the very end of the VBlank ISR (see main.asm). Runs from helper
+; bank $FF and leaves the ROM bank the interrupted code had selected.
+nes_isr_fix_bank:
+    ld a, $FF
+    ld [$2000], a
+    call nes_isr_fix_bank_romx
+    ld [$2000], a
+    ld b, a
+    ld hl, sp + 12
+    ld a, [hli]
+    ld h, [hl]
+    ld l, a
+    ld a, h
+    sub $40
+    cp $40
+    ld a, b
+    ret nc                  ; interrupted PC not in ROMX
+    ld de, nes_isr_pcb
+    ld c, 8
+.cmp:
+    ld a, [de]
+    cp [hl]
+    jr nz, .mismatch
+    inc hl
+    inc de
+    dec c
+    jr nz, .cmp
+    ld a, b
+    ret
+.mismatch:
+    ; Not the bank the interrupted code was running from: it was the code bank.
+    ldh a, [nes_current_code_bank]
+    ld [$2000], a
+    ret
+ENDC
+
 nes_unimplemented:
     ; Cold fault path: the snapshot + halt body lives in helper bank $FF
     ; (ROM0 headroom). Nothing here depends on the live CPU registers.
@@ -371,14 +430,18 @@ nes_mapper2_conflict_read_hl:
 .have_bank:
     inc a
     ld [$2000], a
+IF DEF(NES2GBC_ISR_BANK_FIX)
+    ld b, a                 ; keep the mapped bank in B (nes_isr_fix_bank reads it)
+ELSE
     xor a
-    ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
-
+ENDC
+.win_start::
     ld a, h
     and $3F
     or $40
     ld h, a
     ld a, [hl]
+.win_end::
     push af
     call nes_restore_code_bank
     pop af
@@ -540,6 +603,15 @@ ENDC
     ; Physical PRG bank N is stored in GBC ROM bank N+1.
     inc a
     ld [$2000], a
+IF DEF(NES2GBC_ISR_BANK_FIX)
+    ; A stays the mapped bank until the read (res/set leave A and F alone), so
+    ; the VBlank ISR can recover it (nes_isr_fix_bank). Same HL, L and flags.
+.hb_win_start::
+    res 7, h
+    set 6, h
+    ld l, [hl]
+.hb_win_end::
+ELSE
     xor a
     ; MBC5 bit 8 stays 0 (cleared at boot; all code banks < 256)
 
@@ -549,6 +621,7 @@ ENDC
     or $40
     ld h, a
     ld l, [hl]
+ENDC
 
     ; Generic PRG reads are temporary data-bank switches. Restore the
     ; translated-code bank before returning to generated code.
@@ -574,6 +647,19 @@ ENDC
     inc a
 .prg_select:
     ld [$2000], a
+IF DEF(NES2GBC_ISR_BANK_FIX)
+    ; A stays the mapped bank until the read (see .hb_win_start); `or $40`
+    ; after the restore recreates the old NZ/NC result.
+.sel_win_start::
+    res 7, h
+    set 6, h
+    ld l, [hl]
+.sel_win_end::
+    ldh a, [nes_current_code_bank]
+    ld [$2000], a
+    or $40
+    ld a, l
+ELSE
     ld a, h
     and $3F
     or $40
@@ -582,6 +668,7 @@ ENDC
     ldh a, [nes_current_code_bank]
     ld [$2000], a
     ld a, l
+ENDC
 IF DEF(NES2GBC_DEBUG_TRACE)
     ld [nes_debug_bus_value], a
 ENDC
@@ -2034,7 +2121,7 @@ ENDC
     jr z, .palette_done
     ld hl, nes_gbc_palette_shadow
     ld de, nes_pace_palette
-    ld b, 4
+    ld b, 8
 .copy_palette:
     REPT 16
     ld a, [hli]

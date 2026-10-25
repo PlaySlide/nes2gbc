@@ -1179,13 +1179,18 @@ nes_ppu_read_raw:
     ld a, [nes_chr_bank]
     add b
     ld [$2000], a
+IF DEF(NES2GBC_ISR_BANK_FIX)
+    ld b, a                 ; keep the mapped bank in B (nes_isr_fix_bank reads it)
+ENDC
 
     ; Map PPU $0000-$1FFF to GBC ROMX $4000-$5FFF.
+.chr_win_start::
     ld a, h
     and $1F
     or $40
     ld h, a
     ld a, [hl]
+.chr_win_end::
     push af
     call nes_restore_code_bank
     pop af

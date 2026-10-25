@@ -96,6 +96,11 @@ nes_nmi_drops:         ds 1 ; host VBlanks seen while the translated NMI was act
 nes_nmi_nested:        ds 1 ; nonzero while a nested NMI runs
 ENDC
 
+IF DEF(NES2GBC_ISR_BANK_FIX)
+SECTION "NES isr bank fix", WRAM0
+nes_isr_pcb:           ds 8 ; code bytes at the interrupted PC (ROMX), to verify the bank guess
+ENDC
+
 SECTION "NES dispatch cache", WRAM0[$C850]
 nes_dispatch_cache_valid:   ds 1
 nes_dispatch_cache_pc_hi:   ds 1

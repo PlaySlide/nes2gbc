@@ -771,3 +771,215 @@ nes_unimplemented_romx:
 .hang:
     halt
     jr .hang
+
+IF DEF(NES2GBC_ISR_BANK_FIX)
+MACRO BANK_IN_A ; first PC, one-past-last PC: the bank is still in A
+    ld a, e
+    sub LOW(\1)
+    ld a, d
+    sbc HIGH(\1)
+    jr c, .na\@
+    ld a, e
+    sub LOW(\2)
+    ld a, d
+    sbc HIGH(\2)
+    jr nc, .na\@
+    ld hl, sp + 13          ; interrupted code's A
+    ld a, [hl]
+    jp .set
+.na\@:
+ENDM
+MACRO BANK_IN_B ; first PC, one-past-last PC
+    ld a, e
+    sub LOW(\1)
+    ld a, d
+    sbc HIGH(\1)
+    jr c, .nx\@
+    ld a, e
+    sub LOW(\2)
+    ld a, d
+    sbc HIGH(\2)
+    jr nc, .nx\@
+    ld hl, sp + 11          ; interrupted code's B
+    ld a, [hl]
+    jp .set
+.nx\@:
+ENDM
+; Called by nes_isr_fix_bank (ROM0) from the end of the VBlank ISR with bank
+; $FF mapped; returns the bank in A. Stack: [ret][ret][F,A (rSVBK)][L,H][E,D][C,B][F,A user][PC lo,hi]
+; then the interrupted code's own stack. Chooses the ROM bank that was mapped
+; when the interrupt hit (the ISR helpers leave nes_current_code_bank mapped)
+; and returns it in A. Cases, in order:
+;  1. inside the dispatch-table lookup window: table bank of the target PC
+;  2. in ROM0 right after `ld [$2000],a` (before `ld l,[hl]`/`xor a`): A
+;  3. in ROM0 on `call`/`xor a`+`call` of a bank-stub: the stub's immediate
+;  4. inside a helper-bank routine (any bank-stub `ld a,N; ld [$2000],a;
+;     [xor a;] call X` return address live on the interrupted stack): N
+;  5. otherwise the translated-code bank.
+nes_isr_fix_bank_romx:
+    ld hl, sp + 14
+    ld a, [hli]
+    ld e, a
+    ld d, [hl]              ; DE = interrupted PC
+    inc hl
+    ld b, h
+    ld c, l                 ; BC = first live word of the interrupted stack
+    ld a, d
+    cp $40
+    jp nc, .walk
+    ; (1) dispatch-table lookup window
+    ld a, e
+    sub LOW(nes_dispatch_hl.tbl_win_start)
+    ld a, d
+    sbc HIGH(nes_dispatch_hl.tbl_win_start)
+    jp c, .rom0
+    ld a, e
+    sub LOW(nes_dispatch_hl.tbl_win_end)
+    ld a, d
+    sbc HIGH(nes_dispatch_hl.tbl_win_end)
+    jp nc, .rom0
+    ld a, [nes_dispatch_cache_pc_hi]
+    swap a
+    and $0F
+    add $18
+    jp .set
+.rom0:
+IF DEF(NES2GBC_RAM_OVERLAY)
+    ; (1a) PRG-RAM overlay dispatch after it selected the overlay table bank
+    ld a, e
+    sub LOW(nes_overlay_dispatch_hl.win_start)
+    ld a, d
+    sbc HIGH(nes_overlay_dispatch_hl.win_start)
+    jp c, .ovl_no
+    ld a, e
+    sub LOW(nes_overlay_dispatch_hl.win_end)
+    ld a, d
+    sbc HIGH(nes_overlay_dispatch_hl.win_end)
+    jp nc, .ovl_no
+    ld hl, sp + 11          ; interrupted code's B (= the dispatched PC's high byte)
+    ld a, [hl]
+    bit 4, a
+    ld a, BANK(nes_overlay_table_6)
+    jp z, .set
+    ld a, BANK(nes_overlay_table_7)
+    jp .set
+.ovl_no:
+ENDC
+    ; (1b) windows that keep the mapped bank in B across the data read
+    BANK_IN_B nes_mapper2_conflict_read_hl.win_start, nes_mapper2_conflict_read_hl.win_end
+    BANK_IN_A nes_cpu_read.hb_win_start, nes_cpu_read.hb_win_end
+    BANK_IN_A nes_cpu_read.sel_win_start, nes_cpu_read.sel_win_end
+    BANK_IN_B nes_ppu_read_raw.chr_win_start, nes_ppu_read_raw.chr_win_end
+    ld h, d
+    ld l, e
+    ld a, [hl]
+    cp $CD
+    jp z, .rom0_call
+    cp $6E
+    jp z, .a_intact
+    cp $47
+    jp z, .a_intact
+    cp $AF
+    jp nz, .walk
+.a_intact:
+    ; `ld [$2000],a` just executed: A is still the bank.
+    dec hl
+    ld a, [hl]
+    cp $20
+    jp nz, .walk
+    dec hl
+    ld a, [hl]
+    and a
+    jp nz, .walk
+    dec hl
+    ld a, [hl]
+    cp $EA
+    jp nz, .walk
+    ld hl, sp + 13          ; interrupted code's A
+    ld a, [hl]
+    jp .set
+.rom0_call:
+    dec hl
+    ld a, [hl]
+    cp $AF
+    jp z, .stub             ; xor a; call X
+    inc hl                  ; call X directly after the write
+    jp .stub
+.walk:
+    ld e, 0                 ; E = 1 once a non-return word was skipped
+.walk_loop:
+    ; Scan the interrupted stack (BC .. $D000) for a bank-stub return address.
+    ld a, b
+    cp $D0
+    jp nc, .cur
+    ld a, [bc]
+    ld l, a
+    inc bc
+    ld a, [bc]
+    ld h, a
+    inc bc
+    cp $40
+    jp c, .walk_rom0
+    cp $80
+    jp nc, .walk_skip       ; not a return address
+    ld d, a                 ; a ROMX return address: the interrupted code was
+    jp .walk_loop           ; called from a ROMX routine (D >= $40 from here on)
+.walk_skip:
+    ld e, 1
+    jp .walk_loop
+.walk_rom0:
+    dec hl
+    dec hl
+    dec hl
+    ld a, [hl]
+    cp $CD
+    jp nz, .walk_skip
+    ; A bank-stub frame only describes the interrupted code if a routine in
+    ; the stub's bank is live: some ROMX return address (or the interrupted
+    ; PC itself in ROMX) must lie between SP and the frame. Otherwise the
+    ; word is saved data that merely looks like a return address.
+    ld a, d
+    cp $40
+    jp nc, .stub_ok
+    ; (A helper that tail-jumps into a ROM0 routine leaves no ROMX return
+    ; address: accept the stub frame if every word above it was a verified
+    ; ROM0 return address, i.e. nothing was skipped as saved data.)
+    ld a, e
+    and a
+    jp nz, .walk_skip
+.stub_ok:
+    dec hl
+    ld a, [hl]
+    cp $AF
+    jp z, .stub_walk
+    inc hl
+.stub_walk:
+.stub:
+    ; HL = address just after `ld [$2000],a`. Expect 3E nn EA 00 20 before it.
+    dec hl
+    ld a, [hl]
+    cp $20
+    jp nz, .walk_or_cur
+    dec hl
+    ld a, [hl]
+    and a
+    jp nz, .walk_or_cur
+    dec hl
+    ld a, [hl]
+    cp $EA
+    jp nz, .walk_or_cur
+    dec hl
+    ld e, [hl]              ; candidate bank
+    dec hl
+    ld a, [hl]
+    cp $3E
+    jp nz, .walk_or_cur
+    ld a, e
+    jp .set
+.walk_or_cur:
+    jp .walk_loop
+.cur:
+    ldh a, [nes_current_code_bank]
+.set:
+    ret                     ; the caller writes A to the MBC from ROM0
+ENDC
