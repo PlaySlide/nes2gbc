@@ -2436,6 +2436,16 @@ nes_video_apply_map_select_a:
     ld a, [nes_mirroring]
     cp $01
     jr z, .map_vertical
+IF DEF(NES2GBC_MMC1) && !DEF(NES2GBC_NO_ONESCREEN_MAP)
+    cp $03
+    jr z, .map_store
+    cp $04
+    jr nz, .map_not_one_screen
+    ld a, b
+    or $08
+    jr .map_write
+.map_not_one_screen:
+ENDC
 
     ; Horizontal mirroring: physical table comes from PPUCTRL bit 1.
     ld a, c
@@ -2580,6 +2590,17 @@ nes_video_update_ctrl:
     ld a, [nes_mirroring]
     cp $01
     jr z, .vertical
+IF DEF(NES2GBC_MMC1) && !DEF(NES2GBC_NO_ONESCREEN_MAP)
+    ; One-screen mirroring: PPUCTRL picks no table; show physical page 0 / 1.
+    cp $03
+    jr z, .store
+    cp $04
+    jr nz, .not_one_screen
+    ld a, b
+    or $08
+    jr .write
+.not_one_screen:
+ENDC
 
     ; Horizontal mirroring: physical table comes from PPUCTRL bit 1.
     ld a, [nes_ppuctrl]

@@ -789,6 +789,7 @@ fn main() -> ExitCode {
                     !l.starts_with("DEF NES2GBC_RAM_OVERLAY ")
                         && !l.starts_with("DEF NES2GBC_DISPATCH_ADD ")
                         && !l.starts_with("DEF NES2GBC_CHR4K ")
+                        && !l.starts_with("DEF NES2GBC_MMC1 ")
                 })
                 .map(|l| format!("{l}\n"))
                 .collect();
@@ -804,6 +805,11 @@ fn main() -> ExitCode {
                     "DEF NES2GBC_DISPATCH_ADD EQU {} ; dispatch-table bank = high nibble + this\n",
                     recompile::dispatch_bank_start() - 8
                 ));
+                changed = true;
+            }
+            if cart.mapper == 1 {
+                // MMC1 can select one-screen mirroring (codes 3/4 in nes_mirroring).
+                text.push_str("DEF NES2GBC_MMC1 EQU 1 ; MMC1: one-screen mirroring map selection\n");
                 changed = true;
             }
             if cart.mapper == 1
