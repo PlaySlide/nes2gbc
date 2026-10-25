@@ -246,7 +246,14 @@ def analyse(body, cc, poll=True):
                 step(sm, c)
                 e = effect(c)
                 written |= e[1] & R8
-            div = {"a"} if poll else set()
+            # A is not carried across the back-edge when the sunk stores R (which
+            # start with ld a,r) were removed from the loop: treat it as diverging
+            a_dead_ok = False
+            if poll or (s is not None and os.environ.get("NES2GBC_SELFLOOP_SUNK_A_BUG") != "1"):
+                div = {"a"}
+                a_dead_ok = (not poll) and s is not None
+            else:
+                div = set()
             for r in written:
                 if sm.r[r] != sb.r[r]:
                     div.add(r)
@@ -259,6 +266,8 @@ def analyse(body, cc, poll=True):
                 # R is also replayed at flush time and reads regs: its reads must see defined values
                 if fr == "r":
                     okd = False; break
+                if fr is None and r == "a" and a_dead_ok:
+                    continue  # exit replays R, which defines A first
                 if fr is None:
                     # never touched in loop: for a, fine only if exit does not need it => not allowed unless R/T define it
                     okd = False; break

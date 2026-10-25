@@ -42,6 +42,34 @@ nes_8227:
     jp .npoll_back_4
 """
 
+# Poll-free counted loop whose sunk R (ld a,b ; ldh [nes_x],a) used to make the
+# promoter assume A==X on the back-edge (Tetris $87AE copy loop, off-by-one).
+FIXTURE2 = """SECTION "NES block 87B0", ROMX, BANK[1]
+nes_87B0:
+    ldh a, [nes_x]
+    ld b, a
+    add $40
+    ld l, a
+    ld h, $C0
+    ld a, [hl]
+    ld e, a
+    ld a, b
+    add $60
+    ld l, a
+    ld a, e
+    ld [hl], a
+    ld d, a
+    dec b
+    ld e, $FF
+    ld a, b
+    sub e
+    ld a, b
+    ldh [nes_x], a
+    jr nz, nes_87B0
+:
+    jp nes_87B9
+"""
+
 
 def run(path, optout):
     env = dict(os.environ)
@@ -63,6 +91,14 @@ def main():
             assert needle in once, "missing " + needle
         run(p, False)
         assert open(p).read() == once, "pass is not idempotent"
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "g2.asm")
+        open(p, "w").write(FIXTURE2)
+        run(p, False)
+        out = open(p).read()
+        if ".lp_body_nes_87B0:" in out:
+            loop = out.split(".lp_body_nes_87B0:")[1].split("jr nz, .lp_body_nes_87B0")[0]
+            assert "ldh [nes_x], a" in loop, "R sunk although A is read at loop head (Tetris copy loop)"
     print("test_selfloop_promote: OK")
 
 
