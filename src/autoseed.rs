@@ -65,6 +65,28 @@ pub fn scan(view: &[u8], refs: &std::collections::BTreeSet<u16>) -> (Vec<u16>, V
             }
         }
     }
+    // Code-pointer stores: `LDA #lo; STA v; LDA #hi; STA v+1` (either order, abs or zero page) set up RAM
+    // vectors (e.g. an NMI trampoline `JMP (vec)`) whose target static discovery cannot see.
+    for i in 0..view.len().saturating_sub(10) {
+        let abs = view[i + 2] == 0x8D && view[i + 7] == 0x8D;
+        let zp = view[i + 2] == 0x85 && view[i + 6] == 0x85;
+        if view[i] != 0xA9 || !(abs || zp) {
+            continue;
+        }
+        let (j, a1, a2) = if abs {
+            (i + 5, u16::from_le_bytes([view[i + 3], view[i + 4]]), u16::from_le_bytes([view[i + 8], view[i + 9]]))
+        } else {
+            (i + 4, view[i + 3] as u16, view[i + 7] as u16)
+        };
+        if view[j] != 0xA9 {
+            continue;
+        }
+        let (v1, v2) = (view[i + 1], view[j + 1]);
+        let t = if a2 == a1.wrapping_add(1) { u16::from_le_bytes([v1, v2]) } else if a1 == a2.wrapping_add(1) { u16::from_le_bytes([v2, v1]) } else { continue };
+        if t >= 0x8000 && plausible_min(view, t, 3) {
+            add(t, &mut fixed, &mut low, i < 0x4000);
+        }
+    }
     // Word tables (>= 4 consecutive pointers, maximal runs): jump tables and RTS-trick (address-1) tables.
     // Entries must decode as substantial, clean code (>= 4 instructions) and not all be the same.
     let strong = |w: u16, adj: u16| w >= 0x8000 && plausible_min(view, w.wrapping_add(adj), 4);
