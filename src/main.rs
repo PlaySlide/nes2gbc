@@ -271,6 +271,15 @@ fn code_bank_entries(crc: u32, bank: usize) -> Vec<u16> {
     out
 }
 
+const MMC1_MODE2_DB: &str = include_str!("../data/mmc1_mode2.txt");
+
+fn mmc1_mode2(crc: u32) -> bool {
+    env::var_os("NES2GBC_NO_MMC1_MODE2").is_none()
+        && MMC1_MODE2_DB.lines().any(|l| {
+            l.split('#').next().and_then(|t| t.split_whitespace().next()).and_then(|t| u32::from_str_radix(t, 16).ok()) == Some(crc)
+        })
+}
+
 const ROM_PATCH_DB: &str = include_str!("../data/rom_patch.txt");
 
 /// Byte patches for PRG ROM (data/rom_patch.txt: `<payload crc> <cpu addr> <hex bytes>`),
@@ -639,6 +648,11 @@ fn main() -> ExitCode {
             }
         }
         let shared_low_entries: usize = bank_seeds.iter().map(|s| s.len()).sum();
+        if mmc1_mode2(payload_crc) {
+            for (_, g) in converged_views.iter_mut() {
+                g.blocks.retain(|pc, _| *pc < 0xC000);
+            }
+        }
 
         switch_lo_views = converged_views;
         println!(

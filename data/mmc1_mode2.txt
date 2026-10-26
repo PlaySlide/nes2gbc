@@ -1,0 +1,4 @@
+# MMC1 PRG mode 2 (fixed first bank at $8000, switchable at $C000) ROMs, keyed by payload CRC32.
+# Native discovery models only mode 3, so code >= $C000 is left to the interpreter.
+# Opt-out: NES2GBC_NO_MMC1_MODE2=1
+a9415562 kidnikir
