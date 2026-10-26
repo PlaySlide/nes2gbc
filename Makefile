@@ -73,6 +73,7 @@ generate:
 	@if grep -q '^; NES2GBC_NMI_ABANDON 1' runtime/generated.asm; then echo 'DEF NES2GBC_NMI_ABANDON EQU 1 ; NMI handler may reset SP and never RTI (opt out: NES2GBC_NMI_ABANDON=0)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_QUIRK_LATCH 1' runtime/generated.asm; then echo 'DEF NES2GBC_QUIRK_LATCH EQU 1 ; vblank-flag latch (data/ppu_quirks.txt; opt out: NES2GBC_NO_PPU_QUIRKS=1)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_QUIRK_DEBOUNCE 1' runtime/generated.asm; then echo 'DEF NES2GBC_QUIRK_DEBOUNCE EQU 1 ; 3-frame BG-pattern-bank debounce (data/ppu_quirks.txt; opt out: NES2GBC_NO_PPU_QUIRKS=1)' >> runtime/generated_config.inc; fi
+	@if grep -q '^; NES2GBC_QUIRK_OBJHOLD 1' runtime/generated.asm; then echo 'DEF NES2GBC_QUIRK_OBJHOLD EQU 1 ; keep OBJ on while an NMI handler runs (data/ppu_quirks.txt; opt out: NES2GBC_NO_PPU_QUIRKS=1)' >> runtime/generated_config.inc; fi
 	@if grep -q '^; NES2GBC_NMI_HOLD 1' runtime/generated.asm; then printf '%s\n' 'DEF NES2GBC_NMI_HOLD EQU 1 ; hold a vblank NMI while the main thread is mid-work (data/nmi_hold.txt; opt out: NES2GBC_NO_NMI_HOLD=1)' 'DEF NES2GBC_NMI_HOLD_FRAMES EQU 4' >> runtime/generated_config.inc; fi
 	@if [ "$(PEEPHOLE)" = "1" ]; then \
 		python3 tools/specialize_inline_dispatchers.py runtime/generated.asm "$(ROM)"; \

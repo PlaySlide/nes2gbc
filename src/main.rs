@@ -309,11 +309,11 @@ const PPU_QUIRKS_DB: &str = include_str!("../data/ppu_quirks.txt");
 /// NMI off), `debounce` = 3-frame BG-pattern-bank debounce (games that toggle
 /// PPUCTRL.4 every frame). NES2GBC_NO_PPU_QUIRKS=1 disables both;
 /// NES2GBC_PPU_QUIRKS=latch,debounce forces.
-fn ppu_quirks(crc: u32) -> (bool, bool) {
+fn ppu_quirks(crc: u32) -> (bool, bool, bool) {
     if env::var_os("NES2GBC_NO_PPU_QUIRKS").is_some() {
-        return (false, false);
+        return (false, false, false);
     }
-    let parse = |t: &str| (t.contains("latch"), t.contains("debounce"));
+    let parse = |t: &str| (t.contains("latch"), t.contains("debounce"), t.contains("objhold"));
     if let Ok(v) = env::var("NES2GBC_PPU_QUIRKS") {
         return parse(&v);
     }
@@ -326,7 +326,7 @@ fn ppu_quirks(crc: u32) -> (bool, bool) {
             }
         }
     }
-    (false, false)
+    (false, false, false)
 }
 
 const NMI_HOLD_DB: &str = include_str!("../data/nmi_hold.txt");
@@ -693,12 +693,15 @@ fn main() -> ExitCode {
         if nmi_hold_hint(payload_crc) {
             asm.push_str("\n; NES2GBC_NMI_HOLD 1\n");
         }
-        let (q_latch, q_debounce) = ppu_quirks(payload_crc);
+        let (q_latch, q_debounce, q_objhold) = ppu_quirks(payload_crc);
         if q_latch {
             asm.push_str("\n; NES2GBC_QUIRK_LATCH 1\n");
         }
         if q_debounce {
             asm.push_str("\n; NES2GBC_QUIRK_DEBOUNCE 1\n");
+        }
+        if q_objhold {
+            asm.push_str("\n; NES2GBC_QUIRK_OBJHOLD 1\n");
         }
 
         // Sidecar 6502 CFG dump (blocks, instructions, typed edges) for the

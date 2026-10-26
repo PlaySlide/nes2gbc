@@ -2079,10 +2079,36 @@ nes_video_update_mask:
 .no_bg:
     ld a, [nes_ppumask]
     bit 4, a
+IF DEF(NES2GBC_QUIRK_OBJHOLD) && !DEF(NES2GBC_NO_OBJ_HOLD)
+    jr z, .obj_off
+ELSE
     jr z, .mask_store
+ENDC
     ld a, b
     or $02
     ld b, a
+IF DEF(NES2GBC_QUIRK_OBJHOLD) && !DEF(NES2GBC_NO_OBJ_HOLD)
+    jr .mask_store
+.obj_off:
+ENDC
+IF DEF(NES2GBC_QUIRK_OBJHOLD) && !DEF(NES2GBC_NO_OBJ_HOLD)
+    ; Games disable rendering (PPUMASK=0) at the top of a long NMI handler and
+    ; re-enable it at the end. On the NES that all happens inside VBlank; here
+    ; the handler can outlast the host VBlank and sprites would vanish for
+    ; whole host frames (Spy vs Spy flicker). Keep sprites on while an NMI
+    ; handler is active; the host VBlank retries via nes_mask_dirty.
+    ld a, [nes_nmi_active]
+    and a
+    jr z, .mask_store
+    ldh a, [rLCDC]
+    bit 1, a
+    jr z, .mask_store
+    ld a, $01
+    ld [nes_mask_dirty], a
+    ld a, b
+    or $02
+    ld b, a
+ENDC
 .mask_store:
     ld a, b
     ldh [rLCDC], a
