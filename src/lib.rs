@@ -1,3 +1,4 @@
+pub mod autoseed;
 pub mod banked;
 pub mod overlay;
 pub mod assets;

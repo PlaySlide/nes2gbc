@@ -531,6 +531,7 @@ fn main() -> ExitCode {
         for (bank, seeds) in bank_seeds.iter_mut().enumerate() {
             seeds.extend(code_bank_entries(payload_crc, bank));
         }
+        let mut autoseeded = false;
         let mut converged_views = Vec::new();
         let mut rounds = 0usize;
         let mut overlay_seeded = false;
@@ -577,6 +578,53 @@ fn main() -> ExitCode {
                 // every bank duplicates byte-for-byte (Zelda's MMC1 bank
                 // switch at $BFAC/$BF98). Seed those once into bank 0; the
                 // emitter shares that translation with the identical banks.
+                // Heuristic seeds for code reachable only through data (task/jump tables, RTS-trick tables)
+                // that otherwise runs in the interpreter (opt-out NES2GBC_NO_AUTO_SEEDS=1). Candidates
+                // that fall inside already-discovered code are dropped (they would split real blocks).
+                if !autoseeded {
+                    autoseeded = true;
+                    let mut added = false;
+                    let ops = |g: &cfg::ControlFlowGraph| -> BTreeSet<u16> {
+                        g.blocks
+                            .values()
+                            .flat_map(|b| b.instructions.iter())
+                            .filter(|i| matches!(i.def.mode, cpu6502::AddressingMode::AbsoluteX | cpu6502::AddressingMode::AbsoluteY))
+                            .map(|i| i.operand)
+                            .collect()
+                    };
+                    let fixed_refs: BTreeSet<u16> =
+                        converged_views.iter().flat_map(|(_, g)| ops(g)).filter(|&r| r >= 0xC000).collect();
+                    for (bank, view) in prg_views.iter().enumerate() {
+                        let mut refs = ops(&converged_views[bank].1);
+                        refs.extend(fixed_refs.iter().copied());
+                        let (fx, lo) = nes2gbc::autoseed::scan(view, &refs);
+                        let g = &converged_views[bank].1;
+                        let mut covered = BTreeSet::<u16>::new();
+                        for b in g.blocks.values() {
+                            for i in &b.instructions {
+                                for k in 0..i.def.len() as u16 {
+                                    covered.insert(i.pc.wrapping_add(k));
+                                }
+                            }
+                        }
+                        if env::var_os("NES2GBC_AUTO_SEEDS_DEBUG").is_some() {
+                            eprintln!("AS bank {bank} fixed {:04X?} low {:04X?}", fx.iter().filter(|t| !covered.contains(t)).collect::<Vec<_>>(), lo.iter().filter(|t| !covered.contains(t)).collect::<Vec<_>>());
+                        }
+                        for t in fx {
+                            if !covered.contains(&t) {
+                                added |= shared_fixed_entries.insert(t);
+                            }
+                        }
+                        for t in lo {
+                            if !covered.contains(&t) {
+                                added |= bank_seeds[bank].insert(t);
+                            }
+                        }
+                    }
+                    if added {
+                        continue;
+                    }
+                }
                 if !overlay_seeded && env::var_os("NES2GBC_NO_RAM_OVERLAY").is_none() {
                     overlay_seeded = true;
                     let mut added = false;
