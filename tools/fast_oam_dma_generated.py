@@ -17,6 +17,7 @@ original projector.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 
@@ -45,15 +46,24 @@ def helper() -> str:
         "    and $07\n",
         "    or $C0\n",
         "    ld h, a\n",
-        "    ; fully unrolled 256-byte copy (no loop counter)\n",
     ]
 
-    for _ in range(256):
+    # Default: 2 x 128 unrolled (B is clobbered by the projector anyway); saves
+    # 384 bytes of ROM0 for ~20 cycles per DMA. NES2GBC_FULL_OAM_UNROLL=1 restores
+    # the fully unrolled 256-byte copy.
+    full = os.environ.get("NES2GBC_FULL_OAM_UNROLL", "0") == "1"
+    if full:
+        out.append("    ; fully unrolled 256-byte copy (no loop counter)\n")
+    else:
+        out.extend(["    ; 2 x 128 unrolled copy\n", "    ld b, 2\n", ".copy128:\n"])
+    for _ in range(256 if full else 128):
         out.extend([
             "    ld a, [hli]\n",
             "    ld [de], a\n",
             "    inc e\n",
         ])
+    if not full:
+        out.extend(["    dec b\n", "    jp nz, .copy128\n"])
 
     out.extend([
         "\n",
