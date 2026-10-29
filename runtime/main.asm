@@ -513,6 +513,34 @@ ELSE
     ldh [rSCX], a
     ldh a, [nes_split_armed_top_y]
     ldh [rSCY], a
+IF DEF(NES2GBC_SPLIT_YWRAP)
+    ; NES nametables are 240 rows, the CGB map 256: if the playfield's first
+    ; row (armed_y + view_y + split line) is past NES Y=240, show it from the
+    ; vertically adjacent table with SCY + 16 (same rule as the single-scroll seam).
+    ldh a, [nes_split_armed_y]
+    ld b, a
+    ld a, [nes_view_armed_y]
+    add b
+    ld c, a
+    jr c, .split_ywrap
+    ld b, a
+    ldh a, [nes_split_line]
+    add b
+    jr c, .split_ywrap
+    cp $F0
+    ld b, $00
+    jr c, .split_ywrap_store
+.split_ywrap:
+    ld a, c
+    add $10
+    ld c, a
+    ld b, $01
+.split_ywrap_store:
+    ld a, c
+    ld [nes_split_bot_scy], a
+    ld a, b
+    ld [nes_split_bot_wrap], a
+ENDC
 ENDC
 
     ldh a, [nes_split_line]
@@ -1129,11 +1157,25 @@ ENDC
     add b
     ldh [rSCX], a
 
+IF DEF(NES2GBC_SPLIT_YWRAP)
+    ld a, [nes_split_bot_scy]
+    ldh [rSCY], a
+    ld a, [nes_split_bot_wrap]
+    and a
+    jr z, .disable_stat
+    ld a, [nes_mirroring]
+    cp $01
+    jr z, .disable_stat
+    ldh a, [nes_split_armed_ctrl]
+    xor $02
+    call nes_video_apply_map_select_a
+ELSE
     ldh a, [nes_split_armed_y]
     ld b, a
     ld a, [nes_view_armed_y]
     add b
     ldh [rSCY], a
+ENDC
     jr .disable_stat
 
 .check_vertical_seam:

@@ -36,6 +36,12 @@ nes_flush_bank_bit:  ds 1
 nes_hs_attr_lo: ds 1
 nes_hs_pal_bot: ds 1
 
+IF DEF(NES2GBC_SPLIT_YWRAP)
+SECTION "NES split Y-wrap state", WRAM0
+nes_split_bot_scy:  ds 1   ; playfield SCY with the NES 240-line wrap applied
+nes_split_bot_wrap: ds 1   ; nonzero: playfield starts past NES Y=240
+ENDC
+
 IF DEF(NES2GBC_ADDR_SCROLL)
 SECTION "NES addr-scroll split state", WRAM0
 nes_addr_bot_scy:   ds 1   ; SCY for the playfield region (row shown at host line 0)
