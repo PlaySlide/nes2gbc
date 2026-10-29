@@ -513,6 +513,36 @@ ELSE
     ldh [rSCX], a
     ldh a, [nes_split_armed_top_y]
     ldh [rSCY], a
+IF DEF(NES2GBC_SPLIT_TOP_YWRAP)
+    ; The HUD region [top_y, top_y + split line) can itself cross NES Y=240
+    ; (Rush'n Attack: top_y=232, 8 lines of row 29 then rows 0-2 holding the
+    ; score). One SCY cannot show both sides; when most HUD lines lie past
+    ; the wrap, show them (SCY + 16, adjacent table for horizontal mirroring).
+    ldh a, [nes_split_armed_top_y]
+    cp $F0
+    jr nc, .top_ywrap_done
+    ld b, a
+    ld a, $F0
+    sub b                      ; lines before the wrap
+    cp $80
+    jr nc, .top_ywrap_done
+    add a
+    ld c, a
+    ldh a, [nes_split_line]
+    cp c
+    jr c, .top_ywrap_done
+    jr z, .top_ywrap_done      ; at most half past the wrap
+    ld a, b
+    add $10
+    ldh [rSCY], a
+    ld a, [nes_mirroring]
+    and a
+    jr nz, .top_ywrap_done     ; vertical/single: same table continues
+    ldh a, [nes_split_armed_top_ctrl]
+    xor $02
+    call nes_video_apply_map_select_a
+.top_ywrap_done:
+ENDC
 IF DEF(NES2GBC_SPLIT_YWRAP)
     ; NES nametables are 240 rows, the CGB map 256: if the playfield's first
     ; row (armed_y + view_y + split line) is past NES Y=240, show it from the
