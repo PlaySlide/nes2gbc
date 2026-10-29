@@ -56,6 +56,7 @@ generate:
 	@if [ "$(APU)" = "1" ]; then echo 'DEF NES2GBC_APU EQU 1 ; make generate APU=1' > runtime/generated_config.inc; \
 	else echo '; make generate APU=0: NES APU emulation disabled' > runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_ISR_BANK_FIX:-1}" != "0" ]; then echo 'DEF NES2GBC_ISR_BANK_FIX EQU 1 ; VBlank ISR restores the ROM bank of the interrupted runtime window (opt out: NES2GBC_ISR_BANK_FIX=0)' >> runtime/generated_config.inc; fi
+	@if [ "$${NES2GBC_SINGLE_HSTITCH:-1}" != "0" ]; then echo 'DEF NES2GBC_SINGLE_HSTITCH EQU 1 ; stitch full-screen vertical-mirroring horizontal scroll across the NT seam (opt out: NES2GBC_SINGLE_HSTITCH=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi

@@ -404,9 +404,14 @@ IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
     ld a, [nes_mirroring]
     cp $01
     jr nz, .loop
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; nes_hstitch_valid is only ever set for a live (split or single-scroll) stitch.
+    jp .stitched
+ELSE
     ldh a, [nes_split_active]
     and a
     jp nz, .stitched
+ENDC
 ENDC
 
 .loop:
@@ -967,9 +972,13 @@ nes_video_sync_nametable_write:
     ld a, [nes_mirroring]
     cp $01
     jr nz, .tile_write
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; nes_hstitch_valid is only ever set for a live (split or single-scroll) stitch.
+ELSE
     ldh a, [nes_split_active]
     and a
     jr z, .tile_write
+ENDC
 
     ; Physical page 0 always updates its $9800 backing map.  Physical page 1
     ; may write $9C00 only when this destination column is actually NT1-owned.
@@ -1015,9 +1024,13 @@ nes_video_sync_nametable_write:
     ld a, [nes_mirroring]
     cp $01
     jr nz, .tile_attr_preserve
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; nes_hstitch_valid is only ever set for a live (split or single-scroll) stitch.
+ELSE
     ldh a, [nes_split_active]
     and a
     jr z, .tile_attr_preserve
+ENDC
 
     push bc
     push de
@@ -1144,9 +1157,13 @@ nes_video_stitch_repair_tile_from_page0:
     ld a, [nes_mirroring]
     cp $01
     ret nz
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; nes_hstitch_valid is only ever set for a live (split or single-scroll) stitch.
+ELSE
     ldh a, [nes_split_active]
     and a
     ret z
+ENDC
 
     ld a, l
     and $1F
@@ -1206,9 +1223,14 @@ nes_video_sync_attribute_write:
     ld a, [nes_mirroring]
     cp $01
     jr nz, .physical
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; nes_hstitch_valid is only ever set for a live (split or single-scroll) stitch.
+    jp nes_video_sync_attribute_write_stitched
+ELSE
     ldh a, [nes_split_active]
     and a
     jp nz, nes_video_sync_attribute_write_stitched
+ENDC
 
 .physical:
     jp nes_video_sync_attribute_write_physical
@@ -2127,6 +2149,22 @@ nes_video_update_horizontal_stitch:
     cp $01
     jr z, .vertical
 .disable:
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; Leaving a single-scroll stitch (mirroring switched): $9C00 holds the
+    ; synthesized surface, not physical NT1. Reproject both maps once.
+    ld a, [nes_hstitch_valid]
+    and a
+    ret z
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .disable_clear
+    xor a
+    ld [nes_hstitch_valid], a
+    call nes_video_rebuild_generic_maps_atomic
+    ld a, [nes_ppuctrl]
+    jp nes_video_apply_map_select_a
+.disable_clear:
+ENDC
     xor a
     ld [nes_hstitch_valid], a
     ret
@@ -2134,13 +2172,54 @@ nes_video_update_horizontal_stitch:
 .vertical:
     ldh a, [nes_split_active]
     and a
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    jr nz, .split_live
+    ; Full-screen single-scroll title (no raster split): a 256px GBC map
+    ; cannot show a crop that straddles the two horizontally adjacent NES
+    ; nametables, so SCX wraps back into the same page (Mega Man: columns of
+    ; the old screen with ladders "going nowhere"). Reuse the stitched
+    ; $9C00 surface with the single scroll as the "playfield" scroll. Engage
+    ; only once a crop has actually crossed the seam; then stay stitched.
+    ld a, [nes_ppu_scroll_x]
+    ldh [nes_split_bottom_x], a
+    ld a, [nes_ppuctrl]
+    ldh [nes_split_bottom_ctrl], a
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .single_go
+    ld a, [nes_ppu_scroll_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    jr c, .single_go          ; crop origin already in the next page
+    cp $61                    ; origin >= 97: 160px crop crosses x=256
+    jr c, .disable
+.single_go:
+    call .split_live
+    ; Present the stitched surface for the whole frame.
+    ld a, [nes_hstitch_valid]
+    and a
+    ret z
+    ldh a, [rLCDC]
+    or $08
+    ldh [rLCDC], a
+    ret
+.split_live:
+ELSE
     jr z, .disable
+ENDC
 
     ; Once a title has successfully established the vertical-mirroring
     ; horizontal stitch, remember that classification across temporary split
     ; loss during area/tileset transitions.
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ldh a, [nes_split_active]
+    and a
+    jr z, .seen_done
+ENDC
     ld a, $01
     ld [nes_hstitch_seen], a
+.seen_done:
 
     ; effective X = lower NES scroll + our crop offset.
     ldh a, [nes_split_bottom_x]
@@ -2482,10 +2561,21 @@ ENDC
     jr .map_write
 
 .map_vertical:
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; Single-scroll stitch owns the whole frame on $9C00.
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .map_vertical_nostitch
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .map_force9c
+.map_vertical_nostitch:
+ENDC
     ; Vertical mirroring: physical table comes from PPUCTRL bit 0.
     ld a, c
     and $01
     jr z, .map_store
+.map_force9c:
     ld a, b
     or $08
     jr .map_write
@@ -2637,10 +2727,21 @@ ENDC
     jr .write
 
 .vertical:
+IF DEF(NES2GBC_SINGLE_HSTITCH)
+    ; Single-scroll stitch owns the whole frame on $9C00.
+    ldh a, [nes_split_active]
+    and a
+    jr nz, .vertical_nostitch
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .force9c
+.vertical_nostitch:
+ENDC
     ; Vertical mirroring: physical table comes from PPUCTRL bit 0.
     ld a, [nes_ppuctrl]
     and $01
     jr z, .store
+.force9c:
     ld a, b
     or $08
     jr .write
