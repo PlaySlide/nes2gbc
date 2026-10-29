@@ -2201,6 +2201,19 @@ IF DEF(NES2GBC_SINGLE_HSTITCH)
     cp $61                    ; origin >= 97: 160px crop crosses x=256
     jr c, .disable
 .single_go:
+IF DEF(NES2GBC_STITCH_SHADOW_SYNC)
+    ; Engaging the stitch: the fast stitched flush skips bytes equal to the
+    ; published-value shadow, but the generic (pre-stitch) publication never
+    ; maintained it, so a later write equal to a stale shadow byte left an old
+    ; tile in $9800 (Pro Wrestling: crowd tiles over the ring floor).
+    ; Reproject both maps and resync the shadow once.
+    ld a, [nes_hstitch_valid]
+    and a
+    jr nz, .single_synced
+    call nes_video_rebuild_generic_maps_atomic
+    call nes_video_resync_published_shadow
+.single_synced:
+ENDC
     call .split_live
     ; Present the stitched surface for the whole frame.
     ld a, [nes_hstitch_valid]
@@ -2373,6 +2386,30 @@ ENDC
     ld a, [nes_saved_lcdc]
     ldh [rLCDC], a
     ret
+
+IF DEF(NES2GBC_STITCH_SHADOW_SYNC)
+; Copy authoritative NES nametable RAM (WRAM 1) into the published-value
+; shadow (WRAM 6). Leaves WRAM bank 1 selected.
+nes_video_resync_published_shadow:
+    ld hl, nes_nametable_ram
+    ld de, nes_nametable_published_shadow
+.loop:
+    ld a, $01
+    ldh [rSVBK], a
+    ld c, [hl]
+    ld a, $06
+    ldh [rSVBK], a
+    ld a, c
+    ld [de], a
+    inc hl
+    inc de
+    ld a, h
+    cp HIGH(nes_nametable_ram) + 8
+    jr nz, .loop
+    ld a, $01
+    ldh [rSVBK], a
+    ret
+ENDC
 
 ; Input: A = destination GBC tile column 0..31.
 ; Refresh one complete stitched column from the authoritative virtual NES
