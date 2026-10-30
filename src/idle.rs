@@ -101,6 +101,38 @@ pub fn elide_delay_loops(graph: &mut ControlFlowGraph) -> usize {
     todo.len()
 }
 
+/// Register-only counting self-loops that the NES2GBC_FAST_LOOPS post-pass
+/// (tools/fast_loops.py) fast-forwards: `DEX|DEY; BNE self`, `CLC; ADC #n;
+/// BCC self`, `SEC; SBC #n; BCS self`. The post-pass runs every iteration but
+/// the last in a tight host loop; the original block then does the final one,
+/// so the exit state is exact. Returns (head, kind, imm), kind in x/y/adc/sbc.
+pub fn fast_loop_heads(graph: &ControlFlowGraph) -> Vec<(u16, &'static str, u8)> {
+    let mut out = Vec::new();
+    for b in graph.blocks.values() {
+        let selfb = b.edges.iter().any(|e| e.kind == EdgeKind::BranchTaken && e.target == Some(b.start));
+        if !selfb {
+            continue;
+        }
+        match b.instructions.as_slice() {
+            [d, br] if br.def.mnemonic == N::Bne && d.def.mode == M::Implied => match d.def.mnemonic {
+                N::Dex => out.push((b.start, "x", 0)),
+                N::Dey => out.push((b.start, "y", 0)),
+                _ => {}
+            },
+            [f, op, br] if op.def.mode == M::Immediate && op.operand & 0xFF != 0 => {
+                let k = op.operand as u8;
+                match (f.def.mnemonic, op.def.mnemonic, br.def.mnemonic) {
+                    (N::Clc, N::Adc, N::Bcc) => out.push((b.start, "adc", k)),
+                    (N::Sec, N::Sbc, N::Bcs) => out.push((b.start, "sbc", k)),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

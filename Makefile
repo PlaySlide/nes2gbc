@@ -193,6 +193,7 @@ generate:
 		# Normalize short/long NES-label jumps after the final selected pass so \
 		# debug/pass-isolation builds cannot leave an out-of-range JR behind. \
 		if [ "$(POSTPASS_THROUGH)" = "all" ]; then python3 tools/outline_nmi_polls.py runtime/generated.asm; fi; \
+		if [ "$${NES2GBC_FAST_LOOPS:-1}" != "0" ]; then python3 tools/fast_loops.py runtime/generated.asm; fi; \
 		if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then python3 tools/halt_idle_loops.py runtime/generated.asm; fi; \
 		python3 tools/widen_generated_jumps.py runtime/generated.asm; \
 		if [ "$(POSTPASS_THROUGH)" = "all" ]; then python3 tools/selfloop_promote.py runtime/generated.asm; fi; \

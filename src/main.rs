@@ -891,6 +891,26 @@ fn main() -> ExitCode {
                 }
             }
         }
+        let mut fast_txt = String::new();
+        if switch_lo_views.is_empty() {
+            for (pc, k, n) in idle::fast_loop_heads(&graph) {
+                fast_txt.push_str(&format!("nes_{pc:04X} {k} {n}\n"));
+            }
+        } else {
+            let mut seen = BTreeSet::new();
+            for (bank, g) in &switch_lo_views {
+                for (pc, k, n) in idle::fast_loop_heads(g) {
+                    let l = if pc >= 0xC000 { format!("nes_{pc:04X}") } else { format!("nes_m2_b{bank:02X}_{pc:04X}") };
+                    if seen.insert(l.clone()) {
+                        fast_txt.push_str(&format!("{l} {k} {n}\n"));
+                    }
+                }
+            }
+        }
+        if let Err(err) = fs::write(parent.join(format!("{stem}.fastloop.txt")), fast_txt) {
+            eprintln!("error writing fastloop list: {err}");
+            return ExitCode::FAILURE;
+        }
         let forever_txt: String = forever_labels.iter().map(|l| format!("{l}\n")).collect();
         let forever_path = parent.join(format!("{stem}.idle_forever.txt"));
         if let Err(err) = fs::write(&forever_path, forever_txt) {
