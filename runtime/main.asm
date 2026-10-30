@@ -328,6 +328,9 @@ ENDC
     push af
     ld a, $01
     ldh [rSVBK], a
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+    call nes_dual_vblank
+ENDC
 
     ; Snapshot the host frame that just finished, then clear its event latch so
     ; work done by this VBlank is attributed to the frame about to be shown.
@@ -841,6 +844,9 @@ ENDC
     ld a, $01
     ldh [nes_host_vblank_pending], a
 .done:
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+    call nes_dual_arm_frame
+ENDC
 IF !DEF(NES2GBC_NO_PACING)
     ld a, [nes_pace_isr_active]
     and a
@@ -1137,6 +1143,18 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
 nes_gbc_stat_isr:
     push af
     push bc
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+    ld a, [nes_dual_arm]
+    and a
+    jr z, .no_dual
+    xor a
+    ld [nes_dual_arm], a
+    ldh a, [rLCDC]
+    or $10
+    ldh [rLCDC], a
+    jp .disable_stat
+.no_dual:
+ENDC
 
 IF DEF(NES2GBC_ADDR_SCROLL)
     ld a, [nes_addr_chain]
@@ -1221,6 +1239,18 @@ ENDC
     ldh [rSCY], a
 
 .disable_stat:
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+    ld a, [nes_dual_chain]
+    and a
+    jr z, .no_dual_chain
+    ldh [rLYC], a
+    xor a
+    ld [nes_dual_chain], a
+    inc a
+    ld [nes_dual_arm], a
+    jr .isr_exit
+.no_dual_chain:
+ENDC
     ; Disable the LYC source until the next VBlank arms another split.
     ldh a, [rSTAT]
     and $BF

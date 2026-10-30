@@ -1399,6 +1399,9 @@ nes_mmc1_apply:
     ld a, [nes_chr_is_ram]
     and a
     jr nz, .done
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+    call nes_dual_track
+ENDC
     ld a, [nes_mmc1_control]
     bit 4, a
 IF DEF(NES2GBC_CHR4K)
@@ -1894,6 +1897,9 @@ IF DEF(NES2GBC_APU)
     ; One APU frame-sequencer frame per delivered NES NMI (= emulated NES
     ; frame), so APU timing follows emulation speed. Preserves BC/DE/HL.
     call nes_apu_nes_frame
+ENDC
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+    call nes_dual_frame
 ENDC
 IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR4K_LAZY)
     call nes_chr4_commit

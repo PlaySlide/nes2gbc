@@ -164,6 +164,10 @@ ENDC
     cp $EF
     jr nc, .status_from_base
 
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+    ld a, 1
+    ld [nes_dual_s0], a
+ENDC
     ld a, e
     or $40
     jr .status_ready

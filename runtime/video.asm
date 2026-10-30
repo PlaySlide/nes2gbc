@@ -2961,3 +2961,273 @@ nes_addr_scroll_prepare:
     ld [nes_addr_bot_ctrl], a
     ret
 ENDC
+
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
+; Dual-bank BG CHR residency for MMC1 status-bar splits. A game that maps one
+; CHR bank for the region above its sprite-0 split and another below it shows
+; only one of them through the lazy (NMI-entry) commit. Keep the bottom bank as
+; the primary pattern table at $8000 and copy tiles 0-127 of the top bank to
+; $9000 of the same VRAM bank; LCDC.4=0 above the split selects them.
+SECTION "NES chr dual state", WRAM0
+nes_dual_tseen: ds 1 ; a CHR write was seen this NES frame
+nes_dual_s0:    ds 1 ; sprite-0 hit returned since the first CHR write
+nes_dual_bseen: ds 1 ; a CHR write followed the hit
+nes_dual_top:   ds 1 ; BG 4 KiB bank above the split
+nes_dual_bot:   ds 1 ; BG 4 KiB bank below the split
+nes_dual_on:    ds 1 ; split switch wanted this frame
+nes_dual_line:  ds 1 ; NES split line (multiple of 8)
+nes_dual_arm:   ds 1 ; STAT ISR must set LCDC.4
+nes_dual_res:   ds 1 ; 1 + 4 KiB bank resident at $9000 (0 none)
+nes_dual_resv:  ds 1 ; its VRAM bank
+nes_dual_pend:  ds 1 ; 512-byte GDMA chunks still to copy
+nes_dual_chain: ds 1 ; LYC to re-arm after a scroll split fires (0 = none)
+
+SECTION "NES chr dual buffer", WRAMX[$D800], BANK[7]
+nes_dual_buf: ds $800
+
+SECTION "NES chr dual code", ROM0
+; MMC1 CHR register applied (CHR ROM). Clobbers A/B/C.
+nes_dual_track:
+    ld a, [nes_mmc1_control]
+    bit 4, a
+    ld a, [nes_ppuctrl]
+    jr z, .mode8
+    bit 4, a
+    ld a, [nes_mmc1_chr0]
+    jr z, .m4
+    ld a, [nes_mmc1_chr1]
+.m4:
+    ld b, a
+    ld a, [nes_chr_bank_mask]
+    add a
+    inc a
+    and b
+    jr .got
+.mode8:
+    and $10
+    swap a
+    ld c, a
+    ld a, [nes_mmc1_chr0]
+    srl a
+    ld b, a
+    ld a, [nes_chr_bank_mask]
+    and b
+    add a
+    add c
+.got:
+    ld b, a
+    ld a, [nes_dual_tseen]
+    and a
+    jr z, .first
+    ld a, [nes_dual_s0]
+    and a
+    jr z, .top
+    ld a, b
+    ld [nes_dual_bot], a
+    ld a, 1
+    ld [nes_dual_bseen], a
+    ret
+.first:
+    inc a
+    ld [nes_dual_tseen], a
+    xor a
+    ld [nes_dual_s0], a
+.top:
+    ld a, b
+    ld [nes_dual_top], a
+    ret
+
+; NMI entry: decide the split for the frame just finished and stage the top
+; bank. Preserves BC/DE/HL.
+nes_dual_frame:
+    push bc
+    push de
+    push hl
+    ld a, [nes_dual_bseen]
+    ld c, a
+    xor a
+    ld [nes_dual_bseen], a
+    ld [nes_dual_tseen], a
+    ld [nes_dual_s0], a
+    ld a, [nes_chr_is_ram]
+    and a
+    jp nz, .off
+    ld a, c
+    and a
+    jp z, .off
+    ld a, [nes_dual_top]
+    ld b, a
+    ld a, [nes_dual_bot]
+    cp b
+    jr z, .off
+    ld a, [nes_oam_ram]
+    cp $EF
+    jr nc, .off
+    ld c, a
+    ld a, [nes_ppuctrl]
+    and $20
+    rrca
+    rrca
+    add 8 + 5
+    add c
+    jr nc, .lineok
+    ld a, $FF
+.lineok:
+    and $F8
+    ld [nes_dual_line], a
+    ld a, [nes_ppuctrl]
+    and $10
+    swap a
+    ld c, a                 ; VRAM bank of the BG pattern table
+    ld a, [nes_dual_res]
+    dec a
+    cp b
+    jr nz, .stage
+    ld a, [nes_dual_resv]
+    cp c
+    jr nz, .stage
+    ld a, 1
+    ld [nes_dual_on], a
+    jr .out
+.stage:
+    ld a, b
+    inc a
+    ld [nes_dual_res], a
+    ld a, c
+    ld [nes_dual_resv], a
+    ld a, b
+    srl a
+    ld c, a
+    ld a, [nes_chr_gbc_bank_base]
+    add c
+    ld [$2000], a
+    ld a, b
+    and 1
+    swap a
+    add $40
+    ld h, a
+    ld l, 0
+    ldh a, [rSVBK]
+    push af
+    ld a, 7
+    ldh [rSVBK], a
+    ld de, nes_dual_buf
+    ld bc, $800
+.copy:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .copy
+    dec b
+    jr nz, .copy
+    pop af
+    ldh [rSVBK], a
+    call nes_restore_code_bank
+    ld a, 4
+    ld [nes_dual_pend], a
+.off:
+    xor a
+    ld [nes_dual_on], a
+.out:
+    pop hl
+    pop de
+    pop bc
+    ret
+
+; Host VBlank start (ISR, SVBK=1): copy one staged 512-byte chunk. Clobbers A/B.
+nes_dual_vblank:
+    ld a, [nes_dual_pend]
+    and a
+    ret z
+    dec a
+    ld [nes_dual_pend], a
+    add a
+    ld b, a
+    add HIGH(nes_dual_buf)
+    ldh [$FF51], a
+    xor a
+    ldh [$FF52], a
+    ldh [$FF54], a
+    ld a, $10
+    add b
+    ldh [$FF53], a
+    ldh a, [rVBK]
+    ld b, a
+    ld a, [nes_dual_resv]
+    ldh [rVBK], a
+    ld a, 7
+    ldh [rSVBK], a
+    ld a, $1F
+    ldh [$FF55], a
+    ld a, 1
+    ldh [rSVBK], a
+    ld a, b
+    ldh [rVBK], a
+    ret
+
+; End of the host VBlank ISR (after scroll/seam commit): arm the LCDC.4
+; switch for this frame. Clobbers A/B.
+nes_dual_arm_frame:
+    xor a
+    ld [nes_dual_arm], a
+    ld [nes_dual_chain], a
+    ld a, [nes_dual_on]
+    and a
+    jr z, .off
+    ld a, [nes_dual_pend]
+    and a
+    jr nz, .off
+    ldh a, [nes_view_y]
+    ld b, a
+    ld a, [nes_dual_line]
+    sub b
+    jr c, .off
+    jr z, .off
+    cp 144
+    jr nc, .top
+    ld b, a
+    ldh a, [nes_split_active]
+    ld c, a
+    ldh a, [nes_seam_active]
+    or c
+    jr z, .solo
+    ; A scroll split/seam already owns LYC: chain the CHR switch after it
+    ; when it fires above our line (the STAT ISR re-arms LYC at its exit).
+    ldh a, [rSTAT]
+    bit 6, a
+    jr z, .off
+    ldh a, [rLY]
+    cp 144
+    jr c, .off
+    ldh a, [rLYC]
+    cp b
+    jr nc, .off
+    ld a, b
+    ld [nes_dual_chain], a
+    jr .top
+.solo:
+    ldh a, [rLY]
+    cp 144
+    jr nc, .early
+    cp b
+    jr nc, .off             ; already past the split line
+.early:
+    ld a, b
+    ldh [rLYC], a
+    ld a, 1
+    ld [nes_dual_arm], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
+.top:
+    ldh a, [rLCDC]
+    and $EF
+    ldh [rLCDC], a
+    ret
+.off:
+    ldh a, [rLCDC]
+    or $10
+    ldh [rLCDC], a
+    ret
+ENDC
