@@ -22,6 +22,13 @@ becomes a call to a ROM0 helper that maps the window's GBC bank directly:
 Helpers clobber only A, L and flags, like nes_cpu_read_hi. Set
 NES2GBC_PRG_READ_CHECK=1 to emit the checked lo helper (faults if the view
 bank assumption is ever wrong). Mapper 0/3 builds are untouched.
+
+A view block that identical_bank_aliases shares with other banks (a dispatch
+stub `.m2_bXX:` of bank XX transfers to nes_m2_bKK_PC with KK != XX) runs with
+bank XX mapped, so its $8000-$BFFF reads cannot assume bank K: they use the
+dynamic helpers (David Crane's A Boy and His Blob streams PPU data through
+code that banks 2-4 share byte-for-byte, but the data differs per bank).
+Opt-out: NES2GBC_SHARED_VIEW_READS=0.
 """
 import os, re, sys
 
@@ -49,6 +56,20 @@ def main(path, rom):
     check = os.environ.get("NES2GBC_PRG_READ_CHECK") == "1"
     L = text.splitlines(keepends=True)
     C = [code(l) for l in L]
+    shared = set()
+    if os.environ.get("NES2GBC_SHARED_VIEW_READS", "1") != "0":
+        stub = None
+        for c in C:
+            ms = re.fullmatch(r"\.m2_b([0-9A-F]{2}):", c)
+            if ms:
+                stub = ms.group(1)
+                continue
+            if stub and c:
+                for mt in re.finditer(r"nes_m2_b([0-9A-F]{2})_([0-9A-F]{4})\b", c):
+                    if mt.group(1) != stub:
+                        shared.add("nes_m2_b%s_%s" % (mt.group(1), mt.group(2)))
+                if c.startswith(("jr ", "jp ")):
+                    stub = None
     label = None
     pc = None
     out = []
@@ -96,7 +117,7 @@ def main(path, rom):
         base = int(mb.group(1), 16)
         lab = M2.match(label or "")
         if 0x8000 <= base and (base & 0x3FFF) + 0xFF <= 0x3FFF and base < 0xC000:
-            if lab and pc is not None and 0x8000 <= pc < 0xC000 and 0x8000 <= int(lab.group(2), 16) < 0xC000:
+            if lab and label not in shared and pc is not None and 0x8000 <= pc < 0xC000 and 0x8000 <= int(lab.group(2), 16) < 0xC000:
                 k = int(lab.group(1), 16)
                 rep = [f"    ld a, ${k + 1:02X} ; PRG bank {k} is the executing view\n",
                        "    call nes_prg_read_lo_check\n" if check else "    call nes_prg_read_lo_a\n"]
@@ -136,10 +157,11 @@ def main(path, rom):
         if C[i] != "call nes_cpu_read_hi" or i in edits:
             continue
         lab = M2.match(label or "")
-        if lab and pc is not None and 0x8000 <= pc < 0xC000 and 0x8000 <= int(lab.group(2), 16) < 0xC000 and not check:
+        if lab and label not in shared and pc is not None and 0x8000 <= pc < 0xC000 and 0x8000 <= int(lab.group(2), 16) < 0xC000 and not check:
             k = int(lab.group(1), 16)
             edits[i] = [f"    ld a, ${k + 1:02X} ; PRG bank {k} is the executing view\n", "    call nes_cpu_read_hi_view\n"]
             n_view += 1
+    print(f"banked-static-prg-reads: {len(shared)} shared view block(s) keep dynamic reads")
     print(f"banked-static-prg-reads: {n_view} dynamic read(s) in view code use nes_cpu_read_hi_view")
     res = []
     for k, l in enumerate(L):
