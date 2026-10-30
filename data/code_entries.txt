@@ -14,3 +14,8 @@
 d67fd6a6 bank 2 805a 805d 8060 8063 80c6 80c9 80cc 80cf 80d5 80e5 80f3 80f6 80fe 8101 8104 8107 810a 810d 8110 811e 8121 8124 8139 8142 937b 9387 9389 9394 93ca 93d9 9401 9411 9414 943c 944f 9455 9464 96cf 96d2 96dc 96e1 96ec 96f1 96f4 96fc 96ff 9702 9705 9708 9948 994e 9951 9954 9957 995a
 d67fd6a6 bank 1 a59d a5a0 a5a3 a5a6
 d67fd6a6 d50a d50f d514 d519 # Kid Icarus: fixed-bank code observed in the interpreter
+# Ghosts'n Goblins: switchable-bank init/RAM-clear code and fixed-bank return points observed running in the interpreter
+b4e4879e bank 4 8000 8003 8007 802c 8033 804f 8059 8066 8069 8070 8074
+b4e4879e e569 e56d e576 e5ed e65a e665 f34f f359 f364 # Ghosts'n Goblins: fixed-bank code observed in the interpreter
+b4e4879e bank 4 9cc8 9cca 9ce1 9ce4 9cea 
+b4e4879e c8c4 c8d0 da71 e4f3 e4f6 e4f9 f367 f371 f37c 
