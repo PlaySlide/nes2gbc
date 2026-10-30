@@ -9,9 +9,10 @@ the block's first 6502 instruction (after its NMI poll); it leaves the
 register at the value the last iteration starts from, and the unchanged block
 body then executes that iteration exactly (result, C, Z, N, V). Only the
 skipped NMI polls / cycles differ. A block whose body does not start by
-loading the register from HRAM is left alone. Opt out: NES2GBC_FAST_LOOPS=0.
+loading the register from HRAM is left alone. Opt out: NES2GBC_FAST_LOOPS=0; stride-8 pre-pass
+opt-out: NES2GBC_FFL_STRIDE=0.
 """
-import re, sys
+import os, re, sys
 from pathlib import Path
 
 asm = Path(sys.argv[1]); lst = asm.with_suffix('.fastloop.txt')
@@ -50,8 +51,12 @@ while i < len(lines):
         body = [f'    ld a, 1 ; tools/fast_loops.py: DE{k.upper()} loop -> last iteration', f'    ldh [{reg[k]}], a']
     else:
         op = 'add' if k == 'adc' else 'sub'
-        body = [f'    ldh a, [nes_a] ; tools/fast_loops.py: {k.upper()} #{n} loop -> last iteration',
-                f'{f}:', '    ld d, a', f'    {op} {n}', f'    jr nc, {f}', '    ld a, d', '    ldh [nes_a], a']
+        body = [f'    ldh a, [nes_a] ; tools/fast_loops.py: {k.upper()} #{n} loop -> last iteration']
+        if 8 * n <= 255 and os.environ.get('NES2GBC_FFL_STRIDE', '1') != '0':
+            # Stride-8 pre-pass: whole groups of 8 iterations that cannot carry
+            # (borrow); the single-step loop below finishes the remainder.
+            body += [f'{f}s:', '    ld d, a', f'    {op} {8 * n}', f'    jr nc, {f}s', '    ld a, d']
+        body += [f'{f}:', '    ld d, a', f'    {op} {n}', f'    jr nc, {f}', '    ld a, d', '    ldh [nes_a], a']
     out.extend(body); done += 1
 asm.write_text('\n'.join(out))
 print(f'fast_loops: {done}/{len(want)} loop(s) fast-forwarded')
