@@ -60,6 +60,47 @@ pub fn idle_spin_heads(graph: &ControlFlowGraph) -> Vec<u16> {
     graph.blocks.values().filter(|b| is_idle_spin(b)).map(|b| b.start).collect()
 }
 
+/// Pure delay loop: a block that is exactly `DEX; BNE self` (or `DEY; BNE self`).
+/// It always exits with the register 0, Z=1, N=0 and nothing else changed, so
+/// the DEX/DEY can be replaced by `LDX/LDY #0` (identical end state, BNE falls
+/// through) - only the burned cycles disappear. Opt-out NES2GBC_NO_DELAY_ELIDE=1.
+pub fn elide_delay_loops(graph: &mut ControlFlowGraph) -> usize {
+    if std::env::var_os("NES2GBC_NO_DELAY_ELIDE").is_some() {
+        return 0;
+    }
+    // Only nested delays (inner `DEX; BNE S` followed by `DEY; BNE S`, or X/Y
+    // swapped): short single-level loops often time raster splits after a
+    // sprite-0 wait and must keep their cost.
+    let dec = |b: &BasicBlock| -> Option<N> {
+        match b.instructions.as_slice() {
+            [d, br] if br.def.mnemonic == N::Bne && d.def.mode == M::Implied && matches!(d.def.mnemonic, N::Dex | N::Dey) => {
+                Some(d.def.mnemonic)
+            }
+            _ => None,
+        }
+    };
+    let taken = |b: &BasicBlock| b.edges.iter().find(|e| e.kind == EdgeKind::BranchTaken).and_then(|e| e.target);
+    let fall = |b: &BasicBlock| b.edges.iter().find(|e| e.kind == EdgeKind::Fallthrough).and_then(|e| e.target);
+    let mut todo = Vec::new();
+    for b in graph.blocks.values() {
+        let Some(inner) = dec(b) else { continue };
+        if taken(b) != Some(b.start) { continue; }
+        let Some(outer) = fall(b).and_then(|f| graph.blocks.get(&f)) else { continue };
+        if dec(outer).is_some_and(|o| o != inner) && taken(outer) == Some(b.start) {
+            todo.push(b.start);
+        }
+    }
+    for pc in &todo {
+        let d = &mut graph.blocks.get_mut(pc).unwrap().instructions[0];
+        let (op, m) = if d.def.mnemonic == N::Dex { (0xA2, N::Ldx) } else { (0xA0, N::Ldy) };
+        d.opcode = op;
+        d.def.mnemonic = m;
+        d.def.mode = M::Immediate;
+        d.operand = 0;
+    }
+    todo.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

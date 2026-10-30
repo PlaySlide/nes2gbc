@@ -494,7 +494,7 @@ fn main() -> ExitCode {
     println!("IRQ vector:   ${:04X}", vectors.irq_brk);
 
     let mut switch_lo_views: Vec<(u8, cfg::ControlFlowGraph)> = Vec::new();
-    let graph = if cart.mapper == 1 || cart.mapper == 2 {
+    let mut graph = if cart.mapper == 1 || cart.mapper == 2 {
         if cart.prg_rom.len() < 0x8000 || cart.prg_rom.len() % 0x4000 != 0 {
             eprintln!(
                 "CFG discovery stopped: mapper 2 expects a whole number of 16 KiB PRG banks (at least two)"
@@ -689,6 +689,15 @@ fn main() -> ExitCode {
         }
     };
 
+    {
+        let mut elided = idle::elide_delay_loops(&mut graph);
+        for (_, g) in switch_lo_views.iter_mut() {
+            elided += idle::elide_delay_loops(g);
+        }
+        if elided > 0 {
+            println!("Delay loops elided: {elided}");
+        }
+    }
     let instruction_count: usize = graph.blocks.values().map(|block| block.instructions.len()).sum();
     let indirect_jumps = graph.blocks.values().flat_map(|block| &block.edges)
         .filter(|edge| matches!(edge.kind, cfg::EdgeKind::IndirectJump { .. }) && edge.target.is_none()).count();
