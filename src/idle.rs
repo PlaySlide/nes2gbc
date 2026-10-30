@@ -101,6 +101,53 @@ pub fn elide_delay_loops(graph: &mut ControlFlowGraph) -> usize {
     todo.len()
 }
 
+/// 16-bit RAM delay counter: a self-loop block that is exactly
+/// `LDA m; CLC; ADC #1; STA m; LDA m+1; ADC #0; STA m+1; ORA m; BNE self`.
+/// Whatever the start value it exits with m = m+1 = 0, A = 0, Z=1, N=0, C=1,
+/// V=0 and nothing else changed, so it is rewritten in place to
+/// `LDA #0; SEC; CLV; STA m; NOP; NOP; STA m+1; ORA m; BNE` (falls through on
+/// the first pass). Only the burned cycles disappear (Bases Loaded $8093:
+/// 4096 iterations after START). Opt-out NES2GBC_DELAY16_ELIDE=0.
+pub fn elide_delay16_loops(graph: &mut ControlFlowGraph) -> usize {
+    if std::env::var("NES2GBC_DELAY16_ELIDE").is_ok_and(|v| v == "0") {
+        return 0;
+    }
+    let ram = |a: u16| a < 0x0800 || (0x6000..0x8000).contains(&a);
+    let mem = |i: &DecodedInstruction, n: N| i.def.mnemonic == n && matches!(i.def.mode, M::ZeroPage | M::Absolute) && ram(i.operand);
+    let imm = |i: &DecodedInstruction, n: N, k: u16| i.def.mnemonic == n && i.def.mode == M::Immediate && i.operand & 0xFF == k;
+    let mut todo = Vec::new();
+    for b in graph.blocks.values() {
+        let selfb = b.edges.iter().any(|e| e.kind == EdgeKind::BranchTaken && e.target == Some(b.start));
+        if !selfb || b.instructions.first().map(|i| i.pc) != Some(b.start) {
+            continue;
+        }
+        if let [l0, c, a1, s0, l1, a0, s1, o, br] = b.instructions.as_slice() {
+            let m = l0.operand;
+            if mem(l0, N::Lda) && c.def.mnemonic == N::Clc && imm(a1, N::Adc, 1) && mem(s0, N::Sta) && s0.operand == m
+                && mem(l1, N::Lda) && l1.operand == m.wrapping_add(1) && imm(a0, N::Adc, 0)
+                && mem(s1, N::Sta) && s1.operand == l1.operand && mem(o, N::Ora) && o.operand == m && br.def.mnemonic == N::Bne
+            {
+                todo.push(b.start);
+            }
+        }
+    }
+    for pc in &todo {
+        let ins = &mut graph.blocks.get_mut(pc).unwrap().instructions;
+        let set = |i: &mut DecodedInstruction, op: u8, n: N, mode: M, v: u16| {
+            i.opcode = op;
+            i.def.mnemonic = n;
+            i.def.mode = mode;
+            i.operand = v;
+        };
+        set(&mut ins[0], 0xA9, N::Lda, M::Immediate, 0);
+        set(&mut ins[1], 0x38, N::Sec, M::Implied, 0);
+        set(&mut ins[2], 0xB8, N::Clv, M::Implied, 0);
+        set(&mut ins[4], 0xEA, N::Nop, M::Implied, 0);
+        set(&mut ins[5], 0xEA, N::Nop, M::Implied, 0);
+    }
+    todo.len()
+}
+
 /// Register-only counting self-loops that the NES2GBC_FAST_LOOPS post-pass
 /// (tools/fast_loops.py) fast-forwards: `DEX|DEY; BNE self`, `CLC; ADC #n;
 /// BCC self`, `SEC; SBC #n; BCS self`. The post-pass runs every iteration but

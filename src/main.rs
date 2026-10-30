@@ -694,6 +694,10 @@ fn main() -> ExitCode {
         for (_, g) in switch_lo_views.iter_mut() {
             elided += idle::elide_delay_loops(g);
         }
+        elided += idle::elide_delay16_loops(&mut graph);
+        for (_, g) in switch_lo_views.iter_mut() {
+            elided += idle::elide_delay16_loops(g);
+        }
         if elided > 0 {
             println!("Delay loops elided: {elided}");
         }
