@@ -874,7 +874,11 @@ ENDC
     ; Established raster/stitch presentation paths never consume this flag.
     ld a, [hl]
     cp e
+IF !DEF(NES2GBC_NO_ATTR_SAME_SKIP)
+    jp z, .nametable_same_value
+ELSE
     jr z, .nametable_store_value
+ENDC
 
     ld a, [nes_ppumask]
     and $18
@@ -980,6 +984,23 @@ ENDC
     ld [hl], a
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
+
+IF !DEF(NES2GBC_NO_ATTR_SAME_SKIP)
+.nametable_same_value:
+    ; Rewriting an attribute byte ($x3C0-$x3FF) with its current value has no
+    ; visible effect: the GB attribute map already reflects it (or a staged
+    ; publication of it is pending). Games that refresh attribute tables every
+    ; NMI (Ikari Warriors: 32 bytes/frame) otherwise pay the full physical
+    ; attribute sync per byte.
+    ld a, h
+    and $03
+    cp $03
+    jp nz, .nametable_store_value
+    ld a, l
+    cp $C0
+    jp c, .nametable_store_value
+    jp nes_ppu_increment_addr
+ENDC
 
 IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
 ; One byte of nes_ppu_write_run: HL = source (GB), DE = PPU address
