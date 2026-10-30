@@ -614,7 +614,21 @@ nes_interp_op_3E: ; ROL abx
 
 nes_interp_op_40: ; RTI imp
     call nes_rti_pop_hl
+IF !DEF(NES2GBC_INTERP_RTI_POLL)
+    ; Like translated RTI: resume the interrupted thread without an NMI poll.
+    ; Polling here spent the overrun grace (nes_rti_grace) on the RTI itself,
+    ; so a handler that overran every host frame re-entered the NMI before
+    ; the main thread ran a single instruction (Bases Loaded START stall).
+    ld a, $01
+    ld [nes_interp_may_exit], a
+    ld a, l
+    ld [nes_ipc_lo], a
+    ld a, h
+    ld [nes_ipc_hi], a
+    jp nes_interp_next
+ELSE
     jp nes_interp_goto_hl
+ENDC
 
 nes_interp_op_41: ; EOR izx
     call nes_interp_ea_izx
