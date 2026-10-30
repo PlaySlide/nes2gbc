@@ -186,6 +186,19 @@ ELIF DEF(NES2GBC_RAM_INTERP)
 ELSE
     jp c, nes_unimplemented
 ENDC
+IF DEF(NES2GBC_MMC1) && !DEF(NES2GBC_NO_MMC1_HI_GUARD)
+    ; MMC1 32 KiB PRG modes swap $C000-$FFFF too, but native $C000+ code was
+    ; translated from the last bank: interpret unless that bank is mapped.
+    ld a, h
+    cp $C0
+    jr c, .hi_fixed
+    ld a, [nes_prg_hi_bank]
+    ld b, a
+    ld a, [nes_prg_fixed_bank]
+    cp b
+    jp nz, nes_interp_enter_rom
+.hi_fixed:
+ENDC
 
     ; Direct-mapped cache of resolved translations: 128 entries indexed by
     ; (lo - hi) & $7F (fewer hot collisions than lo & $7F), tagged by
