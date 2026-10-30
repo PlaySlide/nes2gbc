@@ -284,6 +284,47 @@ nes_chr4_want1: ds 1 ; ... for pattern table 1
 SECTION "NES chr4 lazy code", ROM0
 ENDC
 
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR8K_LAZY)
+; NES frame start: upload a deferred 8 KiB CHR bank if it is not the resident
+; pair (nes_chr4_cur0/1 = 2*bank, 2*bank+1). Preserves BC/DE/HL.
+nes_chr8_commit:
+    ld a, [nes_chr8_pending]
+    and a
+    ret z
+    xor a
+    ld [nes_chr8_pending], a
+    ld a, [nes_mmc1_control]
+    bit 4, a
+    ret nz
+    ld a, [nes_chr_bank]
+    add a
+    push bc
+    ld b, a
+    ld a, [nes_chr4_cur0]
+    cp b
+    jr nz, .up
+    inc b
+    ld a, [nes_chr4_cur1]
+    cp b
+    jr nz, .up
+    pop bc
+    ret
+.up:
+    pop bc
+    push bc
+    push de
+    push hl
+    call nes_upload_chr_bank
+    pop hl
+    pop de
+    pop bc
+    ret
+
+SECTION "NES chr8 lazy state", WRAM0
+nes_chr8_pending: ds 1 ; 1 = nes_chr_bank changed with the upload deferred
+SECTION "NES chr8 lazy code", ROM0
+ENDC
+
 ; A = 4 KiB CHR bank, D = VRAM bank (0/1): copy it to $8000.
 nes_chr4_copy_half:
     ld e, a

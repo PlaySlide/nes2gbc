@@ -1413,9 +1413,36 @@ ENDC
     ld a, [nes_chr_bank_mask]
     and b
     ld b, a
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR8K_LAZY)
+    ; Games that flip 8 KiB banks mid-frame (status bar split) would re-upload
+    ; 8 KiB with the LCD off every NES frame. While NMIs are enabled or inside
+    ; the NMI handler, record the bank (nes_chr_bank stays the logical bank for
+    ; PPU reads); nes_chr_commit uploads the bank live at NMI entry.
+    ld a, [nes_nmi_active]
+    and a
+    jr nz, .chr8_defer
+    ld a, [nes_ppuctrl]
+    bit 7, a
+    jr z, .chr8_now
+.chr8_defer:
+    ld a, b
+    ld [nes_chr_bank], a
+    ld a, 1
+    ld [nes_chr8_pending], a
+    jr .done
+.chr8_now:
+    ld a, [nes_chr8_pending]
+    and a
+    jr nz, .chr8_force
+ENDC
     ld a, [nes_chr_bank]
     cp b
     jr z, .done
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR8K_LAZY)
+.chr8_force:
+    xor a
+    ld [nes_chr8_pending], a
+ENDC
     ld a, b
     ld [nes_chr_bank], a
     call nes_upload_chr_bank
@@ -1870,6 +1897,9 @@ IF DEF(NES2GBC_APU)
 ENDC
 IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR4K_LAZY)
     call nes_chr4_commit
+ENDC
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR8K_LAZY)
+    call nes_chr8_commit
 ENDC
 
 IF !DEF(NES2GBC_NO_PACING)
