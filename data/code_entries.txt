@@ -22,3 +22,6 @@ b4e4879e c8c4 c8d0 da71 e4f3 e4f6 e4f9 f367 f371 f37c
 # Ikari Warriors: code observed running in the interpreter (not statically reachable)
 2d273aa4 bank 6 9860 9864 9889 9890 98ac 98b6 98c3 98c6 98cd 98d1 
 2d273aa4 c09c c3ce c3d1 c3d4 c3d7 c3de c3e1 c3f8 c3ff c402 c438 c43b c43e c7b2 c7b6 c8cc c8cf e050 e054 f240 f24a f24d 
+# Bases Loaded: code observed running in the interpreter (not statically reachable)
+6abad366 bank 4 951c a750 ad8e 
+6abad366 bank 6 83b9 83bc 83bf 83d3 83d8 83db 8491 849e 
