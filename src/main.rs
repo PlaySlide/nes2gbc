@@ -629,6 +629,17 @@ fn main() -> ExitCode {
                                 added |= bank_seeds[bank].insert(t);
                             }
                         }
+                        if g.blocks.iter().any(|(&pc, b)| pc < 0xC000 && b.edges.iter().any(|e| matches!(e.kind, cfg::EdgeKind::IndirectJump { .. }) && e.target.is_none())) {
+                            let starts: BTreeSet<u16> = g.blocks.values().flat_map(|b| b.instructions.iter().map(|i| i.pc)).collect();
+                            let h: Vec<u16> = nes2gbc::autoseed::indirect_harvest(view).into_iter().filter(|t| !g.blocks.contains_key(t) && (!covered.contains(t) || starts.contains(t))).collect();
+                            if env::var_os("NES2GBC_AUTO_SEEDS_DEBUG").is_some() {
+                                eprintln!("PH bank {bank} {} {:04X?}", h.len(), h);
+                            }
+                            for t in h {
+                                nes2gbc::autoseed::HARVEST_SEEDS.lock().unwrap().insert((bank as u8, t));
+                                added |= bank_seeds[bank].insert(t);
+                            }
+                        }
                     }
                     if added {
                         continue;

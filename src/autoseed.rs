@@ -134,3 +134,45 @@ pub fn scan(view: &[u8], refs: &std::collections::BTreeSet<u16>) -> (Vec<u16>, V
     low.dedup();
     (fixed, low)
 }
+
+/// Data words in the low window ($8000-$BFFF) of a view whose bank has an unresolved `JMP (ptr)`: pointer
+/// tables reached through another pointer (Metroid's sound engine loads `$E2` with `LDA ($E0),Y` from
+/// per-song header tables, then `JMP ($00E2)`) defeat every table pattern. A word counts when at least two of
+/// its four even-offset neighbours on each side are also low-window words, and its target decodes as clean code.
+/// Opt-out: NES2GBC_PTR_HARVEST=0.
+pub fn indirect_harvest(view: &[u8]) -> Vec<u16> {
+    let mut out = Vec::new();
+    if view.len() != 0x8000 || std::env::var("NES2GBC_PTR_HARVEST").map(|v| v == "0").unwrap_or(false) {
+        return out;
+    }
+    let lw = |i: usize| -> Option<u16> {
+        if i + 1 >= 0x4000 {
+            return None;
+        }
+        let w = u16::from_le_bytes([view[i], view[i + 1]]);
+        (0x8000..0xC000).contains(&w).then_some(w)
+    };
+    for i in 0..0x3FFF {
+        let Some(w) = lw(i) else { continue };
+        let mut near = 0;
+        for k in 1..=4usize {
+            if i >= 2 * k && lw(i - 2 * k).is_some() {
+                near += 1;
+            }
+            if lw(i + 2 * k).is_some() {
+                near += 1;
+            }
+        }
+        if near >= 2 && plausible_min(view, w, 1) {
+            out.push(w);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// (bank, pc) of harvested pointer seeds. Code reached from them is a guess:
+/// its JSR return sites must not take RTS-guard slots in real subroutines.
+pub static HARVEST_SEEDS: std::sync::Mutex<std::collections::BTreeSet<(u8, u16)>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());

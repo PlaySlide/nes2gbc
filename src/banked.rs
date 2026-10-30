@@ -1256,8 +1256,12 @@ fn rts_return_candidates(views: &[(u8, ControlFlowGraph)]) -> BTreeMap<BlockId, 
     let key = |bank: u8, pc: u16| if pc >= 0xC000 { BlockId::Fixed(pc) } else { BlockId::Banked(bank, pc) };
     // Return sites per callee entry, counted once per distinct caller block.
     let mut sites: BTreeMap<u16, BTreeMap<u16, BTreeSet<BlockId>>> = BTreeMap::new();
+    let weak = harvest_reached(views);
     for (bank, g) in views {
         for (&pc, b) in &g.blocks {
+            if weak.contains(&(*bank, pc)) {
+                continue;
+            }
             let callee = b.edges.iter().find(|e| e.kind == EdgeKind::Call).and_then(|e| e.target);
             let ret = b.edges.iter().find(|e| e.kind == EdgeKind::CallReturn).and_then(|e| e.target);
             if let (Some(c), Some(r)) = (callee, ret) {
@@ -1451,6 +1455,61 @@ pub fn constant_bank_switch_targets(graph: &ControlFlowGraph, bank_mask: u8) -> 
                 _ => {}
             }
         }
+    }
+    out
+}
+
+/// Blocks reached only through harvested pointer seeds (autoseed::HARVEST_SEEDS),
+/// following intra-procedural edges from each seed until known code is met.
+fn harvest_reached(views: &[(u8, ControlFlowGraph)]) -> BTreeSet<(u8, u16)> {
+    let seeds = crate::autoseed::HARVEST_SEEDS.lock().unwrap().clone();
+    let mut out = BTreeSet::new();
+    if seeds.is_empty() {
+        return out;
+    }
+    for (bank, g) in views {
+        // Targets of edges from blocks that are not harvest-only are "known".
+        let mut work: Vec<u16> = seeds.iter().filter(|(b, _)| b == bank).map(|&(_, p)| p).collect();
+        let mut reach = BTreeSet::new();
+        while let Some(pc) = work.pop() {
+            if !reach.insert(pc) {
+                continue;
+            }
+            let Some(b) = g.blocks.get(&pc) else { continue };
+            for e in &b.edges {
+                if let Some(t) = e.target {
+                    work.push(t);
+                }
+            }
+        }
+        // Remove anything also reachable from a non-seed block outside the set.
+        let mut known = BTreeSet::new();
+        for (&pc, b) in &g.blocks {
+            if reach.contains(&pc) {
+                continue;
+            }
+            for e in &b.edges {
+                if let Some(t) = e.target {
+                    known.insert(t);
+                }
+            }
+        }
+        let mut stack: Vec<u16> = known.iter().copied().filter(|t| reach.contains(t)).collect();
+        while let Some(pc) = stack.pop() {
+            if !reach.remove(&pc) {
+                continue;
+            }
+            if let Some(b) = g.blocks.get(&pc) {
+                for e in &b.edges {
+                    if let Some(t) = e.target {
+                        if reach.contains(&t) {
+                            stack.push(t);
+                        }
+                    }
+                }
+            }
+        }
+        out.extend(reach.into_iter().map(|p| (*bank, p)));
     }
     out
 }
