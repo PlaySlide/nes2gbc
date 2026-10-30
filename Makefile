@@ -60,6 +60,7 @@ generate:
 	@if [ "$${NES2GBC_STITCH_SHADOW_SYNC:-1}" != "0" ]; then echo 'DEF NES2GBC_STITCH_SHADOW_SYNC EQU 1 ; resync the published-nametable shadow when a single-scroll stitch engages (opt out: NES2GBC_STITCH_SHADOW_SYNC=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_SPLIT_YWRAP:-1}" != "0" ]; then echo 'DEF NES2GBC_SPLIT_YWRAP EQU 1 ; apply the NES 240-line nametable wrap to the raster-split playfield SCY (opt out: NES2GBC_SPLIT_YWRAP=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_SPLIT_TOP_YWRAP:-1}" != "0" ]; then echo 'DEF NES2GBC_SPLIT_TOP_YWRAP EQU 1 ; show the HUD past the NES 240-line wrap when most split-top lines lie beyond it (opt out: NES2GBC_SPLIT_TOP_YWRAP=0)' >> runtime/generated_config.inc; fi
+	@if [ "$${NES2GBC_CHR4K_LAZY:-1}" != "0" ]; then echo 'DEF NES2GBC_CHR4K_LAZY EQU 1 ; MMC1 4 KiB CHR: defer visible uploads to NES frame start, keep the bank live at NMI entry (opt out: NES2GBC_CHR4K_LAZY=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi

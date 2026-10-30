@@ -254,6 +254,36 @@ nes_upload_chr_4k:
     ldh [rLCDC], a
     ret
 
+IF DEF(NES2GBC_CHR4K_LAZY)
+; NES frame start: upload the deferred 4 KiB CHR request (the banks live at the
+; end of the previous frame) if it differs from the resident halves.
+; Preserves BC/DE/HL.
+nes_chr4_commit:
+    ld a, [nes_chr_is_ram]
+    and a
+    ret nz
+    ld a, [nes_mmc1_control]
+    bit 4, a
+    ret z
+    push bc
+    push de
+    push hl
+    ld a, [nes_chr4_want0]
+    ld b, a
+    ld a, [nes_chr4_want1]
+    ld c, a
+    call nes_upload_chr_4k
+    pop hl
+    pop de
+    pop bc
+    ret
+
+SECTION "NES chr4 lazy state", WRAM0
+nes_chr4_want0: ds 1 ; last 4 KiB CHR bank written for pattern table 0
+nes_chr4_want1: ds 1 ; ... for pattern table 1
+SECTION "NES chr4 lazy code", ROM0
+ENDC
+
 ; A = 4 KiB CHR bank, D = VRAM bank (0/1): copy it to $8000.
 nes_chr4_copy_half:
     ld e, a

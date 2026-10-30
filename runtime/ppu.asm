@@ -1341,9 +1341,15 @@ IF DEF(NES2GBC_CHR4K) && !DEF(NES2GBC_NO_CHR4K_READ)
     jr z, .pat_bank_ready
     ld a, h
     cp $10
+IF DEF(NES2GBC_CHR4K_LAZY)
+    ld a, [nes_chr4_want0]
+    jr c, .pat4_sel
+    ld a, [nes_chr4_want1]
+ELSE
     ld a, [nes_chr4_cur0]
     jr c, .pat4_sel
     ld a, [nes_chr4_cur1]
+ENDC
 .pat4_sel:
     ld b, a
     ld a, h

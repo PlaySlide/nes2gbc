@@ -1435,7 +1435,25 @@ IF DEF(NES2GBC_CHR4K)
     ld a, [nes_mmc1_chr1]
     and d
     ld c, a
+IF DEF(NES2GBC_CHR4K_LAZY)
+    ; Mid-frame CHR swaps (status bar vs playfield) would re-upload 4 KiB with
+    ; the LCD off several times per NES frame. While NMIs are enabled or inside
+    ; the NMI handler, only record the request; nes_chr4_commit uploads the bank live at NMI entry.
+    ld a, b
+    ld [nes_chr4_want0], a
+    ld a, c
+    ld [nes_chr4_want1], a
+    ld a, [nes_nmi_active]
+    and a
+    jr nz, .chr4k_deferred
+    ld a, [nes_ppuctrl]
+    bit 7, a
+    jr nz, .chr4k_deferred
+ENDC
     call nes_upload_chr_4k
+IF DEF(NES2GBC_CHR4K_LAZY)
+.chr4k_deferred:
+ENDC
     ld a, $FF
     ld [nes_chr_bank], a
 ENDC
@@ -1849,6 +1867,9 @@ IF DEF(NES2GBC_APU)
     ; One APU frame-sequencer frame per delivered NES NMI (= emulated NES
     ; frame), so APU timing follows emulation speed. Preserves BC/DE/HL.
     call nes_apu_nes_frame
+ENDC
+IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR4K_LAZY)
+    call nes_chr4_commit
 ENDC
 
 IF !DEF(NES2GBC_NO_PACING)
