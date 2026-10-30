@@ -24,8 +24,12 @@ runtime support, giving byte-identical output).
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
+
+# Generated only when enabled so the opt-out build is byte-identical.
+NEST_IDLE = os.environ.get("NES2GBC_NEST_IDLE", "1") != "0"
 from pathlib import Path
 
 GLOBAL_LABEL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
@@ -60,6 +64,25 @@ def stub(label: str, forever: bool = False) -> list[str]:
         "ENDC",
         f"{s}_hidle_ns:",
     ] if forever else []) + [
+        # Spin inside a still-running NMI handler (NES2GBC_NMI_NEST: the game
+        # runs under a re-entrancy flag and waits for a counter only a nested
+        # NMI advances, Spelunker $AC34): only a nested NMI can end the spin,
+        # so arm it for the next VBlank instead of after NMI_NEST_FRAMES
+        # dropped ones (hardware delivers one every frame). Opt-out
+        # NES2GBC_NEST_IDLE=0.
+    ] + ([
+        "IF DEF(NES2GBC_NMI_NEST) && !DEF(NES2GBC_NO_NEST_IDLE)",
+        "    ld a, [nes_nmi_active]",
+        "    and a",
+        "    jr z, .hidle_nn",
+        "    ld a, [nes_nmi_nested]",
+        "    and a",
+        "    jr nz, .hidle_nn",
+        "    ld a, NMI_NEST_FRAMES",
+        "    ld [nes_nmi_drops], a",
+        ".hidle_nn:",
+        "ENDC",
+    ] if NEST_IDLE else []) + [
         # lagging = 2+ NMIs since the previous back-edge (main thread overran)
         "    push hl",
         "    ld hl, nes_idle_last",
