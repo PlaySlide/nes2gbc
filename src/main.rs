@@ -881,6 +881,19 @@ fn main() -> ExitCode {
                 }
             }
         }
+        // Call spins (src/idle.rs::call_spin_pairs) as `head@tail` labels.
+        if switch_lo_views.is_empty() {
+            for (h, t) in idle::call_spin_pairs(&graph) {
+                idle_labels.insert(format!("nes_{h:04X}@nes_{t:04X}"));
+            }
+        } else {
+            for (bank, g) in &switch_lo_views {
+                let lab = |pc: u16| if pc >= 0xC000 { format!("nes_{pc:04X}") } else { format!("nes_m2_b{bank:02X}_{pc:04X}") };
+                for (h, t) in idle::call_spin_pairs(g) {
+                    idle_labels.insert(format!("{}@{}", lab(h), lab(t)));
+                }
+            }
+        }
         // Lone `JMP self` spins (src/idle.rs::is_forever_spin): the halt pass also
         // retires an active NMI there (NES2GBC_NMI_SPIN).
         let mut forever_labels: BTreeSet<String> = BTreeSet::new();

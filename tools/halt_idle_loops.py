@@ -126,21 +126,38 @@ def main() -> int:
     if not idle_path.exists():
         print("halt_idle_loops: no idle list, skipped")
         return 0
-    wanted = {l.strip() for l in idle_path.read_text().split() if l.strip()}
+    entries = [l.strip() for l in idle_path.read_text().split() if l.strip()]
+    # `head@tail`: call spin (src/idle.rs::call_spin_pairs) whose back-edge to
+    # head sits in block tail; plain `head`: the back-edge is in head itself.
+    tails = {}
+    for e in entries:
+        h, _, t = e.partition("@")
+        tails.setdefault(h, set()).add(t or h)
+    wanted = set(tails)
     forever_path = asm_path.with_suffix(".idle_forever.txt")
     forever = set(forever_path.read_text().split()) if forever_path.exists() else set()
     lines = asm_path.read_text().split("\n")
     if not any(l.strip() == "; NES2GBC_NMI_ABANDON 1" for l in lines[:40]):
         forever = set()
+    done, skipped = [], []
     heads = {}
+    labels = {}
     for i, l in enumerate(lines):
         m = GLOBAL_LABEL.match(l)
+        if m:
+            labels.setdefault(m.group(1), i)
         if m and m.group(1) in wanted:
             heads[m.group(1)] = i
-    done, skipped = [], []
-    # Process bottom-up so earlier indices stay valid.
-    for label, i in sorted(heads.items(), key=lambda kv: -kv[1]):
-        # Head must start with the ordinary NMI poll (A/flags dead there).
+
+    def region(i: int) -> range:
+        end = i + 1
+        while end < len(lines) and not GLOBAL_LABEL.match(lines[end]) and not lines[end].startswith("SECTION"):
+            end += 1
+        return range(i + 1, end)
+
+    # Back-edge rewrites first (no line insertions, so indices stay valid).
+    ok = {}
+    for label, i in heads.items():
         j = i + 1
         depth = 0
         while j < len(lines):
@@ -155,18 +172,22 @@ def main() -> int:
         if j >= len(lines) or code(lines[j]) != "ldh a, [nes_host_vblank_pending]":
             skipped.append((label, "no head poll"))
             continue
-        # Block region: until the next global label or SECTION.
-        end = i + 1
-        while end < len(lines) and not GLOBAL_LABEL.match(lines[end]) and not lines[end].startswith("SECTION"):
-            end += 1
         back = re.compile(rf"^(\s*)(jr|jp) ((?:z|nz|c|nc), )?{label}(\s*(?:;.*)?)$")
-        hits = [k for k in range(i + 1, end) if back.match(lines[k])]
-        if not hits:
+        n = 0
+        for t in sorted(tails[label]):
+            if t not in labels:
+                continue
+            for k in region(labels[t]):
+                m = back.match(lines[k])
+                if m:
+                    lines[k] = f"{m.group(1)}jp {m.group(3) or ''}{label}_hidle ; halt_idle_loops{m.group(4) or ''}"
+                    n += 1
+        if not n:
             skipped.append((label, "no back-edge"))
             continue
-        for k in hits:
-            m = back.match(lines[k])
-            lines[k] = f"{m.group(1)}jp {m.group(3) or ''}{label}_hidle ; halt_idle_loops{m.group(4) or ''}"
+        ok[label] = i
+    # Stubs bottom-up so earlier indices stay valid.
+    for label, i in sorted(ok.items(), key=lambda kv: -kv[1]):
         # Fall-through guard: previous code line may run into the stub.
         p = i - 1
         while p >= 0 and not code(lines[p]):

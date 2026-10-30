@@ -221,3 +221,81 @@ mod tests {
         assert!(!is_idle_spin(&wide));
     }
 }
+
+/// Leaf subroutine a call spin may JSR: every block reachable from `start`
+/// over branch/fallthrough/jump edges through pure-spin blocks either ends in a
+/// lone RTS (after pure ops) or branches into a non-pure block, which is a loop
+/// exit (with memory unchanged that branch goes the same way every iteration).
+fn pure_leaf(graph: &ControlFlowGraph, start: u16) -> bool {
+    let mut work = vec![start];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut returns = false;
+    while let Some(pc) = work.pop() {
+        if !seen.insert(pc) {
+            continue;
+        }
+        if seen.len() > 8 {
+            return false;
+        }
+        let Some(b) = graph.blocks.get(&pc) else { return false };
+        let (last, body) = match b.instructions.split_last() { Some(x) => x, None => return false };
+        if last.def.mnemonic == N::Rts {
+            if !body.iter().all(pure_spin_op) {
+                return false;
+            }
+            returns = true;
+            continue;
+        }
+        if !b.instructions.iter().all(pure_spin_op) {
+            // Entered only via an exit branch of a pure block (not the leaf head).
+            if pc == start {
+                return false;
+            }
+            continue;
+        }
+        for e in &b.edges {
+            match (e.kind, e.target) {
+                (EdgeKind::BranchTaken | EdgeKind::Jump | EdgeKind::Fallthrough, Some(t)) => work.push(t),
+                _ => return false,
+            }
+        }
+    }
+    returns
+}
+
+/// Call spin: block H = pure ops + `JSR leaf`, its return block T = pure ops
+/// that branch/jump back to H (other edges leave the loop), and the leaf is
+/// pure (see `pure_leaf`). JSR/RTS leave SP and the stack bytes as they were
+/// after the previous iteration, so as with `is_idle_spin` only an interrupt
+/// can make the loop exit (Spelunker $80A6: `JSR $82AE; LDA $D0; CMP #n; BCC`).
+/// Returns (H, T). Opt-out NES2GBC_CALL_SPIN=0.
+pub fn call_spin_pairs(graph: &ControlFlowGraph) -> Vec<(u16, u16)> {
+    if std::env::var("NES2GBC_CALL_SPIN").is_ok_and(|v| v == "0") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for h in graph.blocks.values() {
+        let Some((last, body)) = h.instructions.split_last() else { continue };
+        if last.def.mnemonic != N::Jsr || !body.iter().all(pure_spin_op) {
+            continue;
+        }
+        let call = h.edges.iter().find(|e| e.kind == EdgeKind::Call).and_then(|e| e.target);
+        let ret = h.edges.iter().find(|e| e.kind == EdgeKind::CallReturn).and_then(|e| e.target);
+        let (Some(s), Some(t)) = (call, ret) else { continue };
+        if h.edges.len() != 2 {
+            continue;
+        }
+        let Some(tb) = graph.blocks.get(&t) else { continue };
+        if tb.instructions.is_empty()
+            || !tb.instructions.iter().all(pure_spin_op)
+            || !tb.edges.iter().any(|e| matches!(e.kind, EdgeKind::BranchTaken | EdgeKind::Jump) && e.target == Some(h.start))
+            || !tb.edges.iter().all(|e| matches!(e.kind, EdgeKind::BranchTaken | EdgeKind::Jump | EdgeKind::Fallthrough))
+        {
+            continue;
+        }
+        if pure_leaf(graph, s) {
+            out.push((h.start, t));
+        }
+    }
+    out
+}
