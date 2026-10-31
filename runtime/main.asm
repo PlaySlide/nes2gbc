@@ -209,6 +209,24 @@ ENDC
     inc l
     dec b
     jr nz, .clear_dispatch_dm
+IF DEF(NES2GBC_DISPATCH_2WAY)
+    ld hl, nes_dispatch_w2_tag
+    ld b, $40
+.clear_dispatch_w2:
+    ld [hl], 0              ; tag2 ($CA80 | i)
+    set 6, l
+    ld [hl], 1              ; bank2 ($CAC0 | i)
+    ld h, HIGH(nes_dispatch_w2_lo)
+    res 7, l
+    ld [hl], HIGH(nes_dispatch_dm_empty)  ; hi2 ($CF40 | i, bit 7 clear)
+    res 6, l
+    ld [hl], LOW(nes_dispatch_dm_empty)   ; lo2 ($CF00 | i)
+    ld h, HIGH(nes_dispatch_w2_tag)
+    set 7, l
+    inc l
+    dec b
+    jr nz, .clear_dispatch_w2
+ENDC
     xor a
 
     ld hl, nes_gbc_palette_shadow

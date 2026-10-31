@@ -277,6 +277,21 @@ nes_dispatch_dm_bank:   ds $80
 nes_dispatch_dm_lo:     ds $80
 nes_dispatch_dm_hi:     ds $80
 
+IF DEF(NES2GBC_DISPATCH_2WAY)
+IF !DEF(NES2GBC_STACK_HALF)
+    FAIL "NES2GBC_DISPATCH_2WAY needs NES2GBC_STACK_HALF ($CF00-$CF7F)"
+ENDC
+; Second way of the dispatch cache: 64 entries indexed by lo & $3F, filled with
+; the entries the direct-mapped way evicts. tag2 = hi ^ (lo & $80); bit 7 of
+; hi2 holds lo bit 6 (linked ROMX addresses are $4000-$7FFF, so bit 7 is free).
+SECTION "NES dispatch way2 tag/bank", WRAM0[$CA80]
+nes_dispatch_w2_tag:    ds $40
+nes_dispatch_w2_bank:   ds $40
+SECTION "NES dispatch way2 addr", WRAM0[$CF00]
+nes_dispatch_w2_lo:     ds $40
+nes_dispatch_w2_hi:     ds $40
+ENDC
+
 ; Frame pacing (NES2GBC_PACING). When a translated NMI finishes after it has
 ; already missed a host VBlank, the next NMI starts immediately instead of
 ; idling for the next VBlank. The just-completed frame's publishable state is

@@ -69,6 +69,7 @@ generate:
 	@if [ "$${NES2GBC_SPIN_KEEP_DEEP:-1}" != "0" ]; then echo 'DEF NES2GBC_SPIN_KEEP_DEEP EQU 1 ; NMI JMP-self spin below the entry SP: end the NMI but keep SP for the nested NMI (opt out: NES2GBC_SPIN_KEEP_DEEP=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_PAL_SAME_SKIP:-1}" != "0" ]; then echo 'DEF NES2GBC_PAL_SAME_SKIP EQU 1 ; palette: skip $$3F00 writes whose value equals the last synced one (opt out: NES2GBC_PAL_SAME_SKIP=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_STACK_HALF:-1}" != "0" ]; then echo 'DEF NES2GBC_STACK_HALF EQU 1 ; host stack reserve $$CF80-$$CFFF (128 B); frees $$CF00-$$CF7F (opt out: NES2GBC_STACK_HALF=0)' >> runtime/generated_config.inc; fi
+	@if [ "$${NES2GBC_STACK_HALF:-1}" != "0" ] && [ "$${NES2GBC_DISPATCH_2WAY:-1}" != "0" ]; then echo 'DEF NES2GBC_DISPATCH_2WAY EQU 1 ; dispatch cache way 2 (64 entries) filled from direct-mapped evictions (opt out: NES2GBC_DISPATCH_2WAY=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi

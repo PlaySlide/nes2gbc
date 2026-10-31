@@ -216,7 +216,11 @@ ENDC
     res 7, l
     ld h, HIGH(nes_dispatch_dm_tag)
     cp [hl]
+IF DEF(NES2GBC_DISPATCH_2WAY)
+    jr nz, .dm_way2
+ELSE
     jr nz, .dm_miss
+ENDC
     set 7, l
     ld a, [hl]
     ldh [nes_current_code_bank], a
@@ -227,6 +231,40 @@ ENDC
     ld l, [hl]
     ld h, a
     jp hl
+
+IF DEF(NES2GBC_DISPATCH_2WAY)
+.dm_way2:
+    ; B = hi, E = lo. Clobbers C/D like the miss path.
+    ld a, e
+    or $80
+    ld l, a
+    res 6, l                ; L = $80 | (lo & $3F)
+    ld h, HIGH(nes_dispatch_w2_tag)
+    ld a, e
+    and $80
+    xor b
+    cp [hl]
+    jr nz, .dm_miss
+    set 6, l
+    ld c, [hl]              ; bank
+    ld h, HIGH(nes_dispatch_w2_hi)
+    res 7, l                ; L = $40 | idx -> hi2
+    ld a, e
+    add a, a
+    xor [hl]
+    add a, a                ; carry = lo bit 6 != stored bit
+    jr c, .dm_miss
+    ld a, [hl]
+    and $7F
+    ld d, a
+    res 6, l
+    ld a, c
+    ldh [nes_current_code_bank], a
+    ld [$2000], a
+    ld l, [hl]
+    ld h, d
+    jp hl
+ENDC
 
 .dm_miss:
     ld h, b
@@ -294,6 +332,9 @@ ENDC
     xor c
     res 7, l
     ld h, HIGH(nes_dispatch_dm_tag)
+IF DEF(NES2GBC_DISPATCH_2WAY)
+    call nes_dispatch_dm_demote
+ENDC
     ld [hl], a
     set 7, l
     ld [hl], b
@@ -311,6 +352,55 @@ ENDC
     ld h, d
     ld l, e
     jp hl
+
+IF DEF(NES2GBC_DISPATCH_2WAY)
+; Move the direct-mapped entry at HL (tag page, L = index) into way 2 before
+; it is overwritten. Preserves A/BC/DE/HL.
+nes_dispatch_dm_demote:
+    push af
+    push bc
+    push de
+    push hl
+    ld a, [hl]              ; old tag = hi ^ ((lo - hi) & $80), hi >= $80
+    ld b, a
+    set 7, b                ; old hi
+    cpl
+    and $80
+    or l                    ; (lo - hi)
+    add a, b
+    ld e, a                 ; old lo
+    set 7, l
+    ld c, [hl]              ; old bank
+    inc h
+    ld d, [hl]              ; old addr hi
+    res 7, l
+    ld h, [hl]              ; old addr lo
+    ld a, e
+    and $3F
+    ld l, a
+    ld a, h
+    ld h, HIGH(nes_dispatch_w2_lo)
+    ld [hl], a              ; lo2 ($CF00 | idx)
+    set 6, l
+    ld a, e
+    add a, a
+    and $80
+    or d
+    ld [hl], a              ; hi2 ($CF40 | idx), bit 7 = lo bit 6
+    ld h, HIGH(nes_dispatch_w2_tag)
+    set 7, l
+    ld [hl], c              ; bank2 ($CAC0 | idx)
+    res 6, l
+    ld a, e
+    and $80
+    xor b
+    ld [hl], a              ; tag2 ($CA80 | idx)
+    pop hl
+    pop de
+    pop bc
+    pop af
+    ret
+ENDC
 
 ; Target of empty direct-mapped dispatch entries (tag 0 is a valid tag, for
 ; hi=$80 with (lo-hi)&$80 set): resolve through the full lookup instead.
