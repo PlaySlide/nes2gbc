@@ -67,6 +67,7 @@ generate:
 	@if [ "$${NES2GBC_APU_LAZY_REFRESH:-1}" != "0" ]; then echo 'DEF NES2GBC_APU_LAZY_REFRESH EQU 1 ; APU: sweep clocks refresh a pulse channel only when they change its timer (opt out: NES2GBC_APU_LAZY_REFRESH=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_ISR_FAST_ROMX:-1}" != "0" ]; then echo 'DEF NES2GBC_ISR_FAST_ROMX EQU 1 ; ISR exit: when the interrupted PC is in ROMX and its bytes match the code bank, skip the stack walk (opt out: NES2GBC_ISR_FAST_ROMX=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_SPIN_KEEP_DEEP:-1}" != "0" ]; then echo 'DEF NES2GBC_SPIN_KEEP_DEEP EQU 1 ; NMI JMP-self spin below the entry SP: end the NMI but keep SP for the nested NMI (opt out: NES2GBC_SPIN_KEEP_DEEP=0)' >> runtime/generated_config.inc; fi
+	@if [ "$${NES2GBC_PAL_SAME_SKIP:-1}" != "0" ]; then echo 'DEF NES2GBC_PAL_SAME_SKIP EQU 1 ; palette: skip $$3F00 writes whose value equals the last synced one (opt out: NES2GBC_PAL_SAME_SKIP=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi

@@ -982,6 +982,35 @@ ENDC
     ld a, e
     and $3F
     ld [hl], a
+IF DEF(NES2GBC_PAL_SAME_SKIP)
+    ASSERT LOW(nes_palette_ram) == $30
+    ; Games commonly re-upload all 32 palette bytes every NMI. Re-converting
+    ; an entry whose last synced value is unchanged has no effect on the
+    ; shadow, so skip the conversion.
+    ld d, a
+    ld a, l
+    and $1F
+    or LOW(nes_palette_synced)
+    ld l, a
+    ld h, HIGH(nes_palette_synced)
+    ld a, [hl]
+    cp d
+    jr nz, .pal_changed
+    ; Keep the VBlank palette commit as before: skipping it shortens the
+    ; VBlank ISR enough to expose a timing-dependent fault in Rad Racer (G).
+    ld a, $01
+    ldh [nes_palette_dirty], a
+    jp nes_ppu_increment_addr
+.pal_changed:
+    ld [hl], d
+    ld a, l
+    and $1F
+    xor $10                 ; undo the +$30 rotation (LOW(nes_palette_ram) = $30)
+    add LOW(nes_palette_ram)
+    ld l, a
+    ld h, HIGH(nes_palette_ram)
+    ld a, d
+ENDC
     call nes_video_sync_palette_write
     jp nes_ppu_increment_addr
 
@@ -1599,3 +1628,8 @@ nes_clear_chr_ram_romx:
     ret
 
 
+
+IF DEF(NES2GBC_PAL_SAME_SKIP)
+SECTION "NES palette synced", WRAM0, ALIGN[5]
+nes_palette_synced: ds 32 ; last value pushed through the palette sync ($FF = never)
+ENDC

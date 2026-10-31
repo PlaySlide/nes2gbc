@@ -217,6 +217,16 @@ ENDC
     ld [hli], a
     dec b
     jr nz, .clear_palette_shadow
+IF DEF(NES2GBC_PAL_SAME_SKIP)
+    ld hl, nes_palette_synced
+    ld b, 32
+    ld a, $FF
+.init_palette_synced:
+    ld [hli], a
+    dec b
+    jr nz, .init_palette_synced
+    xor a
+ENDC
 
     ld a, $FD
     ldh [nes_sp], a
