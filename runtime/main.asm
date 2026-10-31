@@ -607,6 +607,10 @@ ENDC
     jp .done
 
 .commit_ready:
+IF DEF(NES2GBC_FIT)
+    ld a, $01
+    ld [nes_fit_commit], a
+ENDC
 IF !DEF(NES2GBC_NO_PACING)
     ld a, $01
     ld [nes_pace_committed], a
@@ -846,6 +850,9 @@ ENDC
 .done:
 IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
     call nes_dual_arm_frame
+ENDC
+IF DEF(NES2GBC_FIT)
+    call nes_fit_frame
 ENDC
 IF !DEF(NES2GBC_NO_PACING)
     ld a, [nes_pace_isr_active]
@@ -1143,6 +1150,10 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
 nes_gbc_stat_isr:
     push af
     push bc
+IF DEF(NES2GBC_FIT)
+    ; FIT shows one fixed letterboxed view: no raster splits.
+    jp .disable_stat
+ENDC
 IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
     ld a, [nes_dual_arm]
     and a
@@ -1413,6 +1424,9 @@ INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
 INCLUDE "video.asm"
+IF DEF(NES2GBC_FIT)
+INCLUDE "fit.asm"
+ENDC
 INCLUDE "input.asm"
 IF DEF(NES2GBC_RAM_INTERP)
 INCLUDE "interp.asm"

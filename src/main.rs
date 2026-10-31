@@ -958,7 +958,11 @@ fn main() -> ExitCode {
             eprintln!("error writing {}: {err}", chr_path.display());
             return ExitCode::FAILURE;
         }
-        let converted_chr = assets::convert_chr_to_gbc(cart.chr_rom);
+        let converted_chr = if std::env::var("NES2GBC_FIT").map(|v| v == "1").unwrap_or(false) {
+            assets::convert_chr_to_gbc_fit(cart.chr_rom)
+        } else {
+            assets::convert_chr_to_gbc(cart.chr_rom)
+        };
         if let Err(err) = fs::write(&chr_gbc_path, converted_chr) {
             eprintln!("error writing {}: {err}", chr_gbc_path.display());
             return ExitCode::FAILURE;

@@ -4,6 +4,9 @@ SECTION "NES input helpers", ROM0
 
 ; Apply the current debug crop on top of the game's own NES scroll values.
 nes_view_apply_scroll:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
     ld a, [nes_ppu_scroll_x]
     ld b, a
     ldh a, [nes_view_x]

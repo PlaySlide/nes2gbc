@@ -62,12 +62,23 @@ nes_chr_ram_write_hl:
     inc d
 .write_bank_ready:
     ldh [rSVBK], a
+IF DEF(NES2GBC_FIT)
+    call nes_fit_chr_write
+ENDC
     ld a, h
     and $0F
     or $D0
     ld h, a
     ld a, e
     ld [hl], a
+IF DEF(NES2GBC_FIT)
+    ; The shrunk copy is rebuilt at the next host-frame commit.
+    pop af
+    ldh [rSVBK], a
+    pop de
+    pop bc
+    ret
+ENDC
 
     ; Fetch both NES bitplanes for this row from the raw tile.
     res 3, l
@@ -773,7 +784,7 @@ nes_ppu_write_data:
     ; WRAM, staged once per NMI, and the address increments.
     ; ROMs with fixed non-vertical mirroring never take it, so
     ; tools/route_ppu_write_data.py compiles it out for them.
-IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH)
+IF !DEF(NES2GBC_NO_STITCH_WRITE_FASTPATH) && !DEF(NES2GBC_FIT)
     ld a, [nes_mirroring]
     dec a
     jp nz, .generic
@@ -857,12 +868,27 @@ ENDC
     ld a, [nes_ppu_addr_hi]
     ld h, a
     cp $20
+IF DEF(NES2GBC_FIT)
+    jp c, .pattern
+    cp $3F
+    jp nc, .palette
+ELSE
     jr c, .pattern
     cp $3F
     jr nc, .palette
+ENDC
 
     ; $3000-$3EFF mirrors $2000-$2EFF.
     call nes_ppu_map_nametable_hl
+IF DEF(NES2GBC_FIT)
+    ; FIT owns BG presentation: store and mark the affected slot(s) dirty.
+    ld a, [hl]
+    cp e
+    jp z, nes_ppu_increment_addr
+    ld [hl], e
+    call nes_fit_nt_write
+    jp nes_ppu_increment_addr
+ENDC
 
     ; The authoritative full-map rebuild is only needed after a *real*
     ; generic screen construction. SMB (and DKC in some pre-game states)
@@ -1091,6 +1117,9 @@ SECTION "NES PPU write run", ROM0
 ; Clobbers DE/HL. Leaves WRAM bank 1 selected.
 nes_ppu_write_run:
     push bc
+IF DEF(NES2GBC_FIT)
+    jp .no
+ENDC
     ld a, [nes_mirroring]
     dec a
     jp nz, .no

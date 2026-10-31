@@ -133,8 +133,14 @@ nes_video_init:
     ldh [rBGPD], a
     ldh [rBGPD], a
 
+IF DEF(NES2GBC_FIT)
+    ; LCD on, BG on, signed tile IDs (slots at $9000), map $9800.
+    call nes_fit_init
+    ld a, $81
+ELSE
     ; LCD on, BG on, unsigned tile IDs, map $9800.
     ld a, $91
+ENDC
     ldh [rLCDC], a
     ret
 
@@ -173,6 +179,14 @@ nes_upload_chr_bank:
     ld a, [nes_chr_bank]
     add b
     ld [$2000], a
+IF DEF(NES2GBC_FIT)
+    ld h, $40
+    ld d, 0
+    call nes_fit_note_half
+    ld h, $50
+    ld d, 1
+    call nes_fit_note_half
+ENDC
 
     xor a
     ldh [rVBK], a
@@ -341,6 +355,11 @@ nes_chr4_copy_half:
     add $40
     ld h, a
     ld l, 0
+IF DEF(NES2GBC_FIT)
+    ld a, [nes_chr_gbc_bank_base]
+    add b
+    call nes_fit_note_half
+ENDC
     ld de, $8000
     ld bc, $1000
     jp nes_video_copy
@@ -362,6 +381,9 @@ nes_video_copy:
 ; point of view: the LCD is disabled during VBlank before the first live-map
 ; write and is not re-enabled until the whole transaction is copied.
 nes_video_flush_nametable_queue_atomic:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
 IF DEF(NES2GBC_HUD_BOTTOM)
     ; The staging queue overflowed (a hidden whole-screen build): the lost
     ; entries can never be replayed, and a permanently active raster split
@@ -827,6 +849,9 @@ ENDC
 ; finishes a rendering-off screen construction and re-enables the background.
 ; It tells us whether incremental publication has drifted from virtual NES state.
 nes_video_rebuild_generic_maps_atomic:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
     bit 7, a
@@ -1024,6 +1049,9 @@ nes_video_sync_nametable_write_if_changed:
 
 ; Input: HL = physical virtual nametable address ($D000-$D7FF), A = written byte.
 nes_video_sync_nametable_write:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
     PROFILE_INC nes_profile_nametable_sync
     ld c, a
 
@@ -1933,6 +1961,29 @@ ENDC
     ld a, [hli]
     cp $EF
     jp nc, .skip_three_source_bytes
+IF DEF(NES2GBC_FIT)
+    ; FIT: whole NES screen at half size, 12 lines of letterbox. Shrunk
+    ; tiles hold their 4 rows at the top (8x16 pairs: rows 4-11), so a
+    ; V-flipped 8x8 sprite and every 8x16 sprite move up 4 lines.
+    inc a
+    srl a
+    add 12 + 16
+    ld c, a
+    inc hl
+    ldh a, [nes_oam_ppuctrl_tmp]
+    bit 5, a
+    jr nz, .fit_up4
+    bit 7, [hl]
+    jr z, .fit_y_ok
+.fit_up4:
+    ld a, c
+    sub 4
+    ld c, a
+.fit_y_ok:
+    dec hl
+    ld a, c
+    ldh [nes_oam_proj_y_tmp], a
+ELSE
     inc a
     ldh [nes_view_coord_tmp], a
     ldh a, [nes_view_y]
@@ -1944,6 +1995,7 @@ ENDC
     jp nc, .skip_three_source_bytes
     add $10
     ldh [nes_oam_proj_y_tmp], a
+ENDC
 
     ; Save source tile and attributes.
     ld a, [hli]
@@ -1953,6 +2005,19 @@ ENDC
 
     ; Source X and viewport crop.
     ld a, [hli]
+IF DEF(NES2GBC_FIT)
+    ; 16 columns of letterbox; an H-flipped shrunk tile shows in columns 4-7.
+    srl a
+    add 16 + 8
+    ld c, a
+    ldh a, [nes_sprite_attr_tmp]
+    bit 6, a
+    ld a, c
+    jr z, .fit_x_ok
+    sub 4
+.fit_x_ok:
+    ldh [nes_oam_proj_x_tmp], a
+ELSE
     ldh [nes_view_coord_tmp], a
     ldh a, [nes_view_x]
     ld c, a
@@ -1963,6 +2028,7 @@ ENDC
     jp nc, .next_source
     add $08
     ldh [nes_oam_proj_x_tmp], a
+ENDC
 
     ; Visible sprite: pack it into the next CGB OAM slot.
     ldh a, [nes_oam_proj_y_tmp]
@@ -2119,6 +2185,9 @@ nes_video_sync_oam:
 ; NES global select changes. Do not XOR: a single stale/mismatched attribute
 ; would otherwise remain permanently opposite to the rest of the map.
 nes_video_toggle_bg_pattern_bank:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_BG_BANK_REWRITE
     ld [nes_diag_event_flags], a
@@ -2222,6 +2291,9 @@ ENDC
 ; surface and synthesize the lower playfield into $9C00. Rebuild only when the
 ; coarse horizontal key changes or virtual nametable data changed.
 nes_video_update_horizontal_stitch:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
     ld a, [nes_mirroring]
     cp $01
     jr z, .vertical
@@ -2705,6 +2777,9 @@ ENDC
 ; 256 pixels. If the visible crop crosses NES Y=240, arm a one-shot STAT split
 ; that toggles the vertical nametable and adds 16 to SCY at the exact seam.
 nes_video_apply_single_scroll:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
     ; Horizontal crop remains a simple 256-pixel wrap.
     ld a, [nes_ppu_scroll_x]
     ld b, a
@@ -2788,6 +2863,9 @@ nes_video_apply_single_scroll:
 ; Re-arm a vertical seam for another host frame using the last completed NES
 ; display state. Needed because the STAT source is deliberately one-shot.
 nes_video_rearm_vertical_seam:
+IF DEF(NES2GBC_FIT)
+    ret
+ENDC
     ldh a, [nes_seam_top_ctrl]
     call nes_video_apply_map_select_a
     ldh a, [nes_seam_top_y]
