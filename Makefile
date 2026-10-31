@@ -64,6 +64,7 @@ generate:
 	@if [ "$${NES2GBC_CHR8K_LAZY:-1}" != "0" ]; then echo 'DEF NES2GBC_CHR8K_LAZY EQU 1 ; MMC1 8 KiB CHR: defer uploads made with NMI on to NMI entry (opt out: NES2GBC_CHR8K_LAZY=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_CHR_DUAL:-1}" != "0" ]; then echo 'DEF NES2GBC_CHR_DUAL EQU 1 ; MMC1: keep the above-split BG CHR bank at $$9000 and switch LCDC.4 at the split (opt out: NES2GBC_CHR_DUAL=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_CHR_DUAL:-1}" != "0" ] && [ "$${NES2GBC_CHR8K_LAZY:-1}" != "0" ] && [ "$${NES2GBC_CHR_DUAL_OBJ:-1}" != "0" ]; then echo 'DEF NES2GBC_CHR_DUAL_OBJ EQU 1 ; MMC1 8 KiB split: load the sprite pattern half from the above-split bank (opt out: NES2GBC_CHR_DUAL_OBJ=0)' >> runtime/generated_config.inc; fi
+	@if [ "$${NES2GBC_APU_LAZY_REFRESH:-1}" != "0" ]; then echo 'DEF NES2GBC_APU_LAZY_REFRESH EQU 1 ; APU: sweep clocks refresh a pulse channel only when they change its timer (opt out: NES2GBC_APU_LAZY_REFRESH=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi

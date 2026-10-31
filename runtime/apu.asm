@@ -1114,7 +1114,18 @@ nes_apu_clock_sweep_p1:
     ld a, d
     and $07
     ldh [rNR14], a
+IF DEF(NES2GBC_APU_LAZY_REFRESH)
+    ; The timer changed: reload the divider and re-derive mute/volume.
+    ld a, [nes_apu_regs + $01]
+    swap a
+    and $07
+    ld [nes_apu_sweep_div_p1], a
+    xor a
+    ld [nes_apu_sweep_reload_p1], a
+    jp nes_apu_refresh_p1
+ELSE
     jr .reload
+ENDC
 
 .divider_nonzero:
     ld a, [nes_apu_sweep_reload_p1]
@@ -1123,7 +1134,13 @@ nes_apu_clock_sweep_p1:
     ld a, [nes_apu_sweep_div_p1]
     dec a
     ld [nes_apu_sweep_div_p1], a
+IF DEF(NES2GBC_APU_LAZY_REFRESH)
+    ; Divider state does not feed the sweep-target mute or the volume, and
+    ; every register write already refreshed the channel: nothing to redo.
+    ret
+ELSE
     jp nes_apu_refresh_p1
+ENDC
 
 .reload:
     ld a, [nes_apu_regs + $01]
@@ -1132,7 +1149,11 @@ nes_apu_clock_sweep_p1:
     ld [nes_apu_sweep_div_p1], a
     xor a
     ld [nes_apu_sweep_reload_p1], a
+IF DEF(NES2GBC_APU_LAZY_REFRESH)
+    ret
+ELSE
     jp nes_apu_refresh_p1
+ENDC
 
 nes_apu_clock_sweep_p2:
     ld a, [nes_apu_sweep_div_p2]
@@ -1163,7 +1184,18 @@ nes_apu_clock_sweep_p2:
     ld a, d
     and $07
     ldh [rNR24], a
+IF DEF(NES2GBC_APU_LAZY_REFRESH)
+    ; The timer changed: reload the divider and re-derive mute/volume.
+    ld a, [nes_apu_regs + $05]
+    swap a
+    and $07
+    ld [nes_apu_sweep_div_p2], a
+    xor a
+    ld [nes_apu_sweep_reload_p2], a
+    jp nes_apu_refresh_p2
+ELSE
     jr .reload
+ENDC
 
 .divider_nonzero:
     ld a, [nes_apu_sweep_reload_p2]
@@ -1172,7 +1204,13 @@ nes_apu_clock_sweep_p2:
     ld a, [nes_apu_sweep_div_p2]
     dec a
     ld [nes_apu_sweep_div_p2], a
+IF DEF(NES2GBC_APU_LAZY_REFRESH)
+    ; Divider state does not feed the sweep-target mute or the volume, and
+    ; every register write already refreshed the channel: nothing to redo.
+    ret
+ELSE
     jp nes_apu_refresh_p2
+ENDC
 
 .reload:
     ld a, [nes_apu_regs + $05]
@@ -1181,7 +1219,11 @@ nes_apu_clock_sweep_p2:
     ld [nes_apu_sweep_div_p2], a
     xor a
     ld [nes_apu_sweep_reload_p2], a
+IF DEF(NES2GBC_APU_LAZY_REFRESH)
+    ret
+ELSE
     jp nes_apu_refresh_p2
+ENDC
 
 ; ---------------------------------------------------------------------------
 nes_apu_init_banked:
