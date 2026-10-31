@@ -1151,7 +1151,17 @@ nes_gbc_stat_isr:
     push af
     push bc
 IF DEF(NES2GBC_FIT)
-    ; FIT shows one fixed letterboxed view: no raster splits.
+    ; FIT HUD split: after the K HUD rows (map $9C00, SCX 0) switch to the
+    ; scrolled ring ($9800) at the next HBlank.
+.fit_wait:
+    ldh a, [rSTAT]
+    and $03
+    jr nz, .fit_wait
+    ld a, [nes_fit_ring_scx]
+    ldh [rSCX], a
+    ldh a, [rLCDC]
+    and $F7
+    ldh [rLCDC], a
     jp .disable_stat
 ENDC
 IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)

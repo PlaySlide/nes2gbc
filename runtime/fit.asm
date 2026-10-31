@@ -14,8 +14,9 @@
 ; * Nametable / attribute writes to the displayed physical table mark slots
 ;   in a 240-bit dirty bitmap. Each host frame composes up to NES2GBC_FIT_BUDGET
 ;   dirty slots (unrolled) into a WRAM 7 stage; the next VBlank GDMAs them in.
-; * Known limit (step 4 = scroll ring): only whole pages are shown. The page
-;   is the logical table that holds most of the visible NES screen.
+; * Step 4 scroll ring: 17 pool columns x 15 rows = 255 slots follow the NES
+;   horizontal scroll (SCX per 8 GB px + 16 px slots); the HUD split shows K
+;   rows from $9C00 above an LYC split. Vertical scroll is still a page jump.
 
 IF !DEF(NES2GBC_FIT_BUDGET)
 DEF NES2GBC_FIT_BUDGET EQU 24
@@ -26,25 +27,50 @@ DEF FIT_rHDMA3 EQU $FF53
 DEF FIT_rHDMA4 EQU $FF54
 DEF FIT_rHDMA5 EQU $FF55
 DEF FIT_CACHE_HI EQU $D8
+DEF rWY EQU $FF4A
+DEF rWX EQU $FF4B
 
 SECTION "NES fit state", WRAM0
-nes_fit_dirty:      ds 30   ; 240 slot bits
-nes_fit_any:        ds 1    ; nonzero: some dirty bit may be set
-nes_fit_page:       ds 1    ; displayed physical nametable high byte ($D0/$D4)
+nes_fit_cell_dirty: ds 60   ; 2 physical nametables x 240 cells (2x2 NES tiles)
+nes_fit_cell_any:   ds 1
 nes_fit_bgpt:       ds 1    ; pattern table held by the cache (0/1, $FF = stale)
 nes_fit_stage_n:    ds 1    ; composed slots waiting for VBlank
 nes_fit_chr_any:    ds 1
-nes_fit_commit:     ds 1    ; a completed NES frame was committed this VBlank    ; CHR-RAM tiles waiting for re-shrink
+nes_fit_commit:     ds 1    ; a completed NES frame was committed this VBlank
 nes_fit_tiles:      ds 5    ; compose temp: 4 tile ids + palette
 nes_fit_half_bank:  ds 2    ; CHR-ROM source of PT0/PT1 (ROM bank)
 nes_fit_half_hi:    ds 2    ; ... and its address high byte ($40/$50)
 nes_fit_tmp:        ds 8    ; one shrunk tile
+; view: [ring page L, ring page R, hud rows K, hud w0, hud page L, hud page R]
+nes_fit_stage_pos:  ds 1
+nes_fit_ochg:       ds 1
+nes_fit_ring_scx:   ds 1    ; SCX of the scrolled playfield
+nes_fit_cur_s:      ds 1    ; compose temps
+nes_fit_cur_page:   ds 1
+nes_fit_cur_map:    ds 2
+SECTION "NES fit chr dirty", WRAM0
 nes_fit_chr_dirty:  ds 64   ; 512 CHR-RAM tile bits
+
+; ring/view state: only touched with SVBK = 7
+SECTION "NES fit view", WRAMX, BANK[7]
+nes_fit_dirty:      ds 32   ; 255 pool-slot bits (slot = row*17 + pool column)
+nes_fit_any:        ds 1    ; nonzero: some pool dirty bit may be set
+nes_fit_valid:      ds 1    ; nonzero once the view (pages/columns) is known
+nes_fit_sig:        ds 6
+nes_fit_nsig:       ds 6
+nes_fit_last_w0:    ds 1
+nes_fit_w0:         ds 1    ; first visible ring world column (0-31)
+nes_fit_col_pool:   ds 32   ; world column -> pool column ($FF = none)
+nes_fit_owner:      ds 17   ; pool column -> world column ($FF = free)
+nes_fit_blank:      ds 32   ; world map columns waiting to be blanked
+nes_fit_blank_any:  ds 1
 
 SECTION "NES fit stage", WRAMX[$D100], BANK[7]
 nes_fit_stage:      ds NES2GBC_FIT_BUDGET * 16
 nes_fit_stage_slot: ds NES2GBC_FIT_BUDGET
 nes_fit_stage_attr: ds NES2GBC_FIT_BUDGET
+nes_fit_stage_mlo:  ds NES2GBC_FIT_BUDGET
+nes_fit_stage_mhi:  ds NES2GBC_FIT_BUDGET
 
 SECTION "NES fit cache", WRAMX[$D800], BANK[7]
 nes_fit_cache:      ds $800
@@ -55,97 +81,119 @@ nes_fit_pack_table:
 FOR X, 256
     db ((X & $80) | ((X & $20) << 1) | ((X & $08) << 2) | ((X & $02) << 3)) & $F0
 ENDR
-SECTION "NES fit bits", ROM0
+; pool slot -> row ($FF: the blank slot 255) and pool column
+nes_fit_srow:
+FOR S, 256
+IF S < 255
+    db S / 17
+ELSE
+    db $FF
+ENDC
+ENDR
+nes_fit_sp:
+FOR S, 256
+    db S % 17
+ENDR
+SECTION "NES fit bits", ROM0, ALIGN[3]
 nes_fit_bit_table:
     db $01, $02, $04, $08, $10, $20, $40, $80
 
 SECTION "NES fit init", ROMX, BANK[255]
 
-; LCD off. Static slot map, blank border, cleared slot tiles, letterbox scroll.
+; LCD off. Blank maps (tile $7F bank 1 = blank slot 255), cleared slot tiles,
+; no columns assigned.
 nes_fit_init_x:
+    ; No extra call frame here: the ISR bank fix walks the stack.
+    ld a, $07
+    ldh [rSVBK], a
     ld a, $01
     ldh [rVBK], a
     ld hl, $9000
     ld bc, $0800
     call nes_video_fill_zero
-    xor a
-    ldh [rVBK], a
-    ld hl, $9000
-    ld bc, $0800
-    call nes_video_fill_zero
-    ; tile ids (bank 0) then attributes (bank 1)
     ld hl, $9800
-    ld c, 0            ; row
-.row:
-    ld b, 0            ; col
-.col:
-    ld a, c
-    cp 15
-    jr nc, .blank
-    ld a, b
-    cp 16
-    jr nc, .blank
-    ld a, c
-    swap a
-    or b
-    and $7F
-    jr .put
-.blank:
-    ld a, $7F
-.put:
-    ld [hl], a
-    ; attribute: bank bit = slot >= 128 (rows 8-14) or blank
-    ld a, $01
-    ldh [rVBK], a
-    ld a, c
-    cp 15
-    jr nc, .attr_b1
-    ld a, b
-    cp 16
-    jr nc, .attr_b1
-    ld a, c
-    cp 8
-    jr nc, .attr_b1
-    xor a
-    jr .attr_put
-.attr_b1:
+    ld bc, $0800
+.attr:
     ld a, $08
-.attr_put:
     ld [hli], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, .attr
     xor a
     ldh [rVBK], a
-    inc b
+    ld hl, $9000
+    ld bc, $0800
+    call nes_video_fill_zero
+    ld hl, $9800
+    ld bc, $0800
+.ids:
+    ld a, $7F
+    ld [hli], a
+    dec bc
     ld a, b
-    cp 32
-    jr nz, .col
-    inc c
-    ld a, c
-    cp 32
-    jr nz, .row
-
+    or c
+    jr nz, .ids
     ld a, $F0
     ldh [rSCX], a
     ld a, $F4
     ldh [rSCY], a
+    ld a, 151
+    ldh [rWX], a
+    xor a
+    ldh [rWY], a
     xor a
     ld [nes_fit_stage_n], a
+    ld [nes_fit_stage_pos], a
     ld [nes_fit_chr_any], a
+    ld [nes_fit_cell_any], a
+    ld [nes_fit_blank_any], a
+    ld [nes_fit_valid], a
     ld hl, nes_fit_chr_dirty
     ld b, 64
 .clr:
     ld [hli], a
     dec b
     jr nz, .clr
+    ld hl, nes_fit_cell_dirty
+    ld b, 60
+.clr2:
+    ld [hli], a
+    dec b
+    jr nz, .clr2
+    ld hl, nes_fit_blank
+    ld b, 32
+.clr3:
+    ld [hli], a
+    dec b
+    jr nz, .clr3
     dec a
-    ld [nes_fit_page], a
+    ld hl, nes_fit_col_pool
+    ld b, 32 + 17
+.ff:
+    ld [hli], a
+    dec b
+    jr nz, .ff
+    ld [nes_fit_last_w0], a
+    ld hl, nes_fit_sig
+    ld b, 6
+.ff2:
+    ld [hli], a
+    dec b
+    jr nz, .ff2
     ld [nes_fit_bgpt], a
-    jp nes_fit_mark_all
+    ld a, $F0
+    ld [nes_fit_ring_scx], a
+    call nes_fit_mark_all
+    ld a, $01
+    ldh [rSVBK], a
+    ret
 
 SECTION "NES fit hot", ROM0
 nes_fit_mark_all:
     ld hl, nes_fit_dirty
     ld a, $FF
-    ld b, 30
+    ld b, 32
 .loop:
     ld [hli], a
     dec b
@@ -153,7 +201,7 @@ nes_fit_mark_all:
     ld [nes_fit_any], a
     ret
 
-; A = slot (0-239). Clobbers A, BC, HL.
+; A = pool slot (0-254). Clobbers A, BC, HL.
 nes_fit_mark_slot:
     ld c, a
     and $07
@@ -178,17 +226,42 @@ nes_fit_mark_slot:
     ld [nes_fit_any], a
     ret
 
+; A = cell (cy*16 + cx), D = nametable byte offset (0 / 30). Clobbers A, BC, HL.
+nes_fit_mark_cell:
+    ld c, a
+    and $07
+    add LOW(nes_fit_bit_table)
+    ld l, a
+    ld h, HIGH(nes_fit_bit_table)
+    ld b, [hl]
+    ld a, c
+    rrca
+    rrca
+    rrca
+    and $1F
+    add d
+    add LOW(nes_fit_cell_dirty)
+    ld l, a
+    adc HIGH(nes_fit_cell_dirty)
+    sub l
+    ld h, a
+    ld a, [hl]
+    or b
+    ld [hl], a
+    ld a, $01
+    ld [nes_fit_cell_any], a
+    ret
+
 ; HL = physical nametable byte just changed ($D000-$D7FF). Preserves all but A/F.
 nes_fit_nt_write:
     push bc
     push de
     push hl
-    ld a, h
-    and $FC
-    ld b, a
-    ld a, [nes_fit_page]
-    cp b
-    jr nz, .out
+    ld d, 0
+    bit 2, h
+    jr z, .nt0
+    ld d, 30
+.nt0:
     ld a, h
     and $03
     ld h, a
@@ -198,7 +271,7 @@ nes_fit_nt_write:
     cp $C0
     jr nc, .attr
 .tile:
-    ; slot = h<<6 | (l>>6)<<4 | (l & $1E)>>1
+    ; cell = h<<6 | (l>>6)<<4 | (l & $1E)>>1
     ld a, l
     and $1E
     rrca
@@ -215,43 +288,39 @@ nes_fit_nt_write:
     rrca
     and $C0
     or e
-    call nes_fit_mark_slot
+    call nes_fit_mark_cell
 .out:
     pop hl
     pop de
     pop bc
     ret
 .attr:
-    ; idx = l - $C0: ay = idx>>3, ax = idx&7; base slot = ay*32 + ax*2
+    ; idx = l - $C0: ay = idx>>3, ax = idx&7; base cell = ay*32 + ax*2
     ld a, l
     sub $C0
-    ld d, a
+    ld e, a
     and $07
     add a
-    ld e, a
-    ld a, d
+    ld l, a
+    ld a, e
     and $38
     add a
     add a
-    or e
+    or l
     ld e, a
-    call nes_fit_mark_slot
+    call nes_fit_mark_cell
     ld a, e
     inc a
-    call nes_fit_mark_slot
-    ld a, d
-    and $38
-    cp $38
-    jr z, .out          ; ay = 7: slot row 15 does not exist
+    call nes_fit_mark_cell
     ld a, e
+    cp $E0
+    jr nc, .out         ; ay = 7: cell row 15 does not exist
     add 16
-    call nes_fit_mark_slot
+    call nes_fit_mark_cell
     ld a, e
     add 17
-    call nes_fit_mark_slot
+    call nes_fit_mark_cell
     jr .out
-
-; CHR-RAM byte written at pattern address HL ($0000-$1FFF). Preserves all but A/F.
 nes_fit_chr_write:
     push bc
     push hl
@@ -613,23 +682,96 @@ nes_fit_note_half:
     pop bc
     ret
 
-; Compose slot A into the stage at DE (16-byte aligned, SVBK any).
-; Returns A = CGB attribute byte (palette + VRAM bank). DE advances 16.
+; Compose pool slot A into the stage at DE (16-byte aligned, SVBK any).
+; Carry set: slot not shown (nothing staged). Else A = CGB attribute byte
+; (palette + VRAM bank), DE advanced 16, nes_fit_cur_map = its map cell.
 SECTION "NES fit compose", ROMX, BANK[255]
 nes_fit_compose_slot:
-    ld c, a
+    push de
+    ld [nes_fit_cur_s], a
+    ld l, a
+    ld h, HIGH(nes_fit_srow)
+    ld a, [hl]
+    cp $FF
+    jr z, .skip
+    ld b, a               ; B = cy
+    inc h
+    ld c, [hl]            ; C = pool column
+    ; map row base: cy*32
+    ld a, b
+    rrca
+    rrca
+    rrca
+    and $E0
+    ld l, a               ; L = (cy&7)<<5
+    ld a, b
+    rrca
+    rrca
+    rrca
+    and $03
+    ld h, a               ; H = cy>>3
+    ld a, [nes_fit_sig + 2]
+    ld e, a
+    ld a, b
+    cp e
+    jr nc, .ring
+    ; HUD row: pool column = HUD column (0-15), world w = hud_w0 + p
+    ld a, c
+    cp 16
+    jr z, .skip
+    add 2
+    or l
+    ld [nes_fit_cur_map], a
+    ld a, h
+    or $9C
+    ld [nes_fit_cur_map + 1], a
+    ld a, [nes_fit_sig + 3]
+    add c
+    and $1F
+    ld c, a               ; C = w
+    ld hl, nes_fit_sig + 4
+    jr .page
+.skip:
+    pop de
+    scf
+    ret
+.ring:
+    ld a, c
+    add LOW(nes_fit_owner)
+    ld e, a
+    adc HIGH(nes_fit_owner)
+    sub e
+    ld d, a
+    ld a, [de]
+    cp $FF
+    jr z, .skip
+    ld c, a               ; C = w
+    or l
+    ld [nes_fit_cur_map], a
+    ld a, h
+    or $98
+    ld [nes_fit_cur_map + 1], a
+    ld hl, nes_fit_sig
+.page:
+    bit 4, c
+    jr z, .pl
+    inc hl
+.pl:
+    ld a, [hl]
+    ld [nes_fit_cur_page], a
+    ld a, c
+    and $0F
+    ld c, a               ; C = cx, B = cy
+    pop de                ; stage pointer
     ld a, $01
     ldh [rSVBK], a
     ; NT address = page + (cy>>2) : (cy&3)<<6 | cx*2
-    ld a, c
-    swap a
-    and $0F
-    ld b, a               ; B = cy
+    ld a, b
     rrca
     rrca
     and $03
     ld h, a
-    ld a, [nes_fit_page]
+    ld a, [nes_fit_cur_page]
     add h
     ld h, a
     ld a, b
@@ -638,7 +780,6 @@ nes_fit_compose_slot:
     rrca
     ld l, a
     ld a, c
-    and $0F
     add a
     or l
     ld l, a
@@ -654,7 +795,7 @@ nes_fit_compose_slot:
     ld a, [hl]
     ld [nes_fit_tiles + 3], a
     ; attribute: page + $3C0 + (cy>>1)*8 + (cx>>1)
-    ld a, [nes_fit_page]
+    ld a, [nes_fit_cur_page]
     add $03
     ld h, a
     ld a, b
@@ -663,7 +804,6 @@ nes_fit_compose_slot:
     add a
     ld l, a
     ld a, c
-    and $0F
     rrca
     and $07
     or l
@@ -681,7 +821,10 @@ nes_fit_compose_slot:
     rrca
 .no_xs:
     and $03
-    bit 7, c
+    ld b, a
+    ld a, [nes_fit_cur_s]
+    bit 7, a
+    ld a, b
     jr z, .bank0
     or $08
 .bank0:
@@ -729,6 +872,7 @@ nes_fit_compose_slot:
     ld [de], a
     inc de
     ld a, [nes_fit_tiles + 4]
+    and a                 ; carry clear
     ret
 .ptr:
     ; HL = cache + A*8
@@ -742,6 +886,120 @@ nes_fit_compose_slot:
     ld a, l
     and $F8
     ld l, a
+    ret
+
+; Dirty nametable cells -> dirty pool slots of every view position showing them.
+nes_fit_translate:
+    xor a
+    ld [nes_fit_cell_any], a
+    ld c, 0
+.byte:
+    ld a, c
+    add LOW(nes_fit_cell_dirty)
+    ld l, a
+    adc HIGH(nes_fit_cell_dirty)
+    sub l
+    ld h, a
+    ld a, [hl]
+    and a
+    jr z, .next_byte
+    ld [hl], 0
+    ld b, 0
+.bit:
+    srl a
+    jr nc, .next_bit
+    push af
+    push bc
+    call .cell
+    pop bc
+    pop af
+.next_bit:
+    inc b
+    and a
+    jr nz, .bit
+.next_byte:
+    inc c
+    ld a, c
+    cp 60
+    jr nz, .byte
+    ret
+.cell:
+    ; C = byte (0-59), B = bit -> D = physical page, E = cell
+    ld d, $D0
+    ld a, c
+    cp 30
+    jr c, .lo
+    sub 30
+    ld d, $D4
+.lo:
+    add a
+    add a
+    add a
+    or b
+    ld e, a
+    swap a
+    and $0F
+    ld b, a               ; B = cy
+    ld a, [nes_fit_sig + 2]
+    ld c, a
+    ld a, b
+    cp c
+    jr nc, .ring
+    ; HUD rows
+    ld hl, nes_fit_sig + 4
+    ld c, 0
+    call .hud_half
+    ld hl, nes_fit_sig + 5
+    ld c, 16
+.hud_half:
+    ld a, [hl]
+    cp d
+    ret nz
+    ld a, e
+    and $0F
+    or c
+    ld c, a
+    ld a, [nes_fit_sig + 3]
+    cpl
+    inc a
+    add c
+    and $1F
+    cp 16
+    ret nc
+    jr .mark
+.ring:
+    ld hl, nes_fit_sig
+    ld c, 0
+    call .ring_half
+    ld hl, nes_fit_sig + 1
+    ld c, 16
+.ring_half:
+    ld a, [hl]
+    cp d
+    ret nz
+    ld a, e
+    and $0F
+    or c
+    add LOW(nes_fit_col_pool)
+    ld l, a
+    adc HIGH(nes_fit_col_pool)
+    sub l
+    ld h, a
+    ld a, [hl]
+    cp $FF
+    ret z
+.mark:
+    ; A = pool column, B = cy: slot = cy*17 + p
+    ld c, a
+    ld a, b
+    swap a
+    add b
+    add c
+    push bc
+    push de
+    call nes_fit_mark_slot
+    pop de
+    pop bc
     ret
 
 ; ISR tail (any time, VRAM not needed except CHR-RAM tile rows): refresh the
@@ -760,14 +1018,19 @@ nes_fit_compose_budget:
     cp b
     ld a, b
     call nz, nes_fit_refill_cache
+    ld a, $07
+    ldh [rSVBK], a
     ld a, [nes_fit_stage_n]
     and a
-    jr nz, .out
+    jp nz, .out
+    ld a, [nes_fit_valid]
+    and a
+    jp z, .out
+    ld a, [nes_fit_cell_any]
+    and a
+    call nz, nes_fit_translate
     ld a, [nes_fit_any]
     and a
-    jr z, .out
-    ld a, [nes_fit_page]
-    cp $FF
     jr z, .out
     ld de, nes_fit_stage
     ld c, 0              ; byte index
@@ -804,24 +1067,25 @@ nes_fit_compose_budget:
     add a
     add a
     or b
-    push af
     call nes_fit_compose_slot
+    jr c, .skipped
     ld b, a              ; attr
     ld a, [nes_fit_stage_n]
     ld c, a
-    add LOW(nes_fit_stage_attr)
-    ld l, a
-    adc HIGH(nes_fit_stage_attr)
-    sub l
-    ld h, a
+    ld hl, nes_fit_stage_attr
+    call .idx
     ld [hl], b
-    ld a, c
-    add LOW(nes_fit_stage_slot)
-    ld l, a
-    adc HIGH(nes_fit_stage_slot)
-    sub l
-    ld h, a
-    pop af
+    ld hl, nes_fit_stage_slot
+    call .idx
+    ld a, [nes_fit_cur_s]
+    ld [hl], a
+    ld hl, nes_fit_stage_mlo
+    call .idx
+    ld a, [nes_fit_cur_map]
+    ld [hl], a
+    ld hl, nes_fit_stage_mhi
+    call .idx
+    ld a, [nes_fit_cur_map + 1]
     ld [hl], a
     ld a, c
     inc a
@@ -831,6 +1095,11 @@ nes_fit_compose_budget:
     cp NES2GBC_FIT_BUDGET
     jr z, .full
     pop af
+    jr .next_bit
+.skipped:
+    pop hl
+    pop bc
+    pop af
 .next_bit:
     inc b
     and a
@@ -838,7 +1107,7 @@ nes_fit_compose_budget:
 .next_byte:
     inc c
     ld a, c
-    cp 30
+    cp 32
     jr nz, .byte
     xor a
     ld [nes_fit_any], a
@@ -849,30 +1118,50 @@ nes_fit_compose_budget:
 .full:
     pop af
     jr .out
+.idx:
+    ; HL += C
+    ld a, l
+    add c
+    ld l, a
+    ret nc
+    inc h
+    ret
 
-; VBlank: GDMA every staged slot into VRAM and set its map palette.
+; VBlank: blank released map columns, then GDMA every staged slot into VRAM
+; and write its map cell (tile id + attribute).
 nes_fit_flush:
-    ld a, [nes_fit_stage_n]
-    and a
-    ret z
-    ld b, a
     ldh a, [rSVBK]
     push af
     ld a, $07
     ldh [rSVBK], a
-    ld c, 0
+    ld a, [nes_fit_blank_any]
+    and a
+    call nz, nes_fit_blank_cols
+    ld a, [nes_fit_stage_n]
+    and a
+    jp z, .out
+    ld b, a
+    ld a, [nes_fit_stage_pos]
+    ld c, a
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
     ld de, nes_fit_stage
+    add hl, de
+    ld d, h
+    ld e, l
+    ld a, b
+    sub c
+    ld b, a
 .loop:
     ldh a, [rLY]
     cp 144
     jr c, .late
-    ; slot
-    ld a, c
-    add LOW(nes_fit_stage_slot)
-    ld l, a
-    adc HIGH(nes_fit_stage_slot)
-    sub l
-    ld h, a
+    ld hl, nes_fit_stage_slot
+    call nes_fit_compose_budget.idx
     ld a, [hl]
     push af
     rlca
@@ -895,36 +1184,26 @@ nes_fit_flush:
     ldh [FIT_rHDMA4], a
     xor a
     ldh [FIT_rHDMA5], a ; one 16-byte block, general DMA
-    ; map palette: $9800 + cy*32 + cx (VRAM bank 1)
     pop af
     push de
-    ld e, a
-    swap a
-    and $0F
-    ld l, a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    ld a, e
-    and $0F
-    or l
-    ld l, a
-    ld a, h
-    or $98
-    ld h, a
-    ld a, c
-    add LOW(nes_fit_stage_attr)
-    ld e, a
-    adc HIGH(nes_fit_stage_attr)
-    sub e
-    ld d, a
+    push af
+    ld hl, nes_fit_stage_mlo
+    call nes_fit_compose_budget.idx
+    ld e, [hl]
+    ld hl, nes_fit_stage_mhi
+    call nes_fit_compose_budget.idx
+    ld d, [hl]
+    ld hl, nes_fit_stage_attr
+    call nes_fit_compose_budget.idx
+    xor a
+    ldh [rVBK], a
+    pop af
+    and $7F
+    ld [de], a
     ld a, $01
     ldh [rVBK], a
-    ld a, [de]
-    ld [hl], a
+    ld a, [hl]
+    ld [de], a
     pop de
     xor a
     ldh [rVBK], a
@@ -939,25 +1218,12 @@ nes_fit_flush:
     jr nz, .loop
     xor a
     ld [nes_fit_stage_n], a
+    ld [nes_fit_stage_pos], a
     jr .out
 .late:
-    ; out of VBlank: the remaining slots go back to the dirty bitmap.
-.relate:
+    ; out of VBlank: keep the rest staged for the next VBlank.
     ld a, c
-    add LOW(nes_fit_stage_slot)
-    ld l, a
-    adc HIGH(nes_fit_stage_slot)
-    sub l
-    ld h, a
-    ld a, [hl]
-    push bc
-    call nes_fit_mark_slot
-    pop bc
-    inc c
-    dec b
-    jr nz, .relate
-    xor a
-    ld [nes_fit_stage_n], a
+    ld [nes_fit_stage_pos], a
 .out:
     xor a
     ldh [rVBK], a
@@ -965,9 +1231,81 @@ nes_fit_flush:
     ldh [rSVBK], a
     ret
 
-; VBlank: choose the displayed page from the committed PPUCTRL/scroll (the
-; playfield half of a captured raster split) and fix the letterbox scroll.
-nes_fit_update_page:
+; VBlank: write blank (tile $7F, bank 1) into released ring map columns.
+nes_fit_blank_cols:
+    xor a
+    ld [nes_fit_blank_any], a
+    ld c, 0
+.col:
+    ld a, c
+    add LOW(nes_fit_blank)
+    ld l, a
+    adc HIGH(nes_fit_blank)
+    sub l
+    ld h, a
+    ld a, [hl]
+    and a
+    jr z, .next
+    ldh a, [rLY]
+    cp 144
+    jr c, .late
+    ld [hl], 0
+    ld b, 15
+    ld hl, $9800
+    ld a, l
+    or c
+    ld l, a
+.row:
+    xor a
+    ldh [rVBK], a
+    ld [hl], $7F
+    inc a
+    ldh [rVBK], a
+    ld [hl], $08
+    ld a, l
+    add 32
+    ld l, a
+    jr nc, .nc
+    inc h
+.nc:
+    dec b
+    jr nz, .row
+.next:
+    inc c
+    ld a, c
+    cp 32
+    jr nz, .col
+    xor a
+    ldh [rVBK], a
+    ret
+.late:
+    ld a, $01
+    ld [nes_fit_blank_any], a
+    xor a
+    ldh [rVBK], a
+    ret
+
+; A = logical nametable 0-3 -> A = physical page high byte ($D0/$D4).
+nes_fit_map_nt:
+    add a
+    add a
+    add $20
+    ld h, a
+    ld l, 0
+    ldh a, [rSVBK]
+    push af
+    push bc
+    call nes_ppu_map_nametable_hl
+    pop bc
+    pop af
+    ldh [rSVBK], a
+    ld a, h
+    and $FC
+    ret
+
+; VBlank after a commit: playfield scroll -> ring columns / SCX, HUD split ->
+; K rows, and the page signature (any change recomposes everything).
+nes_fit_update_view:
     ldh a, [nes_split_active]
     and a
     jr z, .single
@@ -986,56 +1324,259 @@ nes_fit_update_page:
     ld a, [nes_ppu_scroll_y]
     ld e, a
 .have:
+    ; w0 = (ctrl&1)<<4 | x>>4 ; ring_scx = ((ctrl&1)<<7 | x>>1) - 16
+    ld a, d
+    swap a
+    and $0F
+    bit 0, b
+    jr z, .w
+    or $10
+.w:
+    ld [nes_fit_w0], a
+    ld a, d
+    srl a
+    bit 0, b
+    jr z, .s
+    or $80
+.s:
+    add $F0
+    ld [nes_fit_ring_scx], a
+    ; vertical page select
     ld a, b
-    and $03
-    bit 7, d
-    jr z, .nx
-    xor $01
-.nx:
-    ld b, a
+    and $02
+    ld c, a
     ld a, e
     cp 120
     jr c, .ny
     cp 240
     jr nc, .ny
-    ld a, b
+    ld a, c
     xor $02
-    ld b, a
+    ld c, a
 .ny:
-    ld a, b
-    add a
-    add a
-    add $20
-    ld h, a
-    ld l, 0
-    ldh a, [rSVBK]
-    push af
-    call nes_ppu_map_nametable_hl
-    pop af
-    ldh [rSVBK], a
-    ld a, h
-    and $FC
+    ld a, c
+    call nes_fit_map_nt
+    ld [nes_fit_nsig + 0], a
+    ld a, c
+    inc a
+    call nes_fit_map_nt
+    ld [nes_fit_nsig + 1], a
+    ; HUD
+    xor a
+    ld [nes_fit_nsig + 2], a
+    ld [nes_fit_nsig + 3], a
+    ld [nes_fit_nsig + 4], a
+    ld [nes_fit_nsig + 5], a
+    ldh a, [nes_split_active]
+    and a
+    jr z, .cmp
+    ld a, [nes_oam_ram]
+    add 23
+    jr c, .k7
+    swap a
+    and $0F
+    jr nz, .k1
+    inc a
+.k1:
+    cp 8
+    jr c, .kok
+.k7:
+    ld a, 7
+.kok:
+    ld [nes_fit_nsig + 2], a
+    ldh a, [nes_split_top_ctrl]
     ld b, a
-    ld a, [nes_fit_page]
-    cp b
-    jr z, .scroll
+    ldh a, [nes_split_top_x]
+    swap a
+    and $0F
+    bit 0, b
+    jr z, .hw
+    or $10
+.hw:
+    ld [nes_fit_nsig + 3], a
     ld a, b
-    ld [nes_fit_page], a
-    call nes_fit_mark_all
-.scroll:
-    ld a, $F0
-    ldh [rSCX], a
-    ld a, $F4
-    ldh [rSCY], a
-    ldh a, [rSTAT]
-    and $BF
-    ldh [rSTAT], a
+    and $02
+    ld c, a
+    call nes_fit_map_nt
+    ld [nes_fit_nsig + 4], a
+    ld a, c
+    inc a
+    call nes_fit_map_nt
+    ld [nes_fit_nsig + 5], a
+.cmp:
+    ld hl, nes_fit_nsig
+    ld de, nes_fit_sig
+    ld b, 6
+    ld c, 0
+    xor a
+    ld [nes_fit_ochg], a
+.cl:
+    ld a, [de]
+    cp [hl]
+    jr z, .same
+    ld c, 1
+    ld a, [hl]
+    ld [de], a
+    ld a, b
+    cp 4                  ; b = 6,5,4 -> sig[0..2]
+    jr c, .same
+    ld a, 1
+    ld [nes_fit_ochg], a
+.same:
+    inc hl
+    inc de
+    dec b
+    jr nz, .cl
+    ld a, c
+    and a
+    call nz, nes_fit_update_view.changed
+    ld a, 1
+    ld [nes_fit_valid], a
+    ; columns only move when w0 does (mark_all keeps the assignment)
+    ld a, [nes_fit_w0]
+    ld hl, nes_fit_last_w0
+    cp [hl]
+    ret z
+    ld [hl], a
+    ; fall through: column assignment
+
+; Release pool columns that left w0..w0+16, give every visible world column a
+; pool column (fresh ones are marked for ring rows K..14).
+nes_fit_assign:
+    ld c, 0
+.rel:
+    ld a, c
+    add LOW(nes_fit_owner)
+    ld l, a
+    adc HIGH(nes_fit_owner)
+    sub l
+    ld h, a
+    ld a, [hl]
+    cp $FF
+    jr z, .rnext
+    ld b, a
+    ld a, [nes_fit_w0]
+    cpl
+    inc a
+    add b
+    and $1F
+    cp 17
+    jr c, .rnext
+    ld [hl], $FF
+    ld a, b
+    add LOW(nes_fit_col_pool)
+    ld l, a
+    adc HIGH(nes_fit_col_pool)
+    sub l
+    ld h, a
+    ld [hl], $FF
+    ld de, nes_fit_blank - nes_fit_col_pool
+    add hl, de
+    ld [hl], 1
+    ld a, 1
+    ld [nes_fit_blank_any], a
+.rnext:
+    inc c
+    ld a, c
+    cp 17
+    jr nz, .rel
+    ld a, [nes_fit_w0]
+    ld c, a
+    ld b, 17
+.vis:
+    push bc
+    ld a, c
+    and $1F
+    ld c, a                ; C = w
+    add LOW(nes_fit_col_pool)
+    ld l, a
+    adc HIGH(nes_fit_col_pool)
+    sub l
+    ld h, a
+    ld a, [hl]
+    cp $FF
+    jr nz, .vnext
+    ; find a free pool column
+    push hl
+    ld hl, nes_fit_owner
+    ld e, 0
+.find:
+    ld a, [hl]
+    cp $FF
+    jr z, .got
+    inc hl
+    inc e
+    ld a, e
+    cp 17
+    jr nz, .find
+    pop hl
+    jr .vnext             ; cannot happen
+.got:
+    ld [hl], c
+    pop hl
+    ld [hl], e
+    ld de, nes_fit_blank - nes_fit_col_pool
+    push hl
+    add hl, de
+    ld [hl], 0
+    pop hl
+    ld a, [hl]
+    ld e, a               ; E = p
+    ; mark rows K..14: slot = row*17 + p
+    ld a, [nes_fit_sig + 2]
+    ld d, a
+.mk:
+    ld a, d
+    cp 15
+    jr nc, .vnext
+    swap a
+    add d
+    add e
+    push de
+    call nes_fit_mark_slot
+    pop de
+    inc d
+    jr .mk
+.vnext:
+    pop bc
+    inc c
+    dec b
+    jr nz, .vis
     ret
 
-; VBlank PPUCTRL commit: sprite size only; BG map $9800, signed tile ids.
+nes_fit_update_view.changed:
+    ; rp0/rp1/K changed -> everything; only HUD fields -> HUD rows 0..K-1
+    ld a, [nes_fit_ochg]
+    and a
+    jp nz, nes_fit_mark_all
+    ld a, [nes_fit_sig + 2]
+    and a
+    ret z
+    ld d, 0
+.hr:
+    ld e, 0
+.hc:
+    ld a, d
+    swap a
+    add d
+    add e
+    push de
+    call nes_fit_mark_slot
+    pop de
+    inc e
+    ld a, e
+    cp 17
+    jr nz, .hc
+    inc d
+    ld a, [nes_fit_sig + 2]
+    cp d
+    jr nz, .hr
+    ret
+
+; VBlank PPUCTRL commit: sprite size only.
 nes_fit_update_ctrl:
     ldh a, [rLCDC]
-    and $C3
+    and $FB
     ld b, a
     ld a, [nes_ppuctrl]
     bit 5, a
@@ -1046,27 +1587,78 @@ nes_fit_update_ctrl:
     ldh [rLCDC], a
     ret
 
-; VBlank ISR tail: GDMA the previous stage, then (after a commit) follow
-; PPUCTRL/page and compose the next stage. Forces the FIT LCDC/scroll so no
-; tip renderer path can leave its own view. Ends in WRAM bank 1.
+; Force the FIT display: window (blank right gutter), HUD map above LYC,
+; scrolled ring below it.
+nes_fit_display:
+    ld a, 151
+    ldh [rWX], a
+    xor a
+    ldh [rWY], a
+    ld a, $F4
+    ldh [rSCY], a
+    ldh a, [rLCDC]
+    and $87
+    or $60
+    ld b, a
+    ld a, [nes_fit_sig + 2]
+    and a
+    jr z, .ring
+    ldh a, [rLY]
+    cp 144
+    jr c, .ring           ; late: no HUD split this frame
+    ld a, [nes_fit_sig + 2]
+    add a
+    add a
+    add a
+    add 11
+    ldh [rLYC], a
+    ld a, b
+    or $08
+    ldh [rLCDC], a
+    xor a
+    ldh [rSCX], a
+    ldh a, [rSTAT]
+    or $40
+    ldh [rSTAT], a
+    ret
+.ring:
+    ld a, b
+    ldh [rLCDC], a
+    ld a, [nes_fit_ring_scx]
+    ldh [rSCX], a
+    ldh a, [rSTAT]
+    and $BF
+    ldh [rSTAT], a
+    ret
+
+; VBlank ISR tail. Ends in WRAM bank 1.
 nes_fit_frame_x:
     call nes_fit_flush
     ld a, [nes_fit_commit]
     and a
     jr z, .fix
+    call nes_fit_update_ctrl
+    ld a, $07
+    ldh [rSVBK], a
+    call nes_fit_update_view
+.fix:
+    ld a, $07
+    ldh [rSVBK], a
+    call nes_fit_display
+    ld a, [nes_fit_commit]
+    and a
+    jr z, .done
     xor a
     ld [nes_fit_commit], a
-    call nes_fit_update_ctrl
-    call nes_fit_update_page
+    ; let the HUD-split STAT interrupt nest while composing
+    ld a, $02
+    ldh [rIE], a
+    ei
     call nes_fit_compose_budget
-.fix:
-    ldh a, [rLCDC]
-    and $C7
-    ldh [rLCDC], a
-    ld a, $F0
-    ldh [rSCX], a
-    ld a, $F4
-    ldh [rSCY], a
+    di
+    ld a, $03
+    ldh [rIE], a
+.done:
     ld a, $01
     ldh [rSVBK], a
     ret
@@ -1084,3 +1676,4 @@ nes_fit_frame:
     ld [$2000], a
     call nes_fit_frame_x
     jp nes_restore_code_bank
+

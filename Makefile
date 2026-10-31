@@ -90,7 +90,7 @@ generate:
 		python3 tools/tighten_stack_generated.py runtime/generated.asm; \
 		python3 tools/shrink_compare_generated.py runtime/generated.asm; \
 		python3 tools/hot_alu_generated.py runtime/generated.asm; \
-		python3 tools/fast_oam_dma_generated.py runtime/generated.asm; \
+		if [ "$(FIT_SCREEN)" != "1" ]; then python3 tools/fast_oam_dma_generated.py runtime/generated.asm; fi; \
 		python3 tools/route_ppu_write_data.py runtime/generated.asm runtime/generated_config.inc; \
 		python3 tools/lazy_overflow_updates.py runtime/generated.asm; \
 		python3 tools/fold_fixed_prg_reads.py runtime/generated.asm "$(ROM)"; \
