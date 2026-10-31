@@ -53,9 +53,23 @@ def stub(label: str, forever: bool = False) -> list[str]:
         "    ld a, [nes_nmi_active] ; NES2GBC_NMI_SPIN: retire the NMI that ended in JMP self",
         "    and a",
         f"    jr z, {s}_hidle_ns",
+        # NES2GBC_SPIN_KEEP_DEEP: a spin with the handler's own JSR frames
+        # still above the interrupt frame (SP below entry SP) is a wait for a
+        # nested NMI that unwinds those frames itself (Rad Racer $FF5E: the
+        # nested NMI takes PLA x3 + RTS). Keep SP; only end this NMI so the
+        # next vblank is delivered on top, as on hardware.
+        "IF DEF(NES2GBC_SPIN_KEEP_DEEP)",
+        "    push hl",
+        "    ld hl, nes_nmi_entry_sp",
+        "    ldh a, [nes_sp]",
+        "    cp [hl]",
+        "    pop hl",
+        f"    jr c, {s}_hidle_keep",
+        "ENDC",
         "    ld a, [nes_nmi_entry_sp]",
         "    add 3",
         "    ldh [nes_sp], a",
+        f"{s}_hidle_keep:",
         "    xor a",
         "    ld [nes_nmi_active], a",
         "IF !DEF(NES2GBC_NO_PACING)",
