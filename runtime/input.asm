@@ -3,6 +3,10 @@
 SECTION "NES input helpers", ROM0
 
 ; Apply the current debug crop on top of the game's own NES scroll values.
+IF DEF(NES2GBC_COLD_ROMX)
+    PUSHS
+SECTION "NES cold view apply scroll", ROMX, BANK[255] ; no callers
+ENDC
 nes_view_apply_scroll:
     ld a, [nes_ppu_scroll_x]
     ld b, a
@@ -38,6 +42,9 @@ nes_view_apply_scroll:
     add $10
     ldh [rSCY], a
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 
 ; Mark viewport hardware state dirty without changing it mid-scanline.
 nes_view_mark_dirty:
@@ -76,7 +83,13 @@ nes_view_cycle_follow_target:
     jp nes_restore_code_bank
 
 ; Cycle TL -> TR -> BL -> BR -> center -> TL.
+IF DEF(NES2GBC_XX)
+    PUSHS
+SECTION "NES cold view cycle", ROMX, BANK[255]
+nes_view_cycle_cold:
+ELSE
 nes_view_cycle:
+ENDC
     ld a, [nes_view_mode]
     inc a
     cp $05
@@ -125,6 +138,9 @@ nes_view_cycle:
     ldh [nes_view_x], a
     ldh [nes_view_y], a
     jp nes_view_mark_dirty
+IF DEF(NES2GBC_XX)
+    POPS
+ENDC
 
 
 nes_controller_latch:

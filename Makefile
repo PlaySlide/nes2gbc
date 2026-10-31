@@ -70,6 +70,7 @@ generate:
 	@if [ "$${NES2GBC_PAL_SAME_SKIP:-1}" != "0" ]; then echo 'DEF NES2GBC_PAL_SAME_SKIP EQU 1 ; palette: skip $$3F00 writes whose value equals the last synced one (opt out: NES2GBC_PAL_SAME_SKIP=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_STACK_HALF:-1}" != "0" ]; then echo 'DEF NES2GBC_STACK_HALF EQU 1 ; host stack reserve $$CF80-$$CFFF (128 B); frees $$CF00-$$CF7F (opt out: NES2GBC_STACK_HALF=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_STACK_HALF:-1}" != "0" ] && [ "$${NES2GBC_DISPATCH_2WAY:-1}" != "0" ]; then echo 'DEF NES2GBC_DISPATCH_2WAY EQU 1 ; dispatch cache way 2 (64 entries) filled from direct-mapped evictions (opt out: NES2GBC_DISPATCH_2WAY=0)' >> runtime/generated_config.inc; fi
+	@if [ "$(APU)" = "1" ] && [ "$${NES2GBC_ISR_BANK_FIX:-1}" != "0" ] && [ "$${NES2GBC_COLD_ROMX:-1}" != "0" ]; then echo 'DEF NES2GBC_COLD_ROMX EQU 1 ; move cold runtime code (boot video init, map rebuild, hstitch hidden build, camera chords, dead helpers) to helper bank $$FF behind ROM0 trampolines (opt out: NES2GBC_COLD_ROMX=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi

@@ -106,6 +106,10 @@ IF DEF(NES2GBC_PROFILE)
 ENDC
     ret
 
+IF DEF(NES2GBC_COLD_ROMX)
+    PUSHS
+SECTION "NES cold profile reset", ROMX, BANK[255] ; boot only
+ENDC
 nes_profile_reset:
 IF DEF(NES2GBC_PROFILE)
     xor a
@@ -136,3 +140,6 @@ IF DEF(NES2GBC_PROFILE)
     ldh [rSVBK], a
 ENDC
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC

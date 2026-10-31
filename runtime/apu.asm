@@ -90,6 +90,7 @@ nes_apu_read_status:
 
 
 ; Boot-only: the body lives in helper bank $FF; boot runs with bank 1 mapped.
+IF !DEF(NES2GBC_COLD_ROMX)
 nes_apu_init:
     ld a, BANK(nes_apu_init_banked)
     ld [$2000], a
@@ -97,6 +98,7 @@ nes_apu_init:
     ld a, $01
     ld [$2000], a
     ret
+ENDC
 
 ; ---------------------------------------------------------------------------
 nes_apu_write:

@@ -1798,7 +1798,20 @@ nes_jmp_indirect_hl:
 
 ; BRK pushes return PC high/low, then status with B set, and sets I.
 ; Input HL = PC after BRK's padding byte.
+IF DEF(NES2GBC_COLD_ROMX)
+; BRK is rare: body in helper bank $FF.
 nes_brk_hl:
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    call nes_brk_hl_cold
+    jp nes_restore_code_bank
+    PUSHS
+SECTION "NES cold brk", ROMX, BANK[255]
+nes_brk_hl_cold:
+ELSE
+nes_brk_hl:
+ENDC
     ld b, h
     ld c, l
     ld a, b
@@ -1816,6 +1829,9 @@ nes_brk_hl:
     or $20
     ldh [nes_p], a
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 
 ; RTI pops P then PC low/high. Output HL = exact restored PC.
 nes_rti_pop_hl:
@@ -2171,6 +2187,17 @@ nes_stage_new_generation:
     ret nz
     inc a
     ld [nes_stage_gen], a
+IF DEF(NES2GBC_COLD_ROMX)
+    ; Generation wrap (once per 255 transactions): clear in helper bank $FF.
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    call nes_stage_gen_wrap_cold
+    jp nes_restore_code_bank
+    PUSHS
+SECTION "NES cold stage gen wrap", ROMX, BANK[255]
+nes_stage_gen_wrap_cold:
+ENDC
     push hl
     ld a, $06
     ldh [rSVBK], a
@@ -2187,6 +2214,9 @@ ENDR
     ldh [rSVBK], a
     pop hl
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 
 nes_unimplemented_operand_read:
     xor a

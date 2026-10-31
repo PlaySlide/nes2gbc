@@ -61,7 +61,26 @@ ENDC
 
 SECTION "NES video bridge", ROM0
 
+IF DEF(NES2GBC_COLD_ROMX)
+; Cold boot code: both LCD-off setup halves live in helper bank $FF; the CHR
+; upload (which maps CHR banks itself) stays in ROM0 between them.
 nes_video_init:
+    ld a, $FF
+    ld [$2000], a
+    nop                     ; not an ISR-walk bank stub (no VBlank ISR can run in here)
+    call nes_video_init_lcd_off_cold
+    call nes_upload_chr_bank
+    ld a, $FF
+    ld [$2000], a
+    nop                     ; not an ISR-walk bank stub (no VBlank ISR can run in here)
+    call nes_video_init_rest_cold
+    jp nes_restore_code_bank
+    PUSHS
+SECTION "NES cold video init", ROMX, BANK[255]
+nes_video_init_lcd_off_cold:
+ELSE
+nes_video_init:
+ENDC
     ; Enter a safe LCD-off setup window once at boot.
     ldh a, [rLCDC]
     bit 7, a
@@ -75,7 +94,12 @@ nes_video_init:
     ldh [rLCDC], a
 .initial_lcd_off:
 
+IF DEF(NES2GBC_COLD_ROMX)
+    ret
+nes_video_init_rest_cold:
+ELSE
     call nes_upload_chr_bank
+ENDC
 
     ; LCD is off after upload: clear both BG maps and their CGB attributes.
     xor a
@@ -137,6 +161,9 @@ nes_video_init:
     ld a, $91
     ldh [rLCDC], a
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 
 nes_video_fill_zero:
 .loop:
@@ -870,7 +897,20 @@ ENDC
 ; nametable WRAM.  This is a correctness checkpoint used when an ordinary game
 ; finishes a rendering-off screen construction and re-enables the background.
 ; It tells us whether incremental publication has drifted from virtual NES state.
+IF DEF(NES2GBC_COLD_ROMX)
+; Rare full reprojection: body in helper bank $FF.
 nes_video_rebuild_generic_maps_atomic:
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    call nes_video_rebuild_generic_maps_atomic_cold
+    jp nes_restore_code_bank
+    PUSHS
+SECTION "NES cold map rebuild", ROMX, BANK[255]
+nes_video_rebuild_generic_maps_atomic_cold:
+ELSE
+nes_video_rebuild_generic_maps_atomic:
+ENDC
     ldh a, [rLCDC]
     ld [nes_saved_lcdc], a
     bit 7, a
@@ -989,6 +1029,9 @@ nes_video_rebuild_generic_maps_atomic:
     ld a, [nes_saved_lcdc]
     ldh [rLCDC], a
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 
 ; Wait only while the LCD controller is actively transferring pixels (mode 3).
 ; VRAM is accessible during HBlank, VBlank, and OAM scan, so do not burn an
@@ -2131,6 +2174,10 @@ ENDC
 
 ; Copy a fully projected 160-byte shadow into hardware OAM. This routine is
 ; intentionally tiny so it comfortably completes during host VBlank.
+IF DEF(NES2GBC_COLD_ROMX)
+    PUSHS
+SECTION "NES cold sync oam", ROMX, BANK[255] ; no callers
+ENDC
 nes_video_sync_oam:
     PROFILE_INC nes_profile_oam_sync
     ld hl, nes_gbc_oam_shadow
@@ -2156,13 +2203,30 @@ nes_video_sync_oam:
     dec b
     jr nz, .copy_shadow
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 
 ; NES PPUCTRL bit 4 globally selects BG pattern table $0000/$1000.
 ; Our CGB representation stores that selection in each tile attribute's VRAM
 ; bank bit. Synchronize bit 3 deterministically across both maps whenever the
 ; NES global select changes. Do not XOR: a single stale/mismatched attribute
 ; would otherwise remain permanently opposite to the rest of the map.
+IF DEF(NES2GBC_COLD_ROMX)
+; Rare 2 KiB attribute rewrite with the LCD off: body in helper bank $FF.
 nes_video_toggle_bg_pattern_bank:
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    call nes_video_toggle_bg_pattern_bank_cold
+    jp nes_restore_code_bank
+
+    PUSHS
+SECTION "NES cold bg bank rewrite", ROMX, BANK[255]
+nes_video_toggle_bg_pattern_bank_cold:
+ELSE
+nes_video_toggle_bg_pattern_bank:
+ENDC
     ld a, [nes_diag_event_flags]
     or NES_DIAG_EVENT_BG_BANK_REWRITE
     ld [nes_diag_event_flags], a
@@ -2206,6 +2270,9 @@ nes_video_toggle_bg_pattern_bank:
     pop af
     ldh [rLCDC], a
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 
 ; Reflect PPUMASK BG/sprite visibility into LCDC bits 0/1.
 nes_video_update_mask:
@@ -2325,8 +2392,16 @@ IF DEF(NES2GBC_STITCH_SHADOW_SYNC)
     ld a, [nes_hstitch_valid]
     and a
     jr nz, .single_synced
+IF DEF(NES2GBC_COLD_ROMX)
+    ld a, $FF
+    ld [$2000], a
+    xor a
+    call nes_video_rebuild_resync_cold
+    call nes_restore_code_bank
+ELSE
     call nes_video_rebuild_generic_maps_atomic
     call nes_video_resync_published_shadow
+ENDC
 .single_synced:
 ENDC
     call .split_live
@@ -2505,6 +2580,12 @@ ENDC
 IF DEF(NES2GBC_STITCH_SHADOW_SYNC)
 ; Copy authoritative NES nametable RAM (WRAM 1) into the published-value
 ; shadow (WRAM 6). Leaves WRAM bank 1 selected.
+IF DEF(NES2GBC_COLD_ROMX)
+    PUSHS
+SECTION "NES cold shadow resync", ROMX, BANK[255]
+nes_video_rebuild_resync_cold:
+    call nes_video_rebuild_generic_maps_atomic_cold
+ENDC
 nes_video_resync_published_shadow:
     ld hl, nes_nametable_ram
     ld de, nes_nametable_published_shadow
@@ -2524,6 +2605,9 @@ nes_video_resync_published_shadow:
     ld a, $01
     ldh [rSVBK], a
     ret
+IF DEF(NES2GBC_COLD_ROMX)
+    POPS
+ENDC
 ENDC
 
 ; Input: A = destination GBC tile column 0..31.

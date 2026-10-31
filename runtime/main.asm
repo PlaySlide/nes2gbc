@@ -1095,6 +1095,105 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
     xor a
     ret
 
+IF DEF(NES2GBC_COLD_ROMX)
+.prep_begin:
+    ld a, $FF
+    ld [$2000], a
+    nop                     ; not an ISR-walk bank stub (no VBlank ISR can run in here)
+    call nes_hstitch_prep_begin_cold
+    jr .prep_cold_ret
+.prep_columns:
+    ld a, $FF
+    ld [$2000], a
+    nop                     ; not an ISR-walk bank stub (no VBlank ISR can run in here)
+    call nes_hstitch_prep_columns_cold
+.prep_cold_ret:
+    push af
+    call nes_restore_code_bank
+    pop af
+    ret
+
+.prep_hold:
+    ld a, $01
+    ret
+
+; Hidden-map construction (a few host frames, once): bodies in bank $FF.
+    PUSHS
+SECTION "NES cold hstitch prep", ROMX, BANK[255]
+nes_hstitch_prep_begin_cold:
+    ; Freeze the seam geometry at the first proven split. Later coarse motion
+    ; is reconciled by the ordinary catch-up path after the hidden map is live.
+    ldh a, [nes_split_bottom_x]
+    ld b, a
+    ldh a, [nes_view_x]
+    add b
+    ld c, a
+    ld b, $00
+    jr nc, .prep_key_no_carry
+    inc b
+.prep_key_no_carry:
+    ldh a, [nes_split_bottom_ctrl]
+    and $01
+    xor b
+    and $01
+    swap a
+    add a
+    ld b, a
+    ld a, c
+    srl a
+    srl a
+    srl a
+    or b
+    ld [nes_hstitch_key], a
+
+    xor a
+    ld [nes_hstitch_copy_start], a
+    ld [nes_hstitch_dirty], a
+    ld a, $02
+    ld [nes_hstitch_valid], a
+
+    ld a, [nes_diag_event_flags]
+    or NES_DIAG_EVENT_FULL_REBUILD
+    ld [nes_diag_event_flags], a
+    ld a, [nes_hstitch_full_rebuilds]
+    inc a
+    ld [nes_hstitch_full_rebuilds], a
+
+nes_hstitch_prep_columns_cold:
+    ; Four authoritative columns per host VBlank leaves CPU time for the
+    ; translated NMI to continue between preparations. Unlike the previous
+    ; staged experiment, the old frame never scrolls while this work happens.
+    ld a, $04
+    ld [nes_hstitch_target_key], a
+.prep_column_loop:
+    ld a, [nes_hstitch_copy_start]
+    cp $20
+    jr nc, .prep_complete
+    call nes_video_refresh_stitch_column
+    ld a, [nes_hstitch_copy_start]
+    inc a
+    ld [nes_hstitch_copy_start], a
+    cp $20
+    jr nc, .prep_complete
+
+    ld a, [nes_hstitch_target_key]
+    dec a
+    ld [nes_hstitch_target_key], a
+    jr nz, .prep_column_loop
+
+.prep_hold:
+    ld a, $01
+    ret
+
+.prep_complete:
+    xor a
+    ld [nes_hstitch_dirty], a
+    ld a, $03
+    ld [nes_hstitch_valid], a
+    ld a, $01
+    ret
+    POPS
+ELSE
 .prep_begin:
     ; Freeze the seam geometry at the first proven split. Later coarse motion
     ; is reconciled by the ordinary catch-up path after the hidden map is live.
@@ -1167,6 +1266,7 @@ nes_gbc_prepare_initial_hstitch_hidden_step:
     ld [nes_hstitch_valid], a
     ld a, $01
     ret
+ENDC
 
 nes_gbc_stat_isr:
     push af
@@ -1410,11 +1510,30 @@ ENDC
     call nes_generated_init
     call nes_generated_follow_init
     call nes_video_init
+IF DEF(NES2GBC_COLD_ROMX)
+    ; Boot tail (APU init, profile reset, interrupt enables) runs from helper
+    ; bank $FF; interrupts are still disabled, so no ISR bank walk can see it.
+    ld a, $FF
+    ld [$2000], a
+    nop
+    call nes_boot_tail_cold
+    ld a, $01
+    ld [$2000], a
+    ei
+    jp nes_reset
+
+    PUSHS
+SECTION "NES cold boot tail", ROMX, BANK[255]
+nes_boot_tail_cold:
+    call nes_apu_init_banked
+    call nes_profile_reset
+ELSE
 IF DEF(NES2GBC_APU)
     call nes_apu_init
 ENDC
     ; Start profiling at the translated NES reset, excluding GBC boot/setup work.
     call nes_profile_reset
+ENDC
 
     ; Use the real GBC VBlank interrupt only as a one-byte event latch. The
     ; translated NES interrupt is still delivered at compiler-selected safe points.
@@ -1425,8 +1544,13 @@ ENDC
     ldh [rSTAT], a
     ld a, $03
     ld [rIE], a
+IF DEF(NES2GBC_COLD_ROMX)
+    ret
+    POPS
+ELSE
     ei
     jp nes_reset
+ENDC
 
 INCLUDE "io.asm"
 IF DEF(NES2GBC_APU)
