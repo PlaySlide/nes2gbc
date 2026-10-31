@@ -21,6 +21,9 @@
 IF !DEF(NES2GBC_FIT_BUDGET)
 DEF NES2GBC_FIT_BUDGET EQU 24
 ENDC
+IF !DEF(NES2GBC_FIT_HUD_HOLD)
+DEF NES2GBC_FIT_HUD_HOLD EQU 8
+ENDC
 IF !DEF(NES2GBC_FIT_CAP)
 DEF NES2GBC_FIT_CAP EQU 8
 ENDC
@@ -44,6 +47,7 @@ nes_fit_tiles:      ds 5    ; compose temp: 4 tile ids + palette
 nes_fit_half_bank:  ds 2    ; CHR-ROM source of PT0/PT1 (ROM bank)
 nes_fit_half_hi:    ds 2    ; ... and its address high byte ($40/$50)
 nes_fit_tmp:        ds 8    ; one shrunk tile
+nes_fit_hd:         ds 8    ; HUD diff temps: old pages, new pages, old w0, new w0, d, p
 ; view: [ring page L, ring page R, hud rows K, hud w0, hud page L, hud page R]
 nes_fit_stage_pos:  ds 1
 nes_fit_ochg:       ds 1
@@ -62,6 +66,7 @@ nes_fit_any:        ds 1    ; nonzero: some pool dirty bit may be set
 nes_fit_valid:      ds 1    ; nonzero once the view (pages/columns) is known
 nes_fit_sig:        ds 6
 nes_fit_nsig:       ds 6
+nes_fit_hud_hold:   ds 1    ; commits a page-only HUD flip has been seen
 nes_fit_last_w0:    ds 1
 nes_fit_w0:         ds 1    ; first visible ring world column (0-31)
 nes_fit_col_pool:   ds 32   ; world column -> pool column ($FF = none)
@@ -1417,6 +1422,29 @@ nes_fit_update_view:
     inc a
     call nes_fit_map_nt
     ld [nes_fit_nsig + 5], a
+    ; Debounce page-only HUD flips between aligned views: SMB's first scroll
+    ; pair sometimes carries the playfield nametable bit for a few frames,
+    ; which would swap the status bar for the blank other page.
+    ld a, [nes_fit_sig + 3]
+    ld b, a
+    ld a, [nes_fit_nsig + 3]
+    xor b
+    cp $10
+    jr nz, .hud_settle
+    ld a, b
+    and $0F
+    jr nz, .hud_settle
+    ld a, [nes_fit_hud_hold]
+    inc a
+    ld [nes_fit_hud_hold], a
+    cp NES2GBC_FIT_HUD_HOLD
+    jr nc, .hud_settle
+    ld a, b
+    ld [nes_fit_nsig + 3], a
+    jr .cmp
+.hud_settle:
+    xor a
+    ld [nes_fit_hud_hold], a
 .cmp:
     ld hl, nes_fit_sig
     ld de, nes_fit_osig
@@ -1575,8 +1603,13 @@ nes_fit_update_view.changed:
     ld a, [nes_fit_sig + 2]
     and a
     ret z
-    call nes_fit_hud_same
-    ret z
+    ; page-aligned HUD views: redraw only the cells whose bytes differ
+    ld a, [nes_fit_osig + 3]
+    ld b, a
+    ld a, [nes_fit_sig + 3]
+    or b
+    and $0F
+    jp z, nes_fit_hud_diff
     ld d, 0
 .hr:
     ld e, 0
@@ -1596,6 +1629,161 @@ nes_fit_update_view.changed:
     ld a, [nes_fit_sig + 2]
     cp d
     jr nz, .hr
+    ret
+
+; HUD view remapped between page-aligned views (SMB flips the HUD page as the
+; world scrolls): mark only HUD slots whose 2x2 tiles or attribute byte differ
+; between the old and the new mapping. Entered and left with SVBK = 7.
+nes_fit_hud_diff:
+    ld a, [nes_fit_osig + 4]
+    ld [nes_fit_hd + 0], a
+    ld a, [nes_fit_osig + 5]
+    ld [nes_fit_hd + 1], a
+    ld a, [nes_fit_sig + 4]
+    ld [nes_fit_hd + 2], a
+    ld a, [nes_fit_sig + 5]
+    ld [nes_fit_hd + 3], a
+    ld a, [nes_fit_osig + 3]
+    ld [nes_fit_hd + 4], a
+    ld a, [nes_fit_sig + 3]
+    ld [nes_fit_hd + 5], a
+    xor a
+    ld [nes_fit_hd + 6], a
+.row:
+    xor a
+    ld [nes_fit_hd + 7], a
+.col:
+    ld a, $01
+    ldh [rSVBK], a
+    ld a, [nes_fit_hd + 4]
+    ld c, 0
+    call .addr
+    push hl
+    ld a, [nes_fit_hd + 5]
+    ld c, 2
+    call .addr
+    ld d, h
+    ld e, l
+    pop hl
+    ld a, [de]
+    cp [hl]
+    jr nz, .mark
+    inc e
+    inc l
+    ld a, [de]
+    cp [hl]
+    jr nz, .mark
+    ld a, e
+    add 31
+    ld e, a
+    ld a, l
+    add 31
+    ld l, a
+    ld a, [de]
+    cp [hl]
+    jr nz, .mark
+    inc e
+    inc l
+    ld a, [de]
+    cp [hl]
+    jr nz, .mark
+    ld a, [nes_fit_hd + 4]
+    ld c, 0
+    call .aaddr
+    push hl
+    ld a, [nes_fit_hd + 5]
+    ld c, 2
+    call .aaddr
+    ld d, h
+    ld e, l
+    pop hl
+    ld a, [de]
+    cp [hl]
+    jr z, .next
+.mark:
+    ld a, $07
+    ldh [rSVBK], a
+    ld a, [nes_fit_hd + 6]
+    ld b, a
+    swap a
+    add b
+    ld b, a
+    ld a, [nes_fit_hd + 7]
+    add b
+    call nes_fit_mark_slot
+.next:
+    ld a, $07
+    ldh [rSVBK], a
+    ld a, [nes_fit_hd + 7]
+    inc a
+    ld [nes_fit_hd + 7], a
+    cp 17
+    jr nz, .col
+    ld a, [nes_fit_hd + 6]
+    inc a
+    ld [nes_fit_hd + 6], a
+    ld b, a
+    ld a, [nes_fit_sig + 2]
+    cp b
+    jr nz, .row
+    ret
+
+; A = w0, C = 0 (old) / 2 (new): B = w, HL = page high byte entry
+.page:
+    ld b, a
+    ld a, [nes_fit_hd + 7]
+    add b
+    ld b, a
+    and $10
+    swap a
+    add c
+    add LOW(nes_fit_hd)
+    ld l, a
+    adc HIGH(nes_fit_hd)
+    sub l
+    ld h, a
+    ret
+
+; -> HL = first NES tile of cell (d, w)
+.addr:
+    call .page
+    ld a, [hl]
+    ld h, a
+    ld a, [nes_fit_hd + 6]
+    srl a
+    srl a
+    add h
+    ld h, a
+    ld a, [nes_fit_hd + 6]
+    and $03
+    rrca
+    rrca
+    ld l, a
+    ld a, b
+    and $0F
+    add a
+    add l
+    ld l, a
+    ret
+
+; -> HL = attribute byte of cell (d, w)
+.aaddr:
+    call .page
+    ld a, [hl]
+    add 3
+    ld h, a
+    ld a, [nes_fit_hd + 6]
+    srl a
+    add a
+    add a
+    add a
+    add $C0
+    ld l, a
+    ld a, b
+    and $0F
+    srl a
+    add l
+    ld l, a
     ret
 
 ; HUD fields changed but the HUD may show the same bytes (SMB keeps its
