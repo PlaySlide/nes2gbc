@@ -328,6 +328,10 @@ ENDC
     push af
     ld a, $01
     ldh [rSVBK], a
+IF DEF(NES2GBC_FIT)
+    ; upload staged ring tiles at the top of VBlank (frame tail is too late)
+    call nes_fit_flush_early
+ENDC
 IF DEF(NES2GBC_CHR4K) && DEF(NES2GBC_CHR_DUAL)
     call nes_dual_vblank
 ENDC

@@ -24,6 +24,82 @@ from pathlib import Path
 def code(line: str) -> str:
     return line.split(";", 1)[0].strip()
 
+FIT = False
+
+
+def fit8(i: int) -> tuple:
+    """FIT 8x8: half-size position in the 128x120 letterbox (16 px / 12 lines).
+    Shrunk tiles keep their pixels top-left; flips move them by 4."""
+    n = f'.n8_{i}'
+    return (
+        f'    ld a, [nes_oam_ram + ${4 * i + 2:02X}] ; attributes\n',
+        '    ld l, a\n',
+        f'    ld a, [nes_oam_ram + ${4 * i:02X}] ; Y\n',
+        '    cp $EF\n',
+        f'    jr nc, {n}\n',
+        '    inc a\n',
+        '    srl a\n',
+        '    add 12 + 16\n',
+        '    bit 7, l\n',
+        f'    jr z, .fy8_{i}\n',
+        '    sub 4\n',
+        f'.fy8_{i}:\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+        f'    ld a, [nes_oam_ram + ${4 * i + 3:02X}] ; X\n',
+        '    srl a\n',
+        '    add 16 + 8\n',
+        '    bit 6, l\n',
+        f'    jr z, .fx8_{i}\n',
+        '    sub 4\n',
+        f'.fx8_{i}:\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+        f'    ld a, [nes_oam_ram + ${4 * i + 1:02X}] ; tile\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+        '    ld a, [hl]\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+    )
+
+
+def fit16(i: int) -> tuple:
+    n = f'.s16_{i}'
+    return (
+        f'    ld a, [nes_oam_ram + ${4 * i:02X}] ; Y\n',
+        '    cp $EF\n',
+        f'    jr nc, {n}\n',
+        '    inc a\n',
+        '    srl a\n',
+        '    add 12 + 16 - 4\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+        f'    ld a, [nes_oam_ram + ${4 * i + 2:02X}] ; attributes\n',
+        '    ld l, a\n',
+        f'    ld a, [nes_oam_ram + ${4 * i + 3:02X}] ; X\n',
+        '    srl a\n',
+        '    add 16 + 8\n',
+        '    bit 6, l\n',
+        f'    jr z, .fx16_{i}\n',
+        '    sub 4\n',
+        f'.fx16_{i}:\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+        f'    ld a, [nes_oam_ram + ${4 * i + 1:02X}] ; tile\n',
+        '    ld h, a\n',
+        '    and $FE\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+        '    ld a, h\n',
+        '    and $01\n',
+        '    add HIGH(nes_oam_attr_table)\n',
+        '    ld h, a\n',
+        '    ld a, [hl]\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+    )
+
 
 def helper() -> str:
     out: list[str] = [
@@ -111,7 +187,7 @@ def helper() -> str:
         '    ldh a, [nes_view_x]\n',
         '    ld b, a\n',
     ] + [
-        line for i in range(64) for line in (
+        line for i in range(64) for line in (fit8(i) if FIT else (
             f'    ld a, [nes_oam_ram + ${4 * i:02X}] ; Y\n',
             '    cp $EF\n',
             f'    jr nc, .n8_{i}\n',
@@ -139,7 +215,7 @@ def helper() -> str:
             '    ld a, [hl] ; 8x8 attribute table page in H\n',
             '    ld [de], a\n',
             '    inc e\n',
-        ) + ((
+        )) + ((
             # Forty emitted CGB sprites is the hardware limit; entry i can
             # only be the 40th emission when i >= 39.
             '    ld a, e\n',
@@ -230,7 +306,7 @@ def scan16_romx() -> str:
         '    ldh a, [nes_view_x]\n',
         '    ld b, a\n',
     ] + [
-        line for i in range(64) for line in (
+        line for i in range(64) for line in (fit16(i) if FIT else (
             f'    ld a, [nes_oam_ram + ${4 * i:02X}] ; Y\n',
             '    cp $EF\n',
             f'    jr nc, .s16_{i}\n',
@@ -264,7 +340,7 @@ def scan16_romx() -> str:
             '    ld a, [hl]\n',
             '    ld [de], a\n',
             '    inc e\n',
-        ) + ((
+        )        ) + ((
             '    ld a, e\n',
             '    cp $A0\n',
             '    jp z, .full\n',
@@ -327,7 +403,10 @@ def optimize(lines: list[str]) -> int:
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("asm", type=Path)
+    p.add_argument("--fit", action="store_true", help="FIT_SCREEN half-size projection")
     args = p.parse_args()
+    global FIT
+    FIT = args.fit
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     rewritten = optimize(lines)

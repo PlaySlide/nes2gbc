@@ -21,6 +21,9 @@
 IF !DEF(NES2GBC_FIT_BUDGET)
 DEF NES2GBC_FIT_BUDGET EQU 24
 ENDC
+IF !DEF(NES2GBC_FIT_CAP)
+DEF NES2GBC_FIT_CAP EQU 8
+ENDC
 DEF FIT_rHDMA1 EQU $FF51
 DEF FIT_rHDMA2 EQU $FF52
 DEF FIT_rHDMA3 EQU $FF53
@@ -44,6 +47,7 @@ nes_fit_tmp:        ds 8    ; one shrunk tile
 ; view: [ring page L, ring page R, hud rows K, hud w0, hud page L, hud page R]
 nes_fit_stage_pos:  ds 1
 nes_fit_ochg:       ds 1
+nes_fit_osig:       ds 6    ; signature before this update (HUD compare)
 nes_fit_ring_scx:   ds 1    ; SCX of the scrolled playfield
 nes_fit_cur_s:      ds 1    ; compose temps
 nes_fit_cur_page:   ds 1
@@ -1092,7 +1096,7 @@ nes_fit_compose_budget:
     ld [nes_fit_stage_n], a
     pop hl
     pop bc
-    cp NES2GBC_FIT_BUDGET
+    cp NES2GBC_FIT_CAP
     jr z, .full
     pop af
     jr .next_bit
@@ -1287,21 +1291,31 @@ nes_fit_blank_cols:
 
 ; A = logical nametable 0-3 -> A = physical page high byte ($D0/$D4).
 nes_fit_map_nt:
+    ; same mapping as nes_ppu_map_nametable_hl (mirroring 1 = vertical,
+    ; 3/4 = one-screen low/high, else horizontal), no WRAM bank switch
+    and $03
+    ld l, a
+    ld a, [nes_mirroring]
+    cp 5
+    jr c, .m
+    xor a
+.m:
     add a
     add a
-    add $20
+    add l
+    add LOW(nes_fit_mir_table)
+    ld l, a
+    adc HIGH(nes_fit_mir_table)
+    sub l
     ld h, a
-    ld l, 0
-    ldh a, [rSVBK]
-    push af
-    push bc
-    call nes_ppu_map_nametable_hl
-    pop bc
-    pop af
-    ldh [rSVBK], a
-    ld a, h
-    and $FC
+    ld a, [hl]
     ret
+nes_fit_mir_table:
+    db $D0, $D0, $D4, $D4
+    db $D0, $D4, $D0, $D4
+    db $D0, $D0, $D4, $D4
+    db $D0, $D0, $D0, $D0
+    db $D4, $D4, $D4, $D4
 
 ; VBlank after a commit: playfield scroll -> ring columns / SCX, HUD split ->
 ; K rows, and the page signature (any change recomposes everything).
@@ -1404,6 +1418,15 @@ nes_fit_update_view:
     call nes_fit_map_nt
     ld [nes_fit_nsig + 5], a
 .cmp:
+    ld hl, nes_fit_sig
+    ld de, nes_fit_osig
+    ld b, 6
+.oc:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .oc
     ld hl, nes_fit_nsig
     ld de, nes_fit_sig
     ld b, 6
@@ -1552,6 +1575,8 @@ nes_fit_update_view.changed:
     ld a, [nes_fit_sig + 2]
     and a
     ret z
+    call nes_fit_hud_same
+    ret z
     ld d, 0
 .hr:
     ld e, 0
@@ -1571,6 +1596,96 @@ nes_fit_update_view.changed:
     ld a, [nes_fit_sig + 2]
     cp d
     jr nz, .hr
+    ret
+
+; HUD fields changed but the HUD may show the same bytes (SMB keeps its
+; status bar in both nametables and flips the HUD page as the world scrolls).
+; Both views page-aligned (x>>4 = 0): compare the K visible cell rows and
+; their attributes. Z = same (nothing to redraw).
+nes_fit_hud_same:
+    ld a, [nes_fit_osig + 3]
+    ld b, a
+    ld a, [nes_fit_sig + 3]
+    or b
+    and $0F
+    ret nz
+    ld hl, nes_fit_osig + 4
+    bit 4, b
+    jr z, .o
+    inc hl
+.o:
+    ld d, [hl]
+    ld hl, nes_fit_sig + 4
+    ld a, [nes_fit_sig + 3]
+    bit 4, a
+    jr z, .n
+    inc hl
+.n:
+    ld e, [hl]
+    ld a, d
+    cp e
+    ret z
+    ; tiles: K cell rows = 2K NES rows = K*64 bytes from each page start
+    ld a, [nes_fit_sig + 2]
+    ld c, a
+    ld a, $01
+    ldh [rSVBK], a
+    ld h, d
+    ld l, 0
+    ld d, e
+    ld e, 0
+.row:
+    ld b, 64
+.t:
+    ld a, [de]
+    cp [hl]
+    jr nz, .diff
+    inc l
+    inc e
+    dec b
+    jr nz, .t
+    ld a, l
+    and a
+    jr nz, .t2
+    inc h
+    inc d
+.t2:
+    dec c
+    jr nz, .row
+    ; attributes: ceil(K/2) rows of 8 at +$3C0
+    ld a, h
+    and $FC
+    add $03
+    ld h, a
+    ld a, d
+    and $FC
+    add $03
+    ld d, a
+    ld l, $C0
+    ld e, l
+    ld a, [nes_fit_sig + 2]
+    inc a
+    srl a
+    add a
+    add a
+    add a
+    ld b, a
+.a:
+    ld a, [de]
+    cp [hl]
+    jr nz, .diff
+    inc l
+    inc e
+    dec b
+    jr nz, .a
+    ld a, $07
+    ldh [rSVBK], a
+    xor a                 ; Z
+    ret
+.diff:
+    ld a, $07
+    ldh [rSVBK], a
+    or $FF                ; NZ
     ret
 
 ; VBlank PPUCTRL commit: sprite size only.
@@ -1669,6 +1784,12 @@ nes_fit_init:
     ld a, $FF
     ld [$2000], a
     call nes_fit_init_x
+    jp nes_restore_code_bank
+
+nes_fit_flush_early:
+    ld a, $FF
+    ld [$2000], a
+    call nes_fit_flush
     jp nes_restore_code_bank
 
 nes_fit_frame:
