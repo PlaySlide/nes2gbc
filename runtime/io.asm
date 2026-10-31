@@ -333,10 +333,18 @@ SECTION "NES pacing OAM snapshot", WRAM0[$CE00]
 nes_pace_oam:           ds $A0
 nes_pace_palette:       ds $40
 
+IF DEF(NES2GBC_STACK_HALF)
+SECTION "Host native stack reserve", WRAM0[$CF80]
+; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
+; 128 bytes; measured peak depth over the 280-run abcg sweep is 44 bytes.
+; $CF00-$CF7F is free for other state.
+nes_host_stack_reserve: ds $0080
+ELSE
 SECTION "Host native stack reserve", WRAM0[$CF00]
 ; LR35902 CALL/PUSH/interrupt stack. SP starts at $D000 and grows downward.
 ; 256 bytes; measured SMB peak depth is 28 bytes.
 nes_host_stack_reserve: ds $0100
+ENDC
 
 SECTION "NES palette RAM", WRAM0[$C830]
 nes_palette_ram: ds 32
