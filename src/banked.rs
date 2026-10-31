@@ -1257,6 +1257,7 @@ fn rts_return_candidates(views: &[(u8, ControlFlowGraph)]) -> BTreeMap<BlockId, 
     // Return sites per callee entry, counted once per distinct caller block.
     let mut sites: BTreeMap<u16, BTreeMap<u16, BTreeSet<BlockId>>> = BTreeMap::new();
     let weak = harvest_reached(views);
+    let same_bank = std::env::var("NES2GBC_RTS_SAME_BANK").map(|v| v != "0").unwrap_or(true);
     for (bank, g) in views {
         for (&pc, b) in &g.blocks {
             if weak.contains(&(*bank, pc)) {
@@ -1287,9 +1288,23 @@ fn rts_return_candidates(views: &[(u8, ControlFlowGraph)]) -> BTreeMap<BlockId, 
                 if b.instructions.last().map(|i| i.def.mnemonic) == Some(crate::cpu6502::Mnemonic::Rts) {
                     let slot = acc.entry(key(*bank, pc)).or_default();
                     for (&r, callers) in rets {
+                        // A JSR from $8000-$BFFF code of another bank to a
+                        // $8000-$BFFF entry runs that bank's routine, not this
+                        // view's: it cannot return through this RTS. Count only
+                        // fixed-bank callers and callers in this bank so such
+                        // phantom sites do not take guard slots
+                        // (opt-out NES2GBC_RTS_SAME_BANK=0).
+                        let n = if same_bank && entry < 0xC000 {
+                            callers.iter().filter(|c| !matches!(c, BlockId::Banked(cb, _) if cb != bank)).count()
+                        } else {
+                            callers.len()
+                        };
+                        if n == 0 {
+                            continue;
+                        }
                         let e = slot.entry(r).or_insert((usize::MAX, 0));
                         e.0 = e.0.min(dist);
-                        e.1 += callers.len();
+                        e.1 += n;
                     }
                 }
                 for e in &b.edges {
