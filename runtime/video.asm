@@ -296,6 +296,50 @@ nes_chr8_commit:
     ld a, [nes_mmc1_control]
     bit 4, a
     ret nz
+IF DEF(NES2GBC_CHR_DUAL_OBJ)
+    ; Status-bar split in 8 KiB mode (top bank != bottom bank): the resident
+    ; pair is the last (status bar) bank, but sprites are drawn over the
+    ; playfield above the split. Load the pattern table half the BG does not
+    ; use from the above-split 8 KiB bank instead (8x8 sprites need distinct
+    ; BG/OBJ tables; 8x16 sprites get their non-BG-table tiles fixed).
+    ld a, [nes_dual_obj]
+    and a
+    jr z, .no_obj
+    ld a, [nes_ppuctrl]
+    bit 5, a
+    jr nz, .obj_ok           ; 8x16: tiles from both tables; fix the non-BG one
+    and $18
+    jr z, .no_obj
+    cp $18
+    jr z, .no_obj
+.obj_ok:
+    push bc
+    push de
+    push hl
+    ld a, [nes_chr_bank]
+    add a
+    ld b, a
+    inc a
+    ld c, a                  ; default pair
+    ld a, [nes_dual_obj]
+    and $7E                  ; top 8 KiB bank * 2
+    ld e, a
+    ld a, [nes_ppuctrl]
+    bit 4, a                 ; OBJ half = the table the BG does not use
+    jr z, .obj1
+    ld b, e
+    jr .objgo
+.obj1:
+    inc e
+    ld c, e
+.objgo:
+    call nes_upload_chr_4k
+    pop hl
+    pop de
+    pop bc
+    ret
+.no_obj:
+ENDC
     ld a, [nes_chr_bank]
     add a
     push bc
@@ -2973,6 +3017,9 @@ nes_dual_tseen: ds 1 ; a CHR write was seen this NES frame
 nes_dual_s0:    ds 1 ; sprite-0 hit returned since the first CHR write
 nes_dual_bseen: ds 1 ; a CHR write followed the hit
 nes_dual_top:   ds 1 ; BG 4 KiB bank above the split
+IF DEF(NES2GBC_CHR_DUAL_OBJ)
+nes_dual_obj:   ds 1 ; $80|top 4 KiB BG bank when this frame had a split, else 0
+ENDC
 nes_dual_bot:   ds 1 ; BG 4 KiB bank below the split
 nes_dual_on:    ds 1 ; split switch wanted this frame
 nes_dual_line:  ds 1 ; NES split line (multiple of 8)
@@ -3049,6 +3096,9 @@ nes_dual_frame:
     ld [nes_dual_bseen], a
     ld [nes_dual_tseen], a
     ld [nes_dual_s0], a
+IF DEF(NES2GBC_CHR_DUAL_OBJ)
+    ld [nes_dual_obj], a
+ENDC
     ld a, [nes_chr_is_ram]
     and a
     jp nz, .off
@@ -3075,6 +3125,11 @@ nes_dual_frame:
 .lineok:
     and $F8
     ld [nes_dual_line], a
+IF DEF(NES2GBC_CHR_DUAL_OBJ)
+    ld a, b
+    or $80
+    ld [nes_dual_obj], a     ; split frame: 4 KiB BG bank above the split
+ENDC
     ld a, [nes_ppuctrl]
     and $10
     swap a
