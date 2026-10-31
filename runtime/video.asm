@@ -187,6 +187,11 @@ IF DEF(NES2GBC_FIT)
     ld d, 1
     call nes_fit_note_half
 ENDC
+IF DEF(NES2GBC_FIT_WIDE)
+    ; FIT_WIDE: only the sprite pattern table, split over both banks' $8000.
+    call nes_fit_sprite_copy
+    jr .fitw_copied
+ENDC
 
     xor a
     ldh [rVBK], a
@@ -201,6 +206,9 @@ ENDC
     ld de, $8000
     ld bc, $1000
     call nes_video_copy
+IF DEF(NES2GBC_FIT_WIDE)
+.fitw_copied:
+ENDC
 
     xor a
     ldh [rVBK], a
@@ -359,6 +367,10 @@ IF DEF(NES2GBC_FIT)
     ld a, [nes_chr_gbc_bank_base]
     add b
     call nes_fit_note_half
+ENDC
+IF DEF(NES2GBC_FIT_WIDE)
+    ld a, d
+    jp nes_fit_half_changed
 ENDC
     ld de, $8000
     ld bc, $1000
@@ -2006,6 +2018,22 @@ ENDC
     ; Source X and viewport crop.
     ld a, [hli]
 IF DEF(NES2GBC_FIT)
+IF DEF(NES2GBC_FIT_WIDE)
+    ; FIT_WIDE: X*5/8 ~ (X>>1)+(X>>3), no letterbox columns; an H-flipped
+    ; 5-px crumb shows in columns 3-7.
+    srl a
+    ld c, a
+    srl a
+    srl a
+    add c
+    add 8
+    ld c, a
+    ldh a, [nes_sprite_attr_tmp]
+    bit 6, a
+    ld a, c
+    jr z, .fit_x_ok
+    sub 3
+ELSE
     ; 16 columns of letterbox; an H-flipped shrunk tile shows in columns 4-7.
     srl a
     add 16 + 8
@@ -2015,6 +2043,7 @@ IF DEF(NES2GBC_FIT)
     ld a, c
     jr z, .fit_x_ok
     sub 4
+ENDC
 .fit_x_ok:
     ldh [nes_oam_proj_x_tmp], a
 ELSE
@@ -2045,11 +2074,19 @@ ENDC
 
     ldh a, [nes_view_sprite_tile_tmp]
     ld c, a
+IF DEF(NES2GBC_FIT_WIDE)
+    and $7E
+ELSE
     and $FE
+ENDC
     ld [de], a
     inc de
 
+IF DEF(NES2GBC_FIT_WIDE)
+    bit 7, c
+ELSE
     bit 0, c
+ENDC
     ld a, $00
     jr z, .bank_ready
     ld a, $08
@@ -2057,10 +2094,24 @@ ENDC
 
 .sprite_8x8:
     ldh a, [nes_view_sprite_tile_tmp]
+IF DEF(NES2GBC_FIT_WIDE)
+    ; FIT_WIDE: the sprite table's tiles 0-127 / 128-255 sit in bank 0 / 1.
+    ld c, a
+    and $7F
+    ld [de], a
+    inc de
+    ld a, c
+    rlca
+    and $01
+    rlca
+    rlca
+    rlca
+ELSE
     ld [de], a
     inc de
     ldh a, [nes_oam_ppuctrl_tmp]
     and $08
+ENDC
 
 .bank_ready:
     ldh [nes_sprite_bank_tmp], a

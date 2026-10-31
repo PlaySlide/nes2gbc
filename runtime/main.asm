@@ -997,6 +997,11 @@ ENDC
 ; Return A=1 while this helper owns the host frame and the caller must RETI
 ; without publishing new scroll/control state. Return A=0 for the normal path.
 nes_gbc_prepare_initial_hstitch_hidden_step:
+IF DEF(NES2GBC_FIT_WIDE)
+    ; FIT_WIDE owns $9C00 (static slot map): never build a hidden stitch.
+    xor a
+    ret
+ENDC
     ; Only the already-observed SMB hardware shape uses this experiment.
     ld a, [nes_hstitch_seen]
     and a
@@ -1438,7 +1443,9 @@ INCLUDE "profile.asm"
 INCLUDE "cpu.asm"
 INCLUDE "ppu.asm"
 INCLUDE "video.asm"
-IF DEF(NES2GBC_FIT)
+IF DEF(NES2GBC_FIT_WIDE)
+INCLUDE "fitw.asm"
+ELIF DEF(NES2GBC_FIT)
 INCLUDE "fit.asm"
 ENDC
 INCLUDE "input.asm"

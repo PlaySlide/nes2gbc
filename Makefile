@@ -63,14 +63,15 @@ generate:
 	@if [ "$${NES2GBC_CHR4K_LAZY:-1}" != "0" ]; then echo 'DEF NES2GBC_CHR4K_LAZY EQU 1 ; MMC1 4 KiB CHR: defer visible uploads to NES frame start, keep the bank live at NMI entry (opt out: NES2GBC_CHR4K_LAZY=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_CHR8K_LAZY:-1}" != "0" ]; then echo 'DEF NES2GBC_CHR8K_LAZY EQU 1 ; MMC1 8 KiB CHR: defer uploads made with NMI on to NMI entry (opt out: NES2GBC_CHR8K_LAZY=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(FIT_SCREEN)" = "1" ]; then echo 'DEF NES2GBC_FIT EQU 1 ; make generate FIT_SCREEN=1: shrink the NES 256x240 screen to 128x120 (opt-in)' >> runtime/generated_config.inc; fi
+	@if [ "$(FIT_SCREEN)" = "1" ] && [ "$(FIT_WIDE)" = "1" ]; then echo 'DEF NES2GBC_FIT_WIDE EQU 1 ; make generate FIT_SCREEN=1 FIT_WIDE=1: 160x120 (X 5/8, Y 1/2) instead of 128x120 (opt-in)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_CHR_DUAL:-1}" != "0" ] && [ "$(FIT_SCREEN)" != "1" ]; then echo 'DEF NES2GBC_CHR_DUAL EQU 1 ; MMC1: keep the above-split BG CHR bank at $$9000 and switch LCDC.4 at the split (opt out: NES2GBC_CHR_DUAL=0)' >> runtime/generated_config.inc; fi
 	@if [ "$${NES2GBC_HALT_IDLE:-1}" != "0" ]; then echo 'DEF NES2GBC_HALT_IDLE EQU 1 ; idle-spin HALT/early NMI (opt out: NES2GBC_HALT_IDLE=0)' >> runtime/generated_config.inc; fi
 	@if [ "$(CATCHUP)" = "1" ]; then echo 'DEF NES2GBC_CATCHUP EQU 1 ; make generate CATCHUP=1' >> runtime/generated_config.inc; \
 		echo 'DEF NES2GBC_CATCHUP_MAX EQU $(CATCHUP_MAX)' >> runtime/generated_config.inc; fi
 	@if [ -n "$(MAX_BLOCKS)" ]; then \
-		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" $(if $(filter 1,$(FIT_SCREEN)),NES2GBC_FIT=1,) cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" $(if $(filter 1,$(FIT_SCREEN)),NES2GBC_FIT=1 $(if $(filter 1,$(FIT_WIDE)),NES2GBC_FIT_WIDE=1,),) cargo run -- "$(ROM)" --emit-asm runtime/generated.asm --max-blocks "$(MAX_BLOCKS)" $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	else \
-		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" $(if $(filter 1,$(FIT_SCREEN)),NES2GBC_FIT=1,) cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
+		NES2GBC_REGALLOC="$(REGALLOC)" NES2GBC_APU="$(APU)" NES2GBC_RTS_PROFILE="$(RTS_PROFILE)" $(if $(filter 1,$(FIT_SCREEN)),NES2GBC_FIT=1 $(if $(filter 1,$(FIT_WIDE)),NES2GBC_FIT_WIDE=1,),) cargo run -- "$(ROM)" --emit-asm runtime/generated.asm $(if $(filter 1,$(TRACE)),--debug-trace,); \
 	fi
 	@if [ "$${NES2GBC_ENTRY_SP_EARLY:-1}" = "0" ]; then echo 'DEF NES2GBC_ENTRY_SP_EARLY_OFF EQU 1 ; restore the old NMI delivery order (opt-out for NES2GBC_ENTRY_SP_EARLY=0)' >> runtime/generated_config.inc; fi
 	@n=$$(sed -n 's/^; NES2GBC_ADDR_SCROLL \([0-9]*\)$$/\1/p' runtime/generated.asm | head -1); if [ -n "$$n" ]; then echo "DEF NES2GBC_ADDR_SCROLL EQU $$n ; mid-frame PPUADDR scroll, HUD lines (data/addr_scroll.txt)" >> runtime/generated_config.inc; fi
@@ -90,7 +91,7 @@ generate:
 		python3 tools/tighten_stack_generated.py runtime/generated.asm; \
 		python3 tools/shrink_compare_generated.py runtime/generated.asm; \
 		python3 tools/hot_alu_generated.py runtime/generated.asm; \
-		if [ "$(FIT_SCREEN)" = "1" ]; then python3 tools/fast_oam_dma_generated.py --fit runtime/generated.asm; else python3 tools/fast_oam_dma_generated.py runtime/generated.asm; fi; \
+		if [ "$(FIT_SCREEN)" = "1" ]; then python3 tools/fast_oam_dma_generated.py --fit $(if $(filter 1,$(FIT_WIDE)),--wide,) runtime/generated.asm; else python3 tools/fast_oam_dma_generated.py runtime/generated.asm; fi; \
 		python3 tools/route_ppu_write_data.py runtime/generated.asm runtime/generated_config.inc; \
 		python3 tools/lazy_overflow_updates.py runtime/generated.asm; \
 		python3 tools/fold_fixed_prg_reads.py runtime/generated.asm "$(ROM)"; \

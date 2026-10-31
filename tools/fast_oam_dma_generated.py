@@ -25,6 +25,7 @@ def code(line: str) -> str:
     return line.split(";", 1)[0].strip()
 
 FIT = False
+WIDE = False
 
 
 def fit8(i: int) -> tuple:
@@ -58,6 +59,76 @@ def fit8(i: int) -> tuple:
         f'    ld a, [nes_oam_ram + ${4 * i + 1:02X}] ; tile\n',
         '    ld [de], a\n',
         '    inc e\n',
+        '    ld a, [hl]\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+    )
+
+
+def fitw_x(i: int, tag: str) -> tuple:
+    """FIT_WIDE X: (X>>1) + (X>>3) ~ X*5/8, no side bars; an H-flipped 5-px
+    crumb shows in columns 3-7."""
+    return (
+        f'    ld a, [nes_oam_ram + ${4 * i + 3:02X}] ; X\n',
+        '    srl a\n',
+        '    ld b, a\n',
+        '    srl a\n',
+        '    srl a\n',
+        '    add b\n',
+        '    add 8\n',
+        '    bit 6, l\n',
+        f'    jr z, .fxw{tag}_{i}\n',
+        '    sub 3\n',
+        f'.fxw{tag}_{i}:\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+    )
+
+
+def fitw8(i: int) -> tuple:
+    """FIT_WIDE 8x8: the sprite pattern table is split 128/128 over the two
+    VRAM banks' $8000-$87FF: tile bit 7 picks the bank."""
+    base = fit8(i)
+    ycut = base.index('    ld [de], a\n') + 2
+    return base[:ycut] + fitw_x(i, '8') + (
+        f'    ld a, [nes_oam_ram + ${4 * i + 1:02X}] ; tile\n',
+        '    call nes_fitw_oam_tile\n',
+    )
+
+
+FITW_TILE_HELPER = (
+    '\nSECTION "Generated fitw OAM tile", ROM0\n'
+    'nes_fitw_oam_tile:\n'
+    '    ld b, a\n'
+    '    and $7F\n'
+    '    ld [de], a\n'
+    '    inc e\n'
+    '    ld a, b\n'
+    '    rlca\n'
+    '    and $01\n'
+    '    add HIGH(nes_oam_attr_table)\n'
+    '    ld h, a\n'
+    '    ld a, [hl]\n'
+    '    ld [de], a\n'
+    '    inc e\n'
+    '    ret\n'
+)
+
+
+def fitw16(i: int) -> tuple:
+    base = fit16(i)
+    xcut = base.index(f'    ld a, [nes_oam_ram + ${4 * i + 3:02X}] ; X\n')
+    return base[:xcut] + fitw_x(i, '16') + (
+        f'    ld a, [nes_oam_ram + ${4 * i + 1:02X}] ; tile\n',
+        '    ld h, a\n',
+        '    and $7E\n',
+        '    ld [de], a\n',
+        '    inc e\n',
+        '    ld a, h\n',
+        '    rlca\n',
+        '    and $01\n',
+        '    add HIGH(nes_oam_attr_table)\n',
+        '    ld h, a\n',
         '    ld a, [hl]\n',
         '    ld [de], a\n',
         '    inc e\n',
@@ -187,7 +258,7 @@ def helper() -> str:
         '    ldh a, [nes_view_x]\n',
         '    ld b, a\n',
     ] + [
-        line for i in range(64) for line in (fit8(i) if FIT else (
+        line for i in range(64) for line in ((fitw8(i) if WIDE else fit8(i)) if FIT else (
             f'    ld a, [nes_oam_ram + ${4 * i:02X}] ; Y\n',
             '    cp $EF\n',
             f'    jr nc, .n8_{i}\n',
@@ -293,6 +364,8 @@ def helper() -> str:
         "    ret\n",
     ])
     out.append(attr_table())
+    if FIT and WIDE:
+        out.append(FITW_TILE_HELPER)
     out.append(scan16_romx())
     return "".join(out)
 
@@ -306,7 +379,7 @@ def scan16_romx() -> str:
         '    ldh a, [nes_view_x]\n',
         '    ld b, a\n',
     ] + [
-        line for i in range(64) for line in (fit16(i) if FIT else (
+        line for i in range(64) for line in ((fitw16(i) if WIDE else fit16(i)) if FIT else (
             f'    ld a, [nes_oam_ram + ${4 * i:02X}] ; Y\n',
             '    cp $EF\n',
             f'    jr nc, .s16_{i}\n',
@@ -404,9 +477,11 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("asm", type=Path)
     p.add_argument("--fit", action="store_true", help="FIT_SCREEN half-size projection")
+    p.add_argument("--wide", action="store_true", help="with --fit: FIT_WIDE 160x120 projection")
     args = p.parse_args()
-    global FIT
+    global FIT, WIDE
     FIT = args.fit
+    WIDE = args.fit and args.wide
 
     lines = args.asm.read_text(encoding="utf-8").splitlines(keepends=True)
     rewritten = optimize(lines)

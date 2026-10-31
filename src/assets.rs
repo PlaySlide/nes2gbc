@@ -64,3 +64,49 @@ pub fn convert_chr_to_gbc_fit(chr: &[u8]) -> Vec<u8> {
     }
     out
 }
+
+/// FIT_WIDE: shrink every NES tile to a 5x4 crumb (top-left of an 8x8 CGB
+/// tile, columns 5-7 and rows 4-7 transparent) for the 160x120 view. Rows pair
+/// up as in `fit_shrink_tile`; columns fall in the floor(x*5/8) bins
+/// {0,1} {2,3} {4} {5,6} {7}, the left pixel of a pair winning if opaque. The
+/// runtime's CHR-RAM path (`nes_fit_shrink_tile`, wide) uses the same rule.
+pub fn fit_shrink_tile_wide(tile: &[u8]) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    for r in 0..4 {
+        let (a, b) = (2 * r, 2 * r + 1);
+        let na = tile[a] | tile[a + 8];
+        let lo = tile[a] | (tile[b] & !na);
+        let hi = tile[a + 8] | (tile[b + 8] & !na);
+        let m = fit_wide_mask(lo | hi);
+        out[2 * r] = fit_wide_pack(lo & m);
+        out[2 * r + 1] = fit_wide_pack(hi & m);
+    }
+    out
+}
+
+/// Pixels kept from a row with opacity `n` (bit 7 = left pixel).
+pub fn fit_wide_mask(n: u8) -> u8 {
+    let mut m = 0x08 | 0x01;
+    m |= if n & 0x80 != 0 { 0x80 } else { 0x40 };
+    m |= if n & 0x20 != 0 { 0x20 } else { 0x10 };
+    m |= if n & 0x04 != 0 { 0x04 } else { 0x02 };
+    m
+}
+
+/// Masked row (at most one bit per bin) -> bins packed into bits 7..3.
+pub fn fit_wide_pack(x: u8) -> u8 {
+    let bit = |mask: u8, out: u8| if x & mask != 0 { out } else { 0 };
+    bit(0xC0, 0x80) | bit(0x30, 0x40) | bit(0x08, 0x20) | bit(0x06, 0x10) | bit(0x01, 0x08)
+}
+
+pub fn convert_chr_to_gbc_fit_wide(chr: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(chr.len());
+    for tile in chr.chunks(16) {
+        if tile.len() < 16 {
+            out.extend(std::iter::repeat(0).take(tile.len()));
+            continue;
+        }
+        out.extend_from_slice(&fit_shrink_tile_wide(tile));
+    }
+    out
+}
