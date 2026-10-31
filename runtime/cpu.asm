@@ -359,6 +359,35 @@ nes_isr_save_pc:
 ; Called at the very end of the VBlank ISR (see main.asm). Runs from helper
 ; bank $FF and leaves the ROM bank the interrupted code had selected.
 nes_isr_fix_bank:
+IF DEF(NES2GBC_ISR_FAST_ROMX)
+    ; Common case: the interrupt hit translated code running in ROMX from the
+    ; code bank. Verify that bank against the bytes saved at ISR entry and
+    ; skip the bank-$FF stack walk when they match.
+    ld hl, sp + 12          ; interrupted PC (as in the slow path below)
+    ld a, [hli]
+    ld h, [hl]
+    ld l, a
+    ld a, h
+    sub $40
+    cp $40
+    jr nc, .slow
+    ldh a, [nes_current_code_bank]
+    ld [$2000], a
+    ld b, a
+    ld de, nes_isr_pcb
+    ld c, 8
+.fast_cmp:
+    ld a, [de]
+    cp [hl]
+    jr nz, .slow
+    inc hl
+    inc de
+    dec c
+    jr nz, .fast_cmp
+    ld a, b
+    ret
+.slow:
+ENDC
     ld a, $FF
     ld [$2000], a
     call nes_isr_fix_bank_romx
