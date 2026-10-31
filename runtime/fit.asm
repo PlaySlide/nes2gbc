@@ -1718,14 +1718,19 @@ nes_fit_display:
     ld a, [nes_fit_sig + 2]
     and a
     jr z, .ring
-    ldh a, [rLY]
-    cp 144
-    jr c, .ring           ; late: no HUD split this frame
-    ld a, [nes_fit_sig + 2]
     add a
     add a
     add a
     add 11
+    ld c, a
+    ldh a, [rLY]
+    cp 144
+    jr nc, .hud_ok
+    add 2
+    cp c
+    jr nc, .ring          ; past the split line: no HUD split this frame
+.hud_ok:
+    ld a, c
     ldh [rLYC], a
     ld a, b
     or $08
