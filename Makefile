@@ -188,6 +188,7 @@ generate:
 			python3 tools/tighten_ram_test.py runtime/generated.asm; \
 			python3 tools/redundant_zero_test.py runtime/generated.asm; \
 			python3 tools/page_aligned_index.py runtime/generated.asm; \
+			python3 tools/fast_strided_fill.py runtime/generated.asm; \
 		fi; \
 		# TRACE and partial POSTPASS_THROUGH builds also expand generated blocks. \
 		# Normalize short/long NES-label jumps after the final selected pass so \
