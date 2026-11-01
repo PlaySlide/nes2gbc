@@ -443,8 +443,19 @@ fn emit_block(
         // rest take nes_dispatch_hl exactly as before.
         let tail = "    inc hl\n    jp nes_dispatch_hl\n";
         if out[body_start..].ends_with(tail) {
+            let max_guards: usize = std::env::var("NES2GBC_RTS_GUARDS").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
+            // Fan-out RTS (more candidates than guards): keep only the first
+            // NES2GBC_RTS_TABLE_KEEP guards and mark the fallback for the
+            // hashed return table (tools/rts_dispatch_table.py).
+            let table = rts_guard.len() > max_guards;
+            let chain = if table {
+                let keep: usize = std::env::var("NES2GBC_RTS_TABLE_KEEP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+                &rts_guard[..keep.min(max_guards)]
+            } else {
+                rts_guard
+            };
             let mut g = String::from("    inc hl\n");
-            for &r in rts_guard {
+            for &r in chain {
                 writeln!(g, "    ld a, l ; m2 RTS guard ${r:04X}").unwrap();
                 writeln!(g, "    cp ${:02X}", r as u8).unwrap();
                 writeln!(g, "    jr nz, :+").unwrap();
@@ -455,6 +466,10 @@ fn emit_block(
                 writeln!(g, "    ld hl, nes_{r:04X}").unwrap();
                 writeln!(g, "    jp nes_jump_known_hl_a").unwrap();
                 writeln!(g, ":").unwrap();
+            }
+            if table {
+                let l: Vec<String> = rts_guard.iter().map(|r| format!("${r:04X}")).collect();
+                writeln!(g, "    ; m2 RTS table {}", l.join(" ")).unwrap();
             }
             g.push_str("    jp nes_dispatch_hl\n");
             let cut = out.len() - tail.len();
@@ -1094,7 +1109,11 @@ pub fn emit_mapper2_cfgs(
                     cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
-            (k, v.into_iter().filter(|r| labels.contains(r)).take(max_guards).collect::<Vec<u16>>())
+            // With NES2GBC_RTS_TABLE (default on) every candidate is kept: the
+            // emitter guards the first max_guards and, past that, hands the
+            // full list to tools/rts_dispatch_table.py as a hashed table.
+            let keep = if rts_table_on() { usize::MAX } else { max_guards };
+            (k, v.into_iter().filter(|r| labels.contains(r)).take(keep).collect::<Vec<u16>>())
         })
         .filter(|(_, v)| !v.is_empty())
         .collect();
@@ -1245,6 +1264,11 @@ pub fn emit_mapper2_cfgs(
     emit_dispatch_tables(&mut out, &addresses);
 
     out
+}
+
+/// Hashed RTS return tables for fan-out RTS blocks (opt-out NES2GBC_RTS_TABLE=0).
+fn rts_table_on() -> bool {
+    std::env::var("NES2GBC_RTS_TABLE").map(|v| v != "0").unwrap_or(true)
 }
 
 /// Likely RTS continuations per RTS-terminated block: the return sites
