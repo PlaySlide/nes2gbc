@@ -1849,6 +1849,10 @@ IF DEF(NES2GBC_NMI_NEST)
 ENDC
     xor a
     ld [nes_nmi_active], a
+IF DEF(NES2GBC_APU) && DEF(NES2GBC_APU_DEFER_FLUSH)
+    ; Coalesce GB channel updates from this NMI's APU register writes.
+    call nes_apu_flush
+ENDC
 IF !DEF(NES2GBC_NO_PACING)
     ; This NES frame is complete but not yet published. If a host VBlank
     ; already elapsed while it ran, let the next NMI start right away.

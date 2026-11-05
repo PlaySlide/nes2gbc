@@ -36,6 +36,14 @@ nes_apu_sweep_div_p2:    ds 1
 nes_apu_sweep_reload_p2: ds 1
 ; Approximate NES frame-counter phase. 4-step uses 0..3, 5-step uses 0..4.
 nes_apu_frame_phase: ds 1
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+; Per-channel GB-hardware dirty bits (0=p1,1=p2,2=tri,3=noi). Register writes
+; update shadow/software state only and set these; nes_apu_flush pushes them
+; to the GB APU once per NMI.
+nes_apu_dirty: ds 1
+; Like dirty, but the channel needs a phase-reset trigger (length $4003/etc).
+nes_apu_trig:  ds 1
+ENDC
 
 ; The APU bridge is ROM0 (boot-only init moved to helper bank $FF makes room),
 ; so APU register writes never switch ROM banks. The frame sequencer runs once
@@ -48,6 +56,11 @@ nes_apu_nes_frame:
     push bc
     push de
     push hl
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ; Apply any GB-channel updates queued outside the previous NMI before the
+    ; frame sequencer samples shadow state / length counters.
+    call nes_apu_flush
+ENDC
     ld a, BANK(nes_apu_nes_frame_romx)
     ld [$2000], a
     xor a
@@ -58,6 +71,125 @@ nes_apu_nes_frame:
     pop de
     pop bc
     ret
+
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+; Push dirty/trig shadow channels to the GB APU. Preserves BC/DE/HL.
+nes_apu_flush:
+    ld a, [nes_apu_dirty]
+    ld hl, nes_apu_trig
+    or [hl]
+    ret z
+    push bc
+    push de
+    push hl
+    ld a, [nes_apu_trig]
+    ld b, a
+    ld a, [nes_apu_dirty]
+    ld c, a
+    xor a
+    ld [nes_apu_dirty], a
+    ld [nes_apu_trig], a
+    bit 0, b
+    jr nz, .p1_trig
+    bit 0, c
+    jr z, .p2
+    call nes_apu_sync_p1
+    jr .p2
+.p1_trig:
+    call nes_apu_trigger_p1
+.p2:
+    bit 1, b
+    jr nz, .p2_trig
+    bit 1, c
+    jr z, .tri
+    call nes_apu_sync_p2
+    jr .tri
+.p2_trig:
+    call nes_apu_trigger_p2
+.tri:
+    bit 2, b
+    jr nz, .tri_sync
+    bit 2, c
+    jr z, .noi
+.tri_sync:
+    call nes_apu_sync_tri
+.noi:
+    bit 3, b
+    jr nz, .noi_trig
+    bit 3, c
+    jr z, .done
+    call nes_apu_sync_noi
+    jr .done
+.noi_trig:
+    ld a, [nes_apu_regs + $15]
+    and $08
+    jr z, .noi_mute
+    ld a, [nes_apu_len_noi]
+    and a
+    jr z, .noi_mute
+    call nes_apu_start_noi
+    jr .done
+.noi_mute:
+    xor a
+    ldh [rNR42], a
+.done:
+    pop hl
+    pop de
+    pop bc
+    ret
+
+; Freq + duty + refresh without phase reset (non-trigger dirty pulse).
+nes_apu_sync_p1:
+    call nes_apu_load_p1_timer_bc
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR13], a
+    ld a, d
+    and $07
+    ldh [rNR14], a
+    ld a, [nes_apu_regs + $00]
+    and $C0
+    ldh [rNR11], a
+    jp nes_apu_refresh_p1
+
+nes_apu_sync_p2:
+    call nes_apu_load_p2_timer_bc
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR23], a
+    ld a, d
+    and $07
+    ldh [rNR24], a
+    ld a, [nes_apu_regs + $04]
+    and $C0
+    ldh [rNR21], a
+    jp nes_apu_refresh_p2
+
+nes_apu_sync_tri:
+    ld a, [nes_apu_regs + $15]
+    and $04
+    jr nz, .on
+    xor a
+    ldh [rNR30], a
+    ret
+.on:
+    ld a, [nes_apu_regs + $0A]
+    ld c, a
+    ld a, [nes_apu_regs + $0B]
+    and $07
+    ld b, a
+    call nes_apu_timer_to_period
+    ld a, e
+    ldh [rNR33], a
+    ld a, d
+    and $07
+    ldh [rNR34], a
+    jp nes_apu_apply_triangle_gate
+
+nes_apu_sync_noi:
+    call nes_apu_write_noise_period
+    jp nes_apu_refresh_noi
+ENDC
 
 ; ---------------------------------------------------------------------------
 nes_apu_read_status:
@@ -421,6 +553,24 @@ nes_apu_update_pulse1:
     ld hl, nes_apu_len_p1
     call nes_apu_load_length
 .dispatch:
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_write_idx]
+    cp $01
+    jr nz, .p1_dirty
+    ld a, $01
+    ld [nes_apu_sweep_reload_p1], a
+.p1_dirty:
+    ld a, [nes_apu_dirty]
+    set 0, a
+    ld [nes_apu_dirty], a
+    ld a, [nes_apu_write_idx]
+    cp $03
+    ret nz
+    ld a, [nes_apu_trig]
+    set 0, a
+    ld [nes_apu_trig], a
+    ret
+ELSE
     ld a, [nes_apu_write_idx]
     cp $00
     jr z, .volume
@@ -451,6 +601,7 @@ nes_apu_update_pulse1:
     jp nes_apu_refresh_p1
 .trigger:
     jp nes_apu_trigger_p1
+ENDC
 
 ; ---------------------------------------------------------------------------
 ; Pulse 2 -> GBC square 2.
@@ -466,6 +617,24 @@ nes_apu_update_pulse2:
     ld hl, nes_apu_len_p2
     call nes_apu_load_length
 .dispatch:
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_write_idx]
+    cp $05
+    jr nz, .p2_dirty
+    ld a, $01
+    ld [nes_apu_sweep_reload_p2], a
+.p2_dirty:
+    ld a, [nes_apu_dirty]
+    set 1, a
+    ld [nes_apu_dirty], a
+    ld a, [nes_apu_write_idx]
+    cp $07
+    ret nz
+    ld a, [nes_apu_trig]
+    set 1, a
+    ld [nes_apu_trig], a
+    ret
+ELSE
     ld a, [nes_apu_write_idx]
     cp $04
     jr z, .volume
@@ -496,6 +665,7 @@ nes_apu_update_pulse2:
     jp nes_apu_refresh_p2
 .trigger:
     jp nes_apu_trigger_p2
+ENDC
 
 ; ---------------------------------------------------------------------------
 ; Triangle → Wave (NR30–NR34)
@@ -516,6 +686,13 @@ nes_apu_update_triangle:
     ld a, $01
     ld [nes_apu_tri_reload], a
 .no_preload:
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ; Software state is current; queue the GB wave channel once at flush.
+    ld a, [nes_apu_dirty]
+    set 2, a
+    ld [nes_apu_dirty], a
+    ret
+ELSE
     ld a, [nes_apu_regs + $15]
     and $04
     jr nz, .chan_on
@@ -553,6 +730,7 @@ nes_apu_update_triangle:
     and $07
     ldh [rNR34], a                 ; frequency update only; no phase reset
     jp nes_apu_apply_triangle_gate
+ENDC
 
 ; Gate GB wave output from the NES triangle's two counters. NES triangle phase
 ; freezes while either counter is zero. GB CH3 cannot reproduce that perfectly,
@@ -667,6 +845,18 @@ nes_apu_update_noise:
     ld hl, nes_apu_len_noi
     call nes_apu_load_length
 .dispatch:
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_dirty]
+    set 3, a
+    ld [nes_apu_dirty], a
+    ld a, [nes_apu_write_idx]
+    cp $0F
+    ret nz
+    ld a, [nes_apu_trig]
+    set 3, a
+    ld [nes_apu_trig], a
+    ret
+ELSE
     ld a, [nes_apu_write_idx]
     cp $0C
     jr z, .volume
@@ -694,6 +884,7 @@ nes_apu_update_noise:
     xor a
     ldh [rNR42], a
     ret
+ENDC
 
 ; ---------------------------------------------------------------------------
 ; $4015: channel enables. Clearing a bit clears that channel's length counter;
@@ -1230,7 +1421,11 @@ ENDC
 ; ---------------------------------------------------------------------------
 nes_apu_init_banked:
     ld hl, nes_apu_regs
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld b, $18 + 14         ; register mirror + APU architectural state (incl. dirty/trig)
+ELSE
     ld b, $18 + 13         ; register mirror + APU architectural state + tick count
+ENDC
     xor a
 .clear:
     ld [hli], a
