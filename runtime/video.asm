@@ -299,6 +299,23 @@ nes_chr4_commit:
     ld b, a
     ld a, [nes_chr4_want1]
     ld c, a
+IF DEF(NES2GBC_CHR_DUAL) && DEF(NES2GBC_CHR_DUAL_STICKY)
+    ; Dual split keeps the below-split bank in the BG pattern-table VRAM half
+    ; ($8000 of that CGB bank) and the above-split bank at $9000 via GDMA.
+    ; Do not let a deferred want for the status-bar bank wipe the playfield.
+    ld a, [nes_dual_on]
+    and a
+    jr z, .no_dual_bot
+    ld a, [nes_ppuctrl]
+    and $10
+    ld a, [nes_dual_bot]
+    jr z, .dual_bg0
+    ld c, a
+    jr .no_dual_bot
+.dual_bg0:
+    ld b, a
+.no_dual_bot:
+ENDC
     call nes_upload_chr_4k
     pop hl
     pop de
@@ -3188,7 +3205,19 @@ ENDC
     jp nz, .off
     ld a, c
     and a
+IF DEF(NES2GBC_CHR_DUAL_STICKY)
+    jr nz, .have_bot
+    ; Lagging hosts can miss the post-sprite0 CHR write that marks the
+    ; below-split bank. Keep last frame's split rather than falling back to a
+    ; single LCDC.4=1 screen (Ninja Gaiden A: HUD font bank fills the playfield).
+    ld a, [nes_dual_on]
+    and a
+    jp nz, .out
+    jp .off
+.have_bot:
+ELSE
     jp z, .off
+ENDC
     ld a, [nes_dual_top]
     ld b, a
     ld a, [nes_dual_bot]
