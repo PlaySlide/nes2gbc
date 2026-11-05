@@ -996,11 +996,18 @@ IF DEF(NES2GBC_PAL_SAME_SKIP)
     ld a, [hl]
     cp d
     jr nz, .pal_changed
-    ; Keep the VBlank palette commit as before: skipping it shortens the
-    ; VBlank ISR enough to expose a timing-dependent fault in Rad Racer (G).
+IF DEF(NES2GBC_PAL_LAZY_COMMIT)
+    ; Shadow already matches the last committed hardware palette. Skipping the
+    ; redundant VBlank upload is the point of PAL_SAME_SKIP; the old always-
+    ; dirty padding existed to hide a Rad Racer NMI/stack race (k9), which
+    ; SPIN_KEEP_DEEP later fixed. Opt out with NES2GBC_PAL_LAZY_COMMIT=0.
+    jp nes_ppu_increment_addr
+ELSE
+    ; Legacy: keep the VBlank palette commit even when the shadow is unchanged.
     ld a, $01
     ldh [nes_palette_dirty], a
     jp nes_ppu_increment_addr
+ENDC
 .pal_changed:
     ld [hl], d
     ld a, l
