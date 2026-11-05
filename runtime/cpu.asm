@@ -436,8 +436,19 @@ nes_isr_save_pc:
     ld a, [hli]
     ld h, [hl]
     ld l, a
-    ld de, nes_isr_pcb      ; copied unconditionally; only used if PC is ROMX
+IF DEF(NES2GBC_ISR_SAVE_ROMX)
+    ; Restore only compares PCB when PC is in ROMX; skip the copy otherwise.
+    ld a, h
+    sub $40
+    cp $40
+    ret nc
+ENDC
+    ld de, nes_isr_pcb      ; bytes at interrupted ROMX PC (bank still mapped)
+IF DEF(NES2GBC_ISR_PCB6)
+    ld b, 6
+ELSE
     ld b, 8
+ENDC
 .save:
     ld a, [hli]
     ld [de], a
@@ -465,7 +476,11 @@ IF DEF(NES2GBC_ISR_FAST_ROMX)
     ld [$2000], a
     ld b, a
     ld de, nes_isr_pcb
+IF DEF(NES2GBC_ISR_PCB6)
+    ld c, 6
+ELSE
     ld c, 8
+ENDC
 .fast_cmp:
     ld a, [de]
     cp [hl]
@@ -493,7 +508,11 @@ ENDC
     ld a, b
     ret nc                  ; interrupted PC not in ROMX
     ld de, nes_isr_pcb
+IF DEF(NES2GBC_ISR_PCB6)
+    ld c, 6
+ELSE
     ld c, 8
+ENDC
 .cmp:
     ld a, [de]
     cp [hl]
