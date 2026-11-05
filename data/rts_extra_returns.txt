@@ -3,3 +3,7 @@
 # Opt-out: NES2GBC_NO_RTS_EXTRA=1
 # Hot EF8B returns (incl. newly stubbed bank0E entries via code_entries).
 0fcfc04d EF8B AFD9 AFDF AFA1 AE49 AE4C AE7A AE9E AEEF
+# Fake-JSR $9290 JMP($0008)->AFA1|AE49 resumes at $9299 via:
+#   AFA1 path: RTS AFDF; AE49 path: RTS AF4B (not AF68).
+0fcfc04d AFDF 9299
+0fcfc04d AF4B 9299
