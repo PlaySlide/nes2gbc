@@ -1212,12 +1212,26 @@ nes_apu_clock_triangle_linear:
     ld a, c
     and a
     ret nz                          ; non-zero -> non-zero: gate unchanged
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_dirty]
+    set 2, a
+    ld [nes_apu_dirty], a
+    ret
+ELSE
     jp nes_apu_apply_triangle_gate
+ENDC
 .now_zero:
     ld a, c
     and a
     ret z                           ; zero -> zero: gate unchanged
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_dirty]
+    set 2, a
+    ld [nes_apu_dirty], a
+    ret
+ELSE
     jp nes_apu_apply_triangle_gate
+ENDC
 
 nes_apu_clock_lengths:
     ld c, 0                         ; 1 = triangle length just reached 0
@@ -1230,8 +1244,14 @@ nes_apu_clock_lengths:
     dec a
     ld [nes_apu_len_p1], a
     jr nz, .p2
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_dirty]
+    set 0, a
+    ld [nes_apu_dirty], a
+ELSE
     xor a
     ldh [rNR12], a
+ENDC
 .p2:
     ld a, [nes_apu_regs + $04]
     bit 5, a
@@ -1242,8 +1262,14 @@ nes_apu_clock_lengths:
     dec a
     ld [nes_apu_len_p2], a
     jr nz, .tri
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_dirty]
+    set 1, a
+    ld [nes_apu_dirty], a
+ELSE
     xor a
     ldh [rNR22], a
+ENDC
 .tri:
     ld a, [nes_apu_regs + $08]
     bit 7, a
@@ -1254,7 +1280,13 @@ nes_apu_clock_lengths:
     dec a
     ld [nes_apu_len_tri], a
     jr nz, .noi
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_dirty]
+    set 2, a
+    ld [nes_apu_dirty], a
+ELSE
     inc c
+ENDC
 .noi:
     ld a, [nes_apu_regs + $0C]
     bit 5, a
@@ -1265,8 +1297,14 @@ nes_apu_clock_lengths:
     dec a
     ld [nes_apu_len_noi], a
     jr nz, .gate_triangle
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_dirty]
+    set 3, a
+    ld [nes_apu_dirty], a
+ELSE
     xor a
     ldh [rNR42], a
+ENDC
 .gate_triangle:
     dec c
     ret nz
@@ -1299,6 +1337,19 @@ nes_apu_clock_sweep_p1:
     or b
     ld [nes_apu_regs + $03], a
 
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ; GB period/volume at flush. Reload divider here (same as lazy path).
+    ld a, [nes_apu_regs + $01]
+    swap a
+    and $07
+    ld [nes_apu_sweep_div_p1], a
+    xor a
+    ld [nes_apu_sweep_reload_p1], a
+    ld a, [nes_apu_dirty]
+    set 0, a
+    ld [nes_apu_dirty], a
+    ret
+ELSE
     ld c, l
     ld b, h
     call nes_apu_timer_to_period
@@ -1318,6 +1369,7 @@ IF DEF(NES2GBC_APU_LAZY_REFRESH)
     jp nes_apu_refresh_p1
 ELSE
     jr .reload
+ENDC
 ENDC
 
 .divider_nonzero:
@@ -1369,6 +1421,18 @@ nes_apu_clock_sweep_p2:
     or b
     ld [nes_apu_regs + $07], a
 
+IF DEF(NES2GBC_APU_DEFER_FLUSH)
+    ld a, [nes_apu_regs + $05]
+    swap a
+    and $07
+    ld [nes_apu_sweep_div_p2], a
+    xor a
+    ld [nes_apu_sweep_reload_p2], a
+    ld a, [nes_apu_dirty]
+    set 1, a
+    ld [nes_apu_dirty], a
+    ret
+ELSE
     ld c, l
     ld b, h
     call nes_apu_timer_to_period
@@ -1388,6 +1452,7 @@ IF DEF(NES2GBC_APU_LAZY_REFRESH)
     jp nes_apu_refresh_p2
 ELSE
     jr .reload
+ENDC
 ENDC
 
 .divider_nonzero:
