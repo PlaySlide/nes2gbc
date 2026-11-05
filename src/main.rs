@@ -477,6 +477,12 @@ fn main() -> ExitCode {
     println!("Trainer: {}", if cart.trainer.is_some() { "yes" } else { "no" });
 
     println!("PocketNES payload CRC32: {payload_crc:08X}");
+    {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::File::create("runtime/generated.crc.txt") {
+            let _ = writeln!(f, "{payload_crc:08X}");
+        }
+    }
     match follow_hint {
         Some(FollowHint::Sprite(slot)) => println!("PocketNES follow hint: OAM sprite {slot}"),
         Some(FollowHint::Mem(a)) => println!("PocketNES follow hint: RAM ${a:04X} (screen Y)"),

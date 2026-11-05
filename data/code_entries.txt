@@ -25,3 +25,6 @@ b4e4879e c8c4 c8d0 da71 e4f3 e4f6 e4f9 f367 f371 f37c
 # Bases Loaded: code observed running in the interpreter (not statically reachable)
 6abad366 bank 4 951c a750 ad8e 
 6abad366 bank 6 83b9 83bc 83bf 83d3 83d8 83db 8491 849e 
+# Mega Man 2: bank $0E return PCs observed as nes_dispatch_hl targets from fixed-bank RTS $EF8B
+# (static CFG missed these cross-bank returns; needed as stubs before rts_extra can name them)
+0fcfc04d bank 14 AFA1 AE49 AE4C AE7A AE9E AEEF

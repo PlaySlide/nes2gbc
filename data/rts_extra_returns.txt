@@ -1,0 +1,5 @@
+# Extra RTS return PCs the static return-set misses (dynamic/cross-bank).
+# <payload CRC32> <RTS_or_block PC> <ret PC> [<ret PC> ...]
+# Opt-out: NES2GBC_NO_RTS_EXTRA=1
+# Hot EF8B returns (incl. newly stubbed bank0E entries via code_entries).
+0fcfc04d EF8B AFD9 AFDF AFA1 AE49 AE4C AE7A AE9E AEEF
